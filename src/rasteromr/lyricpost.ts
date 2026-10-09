@@ -14,16 +14,18 @@ const LYRIC_ONLY_DECISIVE = 6;
  * 就成了同一段，混成一串。照独唱谱的约定（坚固保障：中文 1~4、英文 5~8，都挂在旋律上）
  * 把英文挂回上一行谱。
  *
- * 只在同一系统里**上一行谱全是汉字段、下一行谱全是拉丁段**时并——合唱谱四个声部
- * 各印各的中文词，那是各声部自己的第 1 段，不能动。
+ * 只在同一系统里**上一行谱有汉字段、下一行谱全是拉丁段**时并——上一行谱还可能同时印着
+ * 英文副歌（信心使我得胜第二页），不能因此把下一行谱下的英文主歌留在低音谱表上。
+ * 合唱谱四个声部各印各的中文词，那是各声部自己的第 1 段，不能动。
  */
 export function foldBilingualLyrics(pg: SPage, lines: LyricLine[]): void {
   const latin = isLatinLine;
+  const hasHan = (l: LyricLine) => l.syllables.some((s) => /[\u3400-\u9fff]/.test(s.text));
   for (const sys of pg.systems) {
     for (let i = 0; i + 1 < sys.staves.length; i++) {
       const up = lines.filter((l) => l.staff === sys.staves[i]);
       const lo = lines.filter((l) => l.staff === sys.staves[i + 1]);
-      if (!up.length || !lo.length || up.some(latin) || !lo.every(latin)) continue;
+      if (!up.length || !lo.length || !up.some(hasHan) || !lo.every(latin)) continue;
       // 段号由 `numberVersesByScript` 按文种重编，这里只管挪谱行
       for (const l of lo) l.staff = sys.staves[i];
     }
