@@ -10,6 +10,7 @@ import { clusterByY, median, overlapRatioX, overlapRatioY, unionRect, unionRects
 import { accidentalOf } from "./accidental";
 import { probe } from "./probe";
 import { CREDIT_PREFIX_RE, CREDIT_SUFFIX_RE, CREDIT_ROLE_TAIL_RE, LATIN_NAME_RE, CREDIT_YEAR_RE, LATIN_PAREN_RE, effectiveCharH, betterTitle } from "../omrkit/headertext";
+import { charsForText, gapWideAt, recoverHanziGaps, recoverSpacesByInk } from "../omrkit/textspace";
 
 const rcyOf = (r: Rect) => r.y + r.h / 2;
 const hanziCount = (s: string) => (s.match(/[一-鿿]/g) || []).length;
@@ -46,141 +47,6 @@ export interface HeaderInfo {
 }
 
 interface HLine { text: string; charH: number; cx: number; cy: number; n: number; bbox: Rect; chars?: { text: string; cx: number; x1?: number }[]; }
-
-/**
- * 整句英文（副标题、英文著作者名）的词间空格：**按源图上真实的空白列**补，而不是靠 CTC 帧位
- * 算间距。早先另有一条按帧位间隙（右字左缘 − 左字右缘）判空格的路子，被同一个毛病拖垮：帧位是
- * 等宽量化的，`JohnLaudon` 的字母间隙就有 1 个基元与 2 个基元两档，而门是「>1.5 倍中位」——
- * 中位恰是 1 个基元时，2 个基元的那些全过，读成 `Joh n La ud on`。两条路合并成这一条。
- * 同一个毛病在整句英文上更明显（"It's justdifferent"、"T he spirit" 都是这么来的）；
- * 而谱面上词间那道白是实打实比字母间的白宽一截。
- *
- * 定界：把本行所有空白段按宽度排序，在**跳变最大处**切开，界取跳变两侧的中点（再要求
- * ≥0.12×行高，免得整行只有一个词时把字母间隙切出空格来）。落在界以上的空白，按它的位置
- * 找到左右两个字符，**两侧都是字母**才插空格——撇号/引号这类窄字形两边的白也很宽，
- * 但那儿不该有空格（"It's" 不能拆成 "It 's"）。
- */
-/** 一行文本框里的空白列段：`[起列, 宽]`，按 x 序。两处判词间空当都用它。 */
-function inkBlanks(bin: Binary, bbox: Rect): Array<[number, number]> {
-  const y1 = Math.min(bin.h, bbox.y + bbox.h), x1 = Math.min(bin.w, bbox.x + bbox.w);
-  const blanks: Array<[number, number]> = [];
-  let s = -1;
-  for (let x = Math.max(0, bbox.x); x < x1; x++) {
-    let ink = false;
-    for (let y = Math.max(0, bbox.y); y < y1; y++) if (bin.data[y * bin.w + x]) { ink = true; break; }
-    if (!ink) { if (s < 0) s = x; }
-    else if (s >= 0) { blanks.push([s, x - s]); s = -1; }
-  }
-  return blanks;
-}
-
-/** 第 i 个字与第 i+1 个字之间，谱面上**真有一道空当**吗？（≥1.6 倍于本行空白宽度的中位数）
- *  后缀式著作者的「名字 ↔ 职能词」之间：脚步印的是「盛晓玫 词曲」（有空当），
- *  沧海一声笑印的是「黄 霑作词、作曲」（名字里有空当、名字与职能之间没有）。rec 从不吐空格，
- *  照谱面原样输出就得回源图上量这一道。 */
-function gapWideAt(bin: Binary, bbox: Rect, chars: { text: string; cx: number }[] | undefined, i: number): boolean {
-  if (!chars || i < 0 || i + 1 >= chars.length) return false;
-  const blanks = inkBlanks(bin, bbox);
-  if (blanks.length < 3) return false;
-  const med = median(blanks.map((b) => b[1])) || 1;
-  const lo = chars[i].cx, hi = chars[i + 1].cx;
-  return blanks.some(([bx, bw]) => bx + bw / 2 > lo && bx + bw / 2 <= hi && bw >= med * 1.6);
-}
-
-/** 中文标题的分句空当：「不怕劳累 不怕饥寒」「天不蓝了 水不清了」两半之间印着整整一字宽的白，
- *  rec 不吐空格。两道门：
- *  - **≥0.5 框高**：汉字的字间白本就只有 0.1~0.2 字高，这么宽只可能是有意排的空当（门按 det 框高量，
- *    框比字身松：新编赞美诗·四声部「刘廷芳 杨荫浏合译」的空当 28px、框高 49，按 0.6 差一点）；
- *  - **≥2 倍于本行字间白的中位数**：有的歌本整行拉开字距排（「赞 美 一 神」「因 有 主 同 在」），
- *    每道字间白都过得了第一道门，但它们彼此一样宽，不是分句——只有明显宽出一截的那道才算。
- *  「字间白」取每对相邻汉字之间最宽的那一道（字内偏旁之间的窄白不算）。
- *  只在两侧都是汉字时插，编号与标题之间（「1717 不怕…」）那道白不管——编号下游本来就要剥掉。 */
-function recoverHanziGaps(bin: Binary, text: string, bbox: Rect, chars?: { text: string; cx: number }[]): string {
-  const cs = [...text];
-  if (!chars || chars.length !== cs.length || hanziCount(text) < 4) return text;
-  const isHan = (c: string) => /[一-鿿]/.test(c);
-  const pairGap = new Map<number, number>();              // 左字下标 → 两字之间最宽的白
-  for (const [bx, bw] of inkBlanks(bin, bbox)) {
-    const mid = bx + bw / 2;
-    let i = -1;
-    while (i + 1 < chars.length && chars[i + 1].cx < mid) i++;
-    if (i >= 0 && i + 1 < cs.length && isHan(cs[i]) && isHan(cs[i + 1])) pairGap.set(i, Math.max(pairGap.get(i) ?? 0, bw));
-  }
-  if (pairGap.size < 3) return text;
-  const med = median([...pairGap.values()]);
-  const after = new Set([...pairGap].filter(([, w]) => w >= bbox.h * 0.5 && w >= med * 2).map(([i]) => i));
-  return cs.map((c, i) => (after.has(i) ? c + " " : c)).join("");
-}
-
-function recoverSpacesByInk(bin: Binary, text: string, bbox: Rect, chars?: { text: string; cx: number }[]): string {
-  if (!chars || chars.length !== [...text].length || !/[A-Za-z]{2}/.test(text)) return text;
-  const blanks = inkBlanks(bin, bbox);
-  if (blanks.length < 3) return text;
-  const cs = [...text];
-  const isLetter = (c: string) => /[A-Za-z]/.test(c);
-  // 每道空白的左侧字符下标（右侧即 +1）。
-  const leftOf = (bx: number, bw: number): number => {
-    const mid = bx + bw / 2;
-    let i = -1;
-    while (i + 1 < chars.length && chars[i + 1].cx < mid) i++;
-    return i;
-  };
-  // **切分门只在字母↔字母的空白上算**：括号、连字符、汉字冒号旁边的白又宽又不成比例
-  // （"Assisi (1182- 1226)" 里 `(` 两侧的白比词间空白宽一截），把它们算进来，最大跳变就落在
-  // 那处outlier上、门被抬到词间空白之上，整行一个空格都插不出来（15《赞美真神》的作词行）。
-  // 只在这一类空白里找跳变，两簇（词内 / 词间）才分得开。够不着 3 道就退回全体。
-  const ll = blanks.filter(([bx, bw]) => {
-    const i = leftOf(bx, bw);
-    return i >= 0 && i + 1 < cs.length && isLetter(cs[i]) && isLetter(cs[i + 1]);
-  });
-  const widths = [...new Set((ll.length >= 3 ? ll : blanks).map((b) => b[1]))].sort((a, b) => a - b);
-  let cut = 0, jump = 0;
-  for (let i = 0; i < widths.length - 1; i++) {
-    if (widths[i + 1] - widths[i] >= jump) { jump = widths[i + 1] - widths[i]; cut = (widths[i] + widths[i + 1]) / 2; }
-  }
-  const thr = Math.max(cut, bbox.h * 0.12);
-  const spaceAfter = new Set<number>();
-  for (const [bx, bw] of ll) {
-    if (bw < thr) continue;
-    spaceAfter.add(leftOf(bx, bw));
-  }
-  // 半角句读之后接字母：英文排版逗号贴着前词、后面空一格（2075 副标题「Heal, O Lord, and restore
-  // this land」读成了 `Heal,O Lord,and`）。句读本身窄，它右边那道白就是词间空白，同一道门量。
-  // 半角句读**贴着前词**，左边那道白只有字母间距（2075 实测 ≤3px，右边 21px、门 9px）。全角「、」
-  // 左右都留着白（圣哉三一歌副标题 `Holy、holy、holy、Lord God、almighty`，rec 读成 `,`；实测左 6~8px、
-  // 右 6~8px、门 7px），那不是英文逗号、后面也不该有空格——左白够 0.6 门的 `,` 照谱面改回「、」。
-  // 只有逗号有这层歧义：缩写点左边也常留白（「(william J. Kirkpatrick)」的 `J.`），右边照样补空格。
-  const gapAfter = new Map<number, number>(); // 左字下标 → 与右字之间最宽的白
-  for (const [bx, bw] of blanks) {
-    const i = leftOf(bx, bw);
-    if (i >= 0) gapAfter.set(i, Math.max(gapAfter.get(i) ?? 0, bw));
-  }
-  const ideoComma = new Set<number>();
-  for (let i = 1; i + 1 < cs.length; i++) {
-    if (!/[,;:!?.]/.test(cs[i]) || !isLetter(cs[i + 1])) continue;
-    if (cs[i] === "," && (gapAfter.get(i - 1) ?? 0) >= thr * 0.6) ideoComma.add(i);
-    else if ((gapAfter.get(i) ?? 0) >= thr) spaceAfter.add(i);
-  }
-  ideoComma.forEach((i) => { cs[i] = "、"; });
-  return cs.map((c, i) => (spaceAfter.has(i) ? c + " " : c)).join("");
-}
-
-/** 把展示文本(可能已规整：去编号前缀、冒号全角化、截尾噪声)逐字对位回 OCR 原始字位，
- *  供识别模式按源图 x 逐字叠加。贪心在 raw 里顺序找等字符；标点全/半角差异等取下一个原始位近似。 */
-function charsForText(text: string, raw?: { text: string; cx: number }[]): { text: string; cx: number }[] | undefined {
-  if (!raw || !raw.length) return undefined;
-  const res: { text: string; cx: number }[] = [];
-  let ri = 0;
-  for (const ch of text.trim()) {
-    if (ch === " ") continue; // 恢复出来的词间空格无字形，不占原始字位
-    let j = ri;
-    while (j < raw.length && raw[j].text !== ch) j++;
-    if (j < raw.length) { res.push({ text: ch, cx: raw[j].cx }); ri = j + 1; }        // 精确命中
-    else if (ri < raw.length) { res.push({ text: ch, cx: raw[ri].cx }); ri++; }       // 归一化字符：取下一原始位
-    else if (res.length) { res.push({ text: ch, cx: res[res.length - 1].cx + 1 }); }  // raw 用尽：顺延
-  }
-  return res.length ? res : undefined;
-}
 
 // 大调主音字母 → 五度圈数（自然，无升降）。降号 -7、升号 +7。
 const NAT_FIFTHS: Record<string, number> = { C: 0, D: 2, E: 4, F: -1, G: 1, A: 3, B: 5 };

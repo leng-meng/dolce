@@ -17,7 +17,7 @@ import { buildNotes, checkBars, findClefKeyTime, keyFifths, lastTimeSignature, t
 import { findRasterArticulations } from "./artic";
 import { markRepeatsAndVoltas } from "./repeats";
 import { findRasterTuplets } from "./tuplet";
-import { attachWordLines, findHeaderStrip, findWordStrips, wordKey, type WordStrip } from "./words";
+import { attachWordLines, findHeaderStrip, findWordStrips, headerZoneLines, wordKey, type HeaderStrip, type WordStrip } from "./words";
 import { headerCredits, type HeaderCredit, type WordLine } from "../omrkit/headertext";
 import { applyTuplet, attachDynamicTexts, attachNotations, attachWedges, findNotations, findTuplets, markLyricExtends } from "../staffomr/notations";
 import type { PObj, SPage, Staff, Sym, Tag } from "../staffomr/model";
@@ -361,29 +361,39 @@ const INK_STEM_REACH = [2.5, 7] as const;
 const SHORT_STEM_OUT = 1.5;
 
 /**
- * 拼页面读出的页眉：文字层的行与**同一行、紧挨着**的 OCR 行并成一行（宁静「詞／曲／編：余遠淳」是贴的小图块、
- * 后面的「Yenn Chwen Er」在文字层，谱面上是一行字；同一行的中英文记一条，分行印的才各记一条）。
- * 同一行 = 纵向重叠过矮者一半；紧挨着 = 横向空当不过两个字高。
+ * 页眉的行：**同一行、紧挨着**的两段并成一行。同一行 = 纵向重叠过矮者一半；紧挨着 = 横向空当不过两个字高。
+ * - 拼页面读出的页眉：文字层的行并进 OCR 行（宁静「詞／曲／編：余遠淳」是贴的小图块、后面的「Yenn Chwen Er」在文字层，谱面上是一行字）；
+ * - OCR 行之间：DBNet 在一行里的大空当处会断成两框（倚靠主「…everlasting arms.」与「— Deuteronomy 33:27」、
+ *   父恩广大标题「…Heavenly」与「Father」），这样断开的两框首尾相叠（空当为负），
+ *   故只并字高相近（差不过一半）、纵向重叠七成、空当不过 0.3 个字高的：居中的题记与右栏署名常字高相同、只隔一个字
+ *   （晨曦破晓「…we shall rejoice...」与「Arranged by David Evans」隔 31 点、字高 47）。
+ * 同一行的中英文记一条，分行印的才各记一条。
  */
 function mergeLayerLines(ocr: readonly WordLine[], layer: readonly WordLine[]): WordLine[] {
-  const out = ocr.map((l) => ({ ...l }));
-  for (const l of layer) {
-    const o = out.find((m) => {
-      const h = Math.min(m.h, l.h);
-      const vy = Math.min(m.y + m.h, l.y + l.h) - Math.max(m.y, l.y);
-      const gap = Math.max(m.x, l.x) - Math.min(m.x + m.w, l.x + l.w);
-      return vy >= h * 0.5 && gap <= Math.max(m.h, l.h) * 2;
-    });
-    if (!o) {
-      out.push({ ...l });
-      continue;
-    }
+  const out: WordLine[] = [];
+  const near = (m: WordLine, l: WordLine, k: number) => {
+    const h = Math.min(m.h, l.h);
+    const vy = Math.min(m.y + m.h, l.y + l.h) - Math.max(m.y, l.y);
+    const gap = Math.max(m.x, l.x) - Math.min(m.x + m.w, l.x + l.w);
+    return vy >= h * (k < 1 ? 0.7 : 0.5) && gap <= Math.max(m.h, l.h) * k;
+  };
+  const join = (o: WordLine, l: WordLine) => {
     const [a, b] = o.x <= l.x ? [o, l] : [l, o];
     const x = Math.min(o.x, l.x);
     const y = Math.min(o.y, l.y);
     const r = Math.max(o.x + o.w, l.x + l.w);
     const bot = Math.max(o.y + o.h, l.y + l.h);
     Object.assign(o, { t: `${a.t} ${b.t}`, x, y, w: r - x, h: bot - y });
+  };
+  for (const l of [...ocr].sort((a, b) => a.x - b.x)) {
+    const o = out.find((m) => near(m, l, 0.3) && Math.max(m.h, l.h) <= Math.min(m.h, l.h) * 1.5);
+    if (o) join(o, l);
+    else out.push({ ...l });
+  }
+  for (const l of layer) {
+    const o = out.find((m) => near(m, l, 2));
+    if (o) join(o, l);
+    else out.push({ ...l });
   }
   return out;
 }
@@ -4062,7 +4072,7 @@ export async function recognizeRasterPage(
   const wordStrips = opts.wordOcr || opts.wantWordStrips || live?.word ? findWordStrips(raster.bin, pg.staves, unit) : [];
   const wordOcr = opts.wordOcr ?? (live?.word ? await live.word(wordStrips) : undefined);
   // 页眉（曲首页）：标题、词曲作者。认字同文字指示带，缓存另放
-  let headerStrip = opts.wantHeader ? findHeaderStrip(raster.bin, pg.staves, unit) : null;
+  let headerStrip: HeaderStrip | null = opts.wantHeader ? findHeaderStrip(raster.bin, pg.staves, unit) : null;
   // 谱图里切不出页眉带、谱图又没顶到页顶的（排版软件出的 PDF，标题是另贴的小图块与文字层）：拼出谱图上方那一段（`pagecompose.ts`）
   let layerLines: WordLine[] = [];
   if (opts.wantHeader && !headerStrip) {
@@ -4070,8 +4080,14 @@ export async function recognizeRasterPage(
     if (comp) (headerStrip = comp.strip), (layerLines = comp.texts);
   }
   const headerOcr = opts.headerOcr ?? (headerStrip && live?.header ? await live.header([headerStrip]) : undefined);
+  // 首行谱上方那一段（`creditFrom` 以下）只留像署名的行，其余归文字指示带；留下的那几行文字指示带就不再读
   const ocrLines = headerStrip ? headerOcr?.get(wordKey(headerStrip)) : undefined;
-  const headerLines = ocrLines || layerLines.length ? mergeLayerLines(ocrLines ?? [], layerLines) : undefined;
+  const headRows = ocrLines || layerLines.length ? mergeLayerLines(ocrLines ?? [], layerLines) : undefined;
+  const headerLines = headRows && headerStrip?.creditFrom !== undefined ? headerZoneLines(headRows, headerStrip.creditFrom, headerStrip.w) : headRows;
+  const headerZone: Rect[] =
+    headerLines && headerStrip?.creditFrom !== undefined
+      ? headerLines.filter((l) => l.y + l.h / 2 > headerStrip!.creditFrom!).map((l) => ({ x: headerStrip!.box.x + l.x, y: headerStrip!.box.y + l.y, w: l.w, h: l.h }))
+      : [];
   const header = headerStrip && headerLines ? headerCredits(headerLines, headerStrip) : [];
   if (wordOcr) {
     const skip: Rect[] = [
@@ -4082,6 +4098,7 @@ export async function recognizeRasterPage(
         return { x: l - unit.space, y: ln.top - unit.space * 0.5, w: r - l + unit.space * 2, h: unit.space * 3 };
       }),
       ...harmonies.map((t) => ({ x: t.box.x, y: t.box.y, w: t.box.w, h: t.box.h })),
+      ...headerZone,
     ];
     // **文字指示里的字母收成了音**：谱表上方的「Unison」「coda」，字母的圈被认成头、没有干读成全音符（是爱 p4 m55 三个 B♭5）。
     // OCR 认得出的文字行（三个以上拉丁字母或两个以上汉字）框里、在谱表外、没挂干的音删掉；挂了干的不动（贴着字的真音）

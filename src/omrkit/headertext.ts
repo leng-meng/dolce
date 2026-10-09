@@ -1,5 +1,5 @@
 // 页眉文字的**纯文本判据**（不看像素）：简谱页眉（`omr/header.ts`）与五线谱页眉（`headerCredits`，位图、矢量两路）共用。
-// 署名几种写法的正则、标题按「有效字高」挑的比法放这里；按墨列补空格、拍号墨迹这些要回源图量的留在各自那边。
+// 署名几种写法的正则、标题按「有效字高」挑的比法放这里；按墨列补空格在 `textspace.ts`（两边同一份），拍号墨迹这些留在各自那边。
 import type { Rect } from "./types";
 
 // 著作者前缀：`作词：`/`词曲：`，也含顿号/斜杠分列的 `词、曲：`、`作词/作曲：`。
@@ -82,15 +82,15 @@ export interface WordLine {
   h: number;
 }
 
-/** 页眉里值得留的行：有汉字，或有两个以上拉丁字母（页码、噪点、单个字母不要）。 */
+/** 页眉里值得留的行：有汉字，或有两个以上拉丁字母，或是生卒年（署名下一行单印的「1795-1848」）；页码、噪点、单个字母不要。 */
 export function keepHeaderLine(text: string): boolean {
-  return /[\u3400-\u9fff]/.test(text) || (text.match(/[A-Za-z]/g)?.length ?? 0) >= 2;
+  return /[\u3400-\u9fff]/.test(text) || (text.match(/[A-Za-z]/g)?.length ?? 0) >= 2 || /\d{4}\s*[-–—]\s*\d{4}/.test(text);
 }
 
 /** 页眉的一行（页面坐标）与它的角色（MusicXML `<credit-type>`）、对齐。 */
 export interface HeaderCredit {
   text: string;
-  type?: "title" | "subtitle" | "composer" | "lyricist";
+  type?: "title" | "subtitle" | "composer" | "lyricist" | "rights";
   justify: "left" | "center" | "right";
   box: Rect;
 }
@@ -99,7 +99,7 @@ export interface HeaderCredit {
  * 页眉带读出来的行 → 页眉各条。判据与简谱页眉同一份（本文件上面那几条）：
  * 署名按内容认（`作词：`、`盛晓玫 词曲`、`Words by` …），角色看有没有「曲」；其余行里**有效字高**最大的（差不多高取更宽的）是标题，
  * 居中且有标题八成高的也算标题（中英两个标题上下排）；其余居中的是副标题；靠左的是作词 / 译者、靠右的是作曲（诗歌本、合唱谱的通行排法）。
- * 居中 = 行心离页心不过页宽一成半。标题上方靠两边的行是书眉，成段的文字是序言，这两样照收、不给角色。
+ * 居中 = 行心离页心不过页宽一成半。标题上方靠两边的行是书眉，成段的文字是序言，这两样照收、不给角色；版权声明标 `rights`。
  */
 export function headerCredits(lines: readonly WordLine[], strip: { box: Rect }): HeaderCredit[] {
   const ls = lines.filter((l) => keepHeaderLine(l.t)).sort((a, b) => a.y - b.y || a.x - b.x);
@@ -121,8 +121,9 @@ export function headerCredits(lines: readonly WordLine[], strip: { box: Rect }):
   const prose = (l: WordLine) => l !== title && !credit.has(l) && (l.t.match(/[\u3400-\u9fff]/g)?.length ?? 0) + (l.t.match(/[A-Za-z]+/g)?.length ?? 0) >= PROSE_UNITS;
   return ls.flatMap((l) => {
     const justify = justifyOf(l);
-    const type: HeaderCredit["type"] =
-      prose(l) || runningHead(l)
+    const type: HeaderCredit["type"] = RIGHTS_RE.test(l.t)
+      ? "rights"
+      : prose(l) || runningHead(l)
         ? undefined
         : credit.has(l)
           ? creditRole(l.t)
@@ -137,17 +138,19 @@ export function headerCredits(lines: readonly WordLine[], strip: { box: Rect }):
     return splitHeaderText(l.t).map((text) => ({ text, type, justify, box }));
   });
 }
+/** 版权声明（「copyright: public domain …」「© 1923 …」「版权所有」）：`<credit-type>rights</credit-type>`。 */
+const RIGHTS_RE = /^\s*(?:copyright\b|©|\(c\)\s*\d|版[权權]所有)/i;
 /** 一行有这么多个字（汉字一字、拉丁一词）就是成段的文字，不是标题。 */
 const PROSE_UNITS = 16;
 
 /**
  * 页眉一行的字 → 一条或几条：标题字距拉得开（「望 十 架」），按列投影补出来的、夹在两个汉字之间的空格不要；
- * 标题行行首的诗歌编号（「1 9 數算主恩」「8 奇異恩典」，编号字距也拉得开）不要；字距拉开的小型大写字母并回一个词；
+ * 标题行行首的诗歌编号（「1 9 數算主恩」「8 奇異恩典」「23.有一位神」，编号字距也拉得开）不要；字距拉开的小型大写字母并回一个词；
  * 中文标题与英文标题印在同一行的（「數算主恩 Count Your Blessings」）拆成两条——中英标题本是两个页眉元素。
  */
 export function splitHeaderText(t: string): string[] {
   let text = t.trim().replace(/(?<=[\u3400-\u9fff])\s+(?=[\u3400-\u9fff])/g, "");
-  const num = /^(\d\s?){1,3}\s*(?=[\u3400-\u9fff])/.exec(text);
+  const num = /^(\d\s?){1,3}\s*[.．、]?\s*(?=[\u3400-\u9fff])/.exec(text);
   if (num) text = text.slice(num[0].length);
   // 字距拉开的小型大写（破碎扫描版「B RO K E N」）：整行都是一两个大写字母的碎块，按列投影补的空格不是词界，并回一个词
   if (/^[A-Z]{1,2}(\s+[A-Z]{1,2}){2,}$/.test(text)) text = text.replace(/\s+/g, "");

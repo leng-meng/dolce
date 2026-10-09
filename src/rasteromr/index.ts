@@ -32,3 +32,4 @@ export * from "./slur";
 export * from "./recognize";
 export * from "./song";
 export * from "./detect";
+export { keepHeaderLine } from "../omrkit/headertext";

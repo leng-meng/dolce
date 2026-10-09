@@ -4,10 +4,11 @@
 // 定位与认字交给 DBNet + rec，离线按条的内容指纹落盘（`gen-rasterwords.mjs` → `rasterwords.json`），识别时查缓存。
 // 带里还压着歌词、和弦字母、力度字母、小节号——这里按内容分开：只留拉丁文的词句，歌词行、纯数字、力度字母不要。
 import type { Binary, Rect } from "../omrkit/types";
-import type { WordLine } from "../omrkit/headertext";
+import { isCreditText, type WordLine } from "../omrkit/headertext";
+import { recoverSpacesByInk } from "../omrkit/textspace";
 import type { SPage, Staff } from "../staffomr/model";
 import type { StaffNote } from "../staffomr/notedata";
-import { isWholeChord } from "../omrkit/chordgrammar";
+import { chordCoverage, isChordLineCoverage, isWholeChord } from "../omrkit/chordgrammar";
 import type { RasterUnit } from "./staffline";
 import { contentKey } from "../omrkit/contentkey";
 
@@ -64,23 +65,30 @@ export function findWordStrips(bin: Binary, staves: { box: { left: number; right
   return out;
 }
 
+/** 页眉带：`creditFrom` 是首行谱上方那一段在带里的起点（拼页面那一路没有这一段）。 */
+export type HeaderStrip = WordStrip & { creditFrom?: number };
+
 /**
- * **页眉带**（曲首页）：页顶 → 首行谱上方文字指示带（`EDGE_BAND`）的上沿，整页宽——标题、副标题、词曲作者、译者。
- * 下沿从文字指示带上沿往上找第一条空白行（墨不过两点），免得把一行字拦腰切开；几何只看谱行与像素，指纹稳。
+ * **页眉带**（曲首页）：页顶 → 首行谱上沿（让开谱线 `LINE_CLEAR`），整页宽——标题、副标题、书眉、词曲作者、译者。
+ * 下沿从谱上沿往上找第一条空白行（墨不过两点），免得把一行字拦腰切开；几何只看谱行与像素，指纹稳。
  * 与文字指示带同一套认字（DBNet + rec），缓存另放（`gen-rasterheader.mjs` → `rasterheader.json`）：那边只留拉丁行，这边中文也要。
  *
+ * - **首行谱上方 `EDGE_BAND` 格以内这一段**也进带（`creditFrom` 标出它在带里的起点）：紧贴谱表印的小字署名块
+ *   （新编赞美诗「刘廷芳译 1934」「(Thomas Hastings)」、伴奏谱「伴奏编写：陈尚哲」、父恩广大三行英文署名）都在这里；
+ *   这一段也是首行文字指示带（速度、和弦、表情），里面的行由 `headerZoneLines` 挑——像署名的归页眉，其余照旧归文字指示。
+ *   上面那段切不出（`EDGE_BAND` 以上没有空白行、或贴着页顶）就整条不切，照旧走拼页面那条路。
  * - **扫描件页边带着贯穿上下的竖条**（破碎扫描版右缘一道 80 点宽的网点灰带，每行十几二十点墨）：没有一行墨不过两点，
  *   往上一路找到页顶。判空白行时不数页边「这一段里平均每列一成以上的行有墨」的列（`HEADER_BORDER`）。
  * - 密排的序言曾被凑成一行假谱表、把页眉带截在标题下面：找谱线之前已按文字框剔掉（`pagetext.ts`）。
- * - 宁静、破碎电子版仍切不出：贴进 PDF 的谱图从速度字起，标题是另贴的逐字小图块（`101×101` 的 ImageMask）、英文标题与署名在文字层，
- *   都不在这张图里（要拼页面才拿得到，没做）。
  */
-export function findHeaderStrip(bin: Binary, staves: { box: { top: number } }[], unit: RasterUnit): WordStrip | null {
+export function findHeaderStrip(bin: Binary, staves: { box: { top: number } }[], unit: RasterUnit): HeaderStrip | null {
   if (!staves.length) return null;
   const sp = unit.space;
-  let y1 = Math.min(bin.h - 1, Math.round(Math.min(...staves.map((s) => s.box.top)) - sp * EDGE_BAND));
-  if (y1 < sp * 2) return null;
-  // 页边的竖条：页顶到起点这一段里，按两格宽滑窗平均、墨行占比过 `HEADER_BORDER` 的列，只看左右各 `HEADER_MARGIN` 页宽
+  const top = Math.min(...staves.map((s) => s.box.top));
+  let y1 = Math.min(bin.h - 1, Math.round(top - sp * LINE_CLEAR));
+  let y0 = Math.min(y1, Math.round(top - sp * EDGE_BAND));
+  if (y0 < sp * 2) return null;
+  // 页边的竖条：页顶到谱上沿这一段里，按两格宽滑窗平均、墨行占比过 `HEADER_BORDER` 的列，只看左右各 `HEADER_MARGIN` 页宽
   const colInk = new Uint32Array(bin.w + 1);
   for (let y = 0; y <= y1; y++) for (let x = 0; x < bin.w; x++) colInk[x + 1] += bin.data[y * bin.w + x];
   for (let x = 1; x <= bin.w; x++) colInk[x] += colInk[x - 1];
@@ -97,14 +105,72 @@ export function findHeaderStrip(bin: Binary, staves: { box: { top: number } }[],
     for (let x = 0; x < bin.w && n <= HEADER_BLANK; x++) if (!border[x]) n += bin.data[y * bin.w + x];
     return n;
   };
-  while (y1 > 0 && inkOf(y1) > HEADER_BLANK) y1--;
-  if (y1 < sp * 2) return null;
+  // 往上退到空白行，最多退 `HEADER_RETREAT` 格：排得密的页眉（晨曦破晓左右两栏署名与标题、题记上下交错）一整段找不到空白行，
+  // 一路退会退到页顶、整条页眉只剩几十点高——退不到就照原线切，被切到的行按行心归哪段
+  const retreat = (y: number, floor: number) => {
+    let t = y;
+    while (t > floor && y - t <= sp * HEADER_RETREAT && inkOf(t) > HEADER_BLANK) t--;
+    return inkOf(t) <= HEADER_BLANK ? t : y;
+  };
+  y0 = retreat(y0, 0);
+  if (y0 < sp * 2) return null;
+  y1 = retreat(y1, y0);
   const box = { x: 0, y: 0, w: bin.w, h: y1 };
   const data = new Uint8Array(box.w * box.h);
   let ink = 0;
   for (let i = 0; i < data.length; i++) ink += data[i] = bin.data[i];
-  return ink ? { w: box.w, h: box.h, data, box } : null;
+  return ink ? { w: box.w, h: box.h, data, box, creditFrom: y0 } : null;
 }
+
+/**
+ * 页眉带里**首行谱上方那一段**（`creditFrom` 以下）读出来的行，哪些归页眉：像署名的——
+ * 带汉字的要有职能字 / 年份 / 冒号（「刘廷芳译 1934」「伴奏编写：陈尚哲」「颂主诗集 1931」），
+ * 拉丁的是括号原名、`Words by` 一类，或两词以上、多半首字母大写的名字（「Chinese Traditional Melody」「Chao Tzu-Chen」）；
+ * 再加**续行**：紧接在已收的署名行下面、与它左对齐或右对齐的行（「Song of The Hoe」「Psalmodia Sacra, Goths 1715」）。
+ * 拉丁的另收全大写的曲调名、带四位年份的行（「1795-1848」）；**居中**的行（副标题、题记「Be still and know that I am God.」）
+ * 照收——速度、表情都印在谱首、不居中。
+ * 和弦、节拍器、力度、文字指示术语（含中文的「齐唱」「感恩地」）一概不收（留给文字指示带）——`creditFrom` 以上也不收：
+ * 「感恩地」印在速度旁边、比谱上方 7 格还高。返回留下的行。
+ */
+export function headerZoneLines<L extends WordLine>(lines: readonly L[], creditFrom: number, stripW: number): L[] {
+  const inZone = (l: L) => l.y + l.h / 2 > creditFrom;
+  const centered = (l: L) => Math.abs(l.x + l.w / 2 - stripW / 2) <= stripW * 0.15;
+  const music = (t: string) => {
+    const s = t.trim();
+    if (METRO_RE.test(s) || DYNAMIC_RE.test(s) || DIRECTION_RE.test(s) || CN_EXPRESSION_RE.test(s)) return true;
+    const { cov, count } = chordCoverage(s.replace(/\s+/g, ""));
+    return isChordLineCoverage(cov, count);
+  };
+  const looksCredit = (t: string) => {
+    if (music(t)) return false;
+    if (/[\u3400-\u9fff]/.test(t)) return /[词詞曲译譯编編修配写寫作选選据據改源]|\d{2,}|[:：]/.test(t);
+    if (isCreditText(t, true, true) || /\d{4}/.test(t) || SCRIPTURE_REF_RE.test(t)) return true;
+    const words = t.match(/[A-Za-z][A-Za-z'’.-]*/g) ?? [];
+    // 右上角全大写的曲调名（「AZMON」「DIX」「FINLANDIA」）
+    if (words.length && words.every((w) => !/[a-z]/.test(w)) && words.join("").length >= 3) return true;
+    // 人名、出处：两词以上、首字母大写的过三分之一（补空格把字距拉开的词切碎时，小写碎片会多出来）
+    const caps = words.filter((w) => /^[A-Z]/.test(w)).length;
+    return words.length >= 2 && caps >= 2 && caps * 3 >= words.length;
+  };
+  const kept = lines.filter((l) => (!inZone(l) || looksCredit(l.t) || centered(l)) && !music(l.t));
+  const zone = lines.filter((l) => inZone(l) && !kept.includes(l)).sort((a, b) => a.y - b.y);
+  for (const l of zone) {
+    if (music(l.t)) continue;
+    const near = kept.some((k) => {
+      const gap = l.y - (k.y + k.h);
+      const tol = Math.max(k.h, l.h) * 1.5;
+      return gap >= -k.h * 0.3 && gap <= Math.max(k.h, l.h) && (Math.abs(l.x - k.x) <= tol || Math.abs(l.x + l.w - (k.x + k.w)) <= tol);
+    });
+    if (near) kept.push(l);
+  }
+  return lines.filter((l) => kept.includes(l));
+}
+/** 经文 / 诗篇出处：「Psalm 23」「— Ephesians 2:7」。 */
+const SCRIPTURE_REF_RE = /^[—–-]?\s*(?:[1-3I]{1,3}\s*)?[A-Z][a-z]+\.?\s*\d+(?:\s*:\s*\d+)?\s*$/;
+/** 中文的演唱 / 表情提示：「齐唱」「合唱」「间奏」「感恩地」「温柔有感情的」（以「地 / 的」收尾的状语）。 */
+const CN_EXPRESSION_RE = /^[(（]?(?:齐唱|齊唱|合唱|独唱|獨唱|领唱|領唱|轮唱|輪唱|副歌|间奏|間奏|前奏|尾声|尾聲|[\u3400-\u9fff]{1,6}[地的])[)）]?$/;
+/** 页眉带的上下界往上找空白行，最多退这么多格。 */
+const HEADER_RETREAT = 3;
 /** 页眉带下沿的「空白行」：一行墨不过这么多点（扫描件的零星噪点）。 */
 const HEADER_BLANK = 2;
 /** 页边竖条：页眉那一段里平均每列有墨的行占这么多以上（实心黑边、扫描的网点灰带；页眉字行稀，一列不过几个百分点）。 */
@@ -163,6 +229,15 @@ export function spaceWordText(
   return out;
 }
 const WORD_GAP = 0.17;
+
+/**
+ * 页眉带的一行补词间空格：与简谱页眉同一份（`omrkit/textspace.ts::recoverSpacesByInk`，按本行空白宽度的跳变定门、
+ * 只在字母与字母、字母与数字之间插）——`spaceWordText` 的固定门槛会把字距拉开的年份拆成「1 7 7 6」、把粗体标题粘成
+ * 「CountYourBlessings」。在线识别（`ocrlive.ts::ocrHeaderStrips`）与离线缓存（`gen-rasterheader.mjs`）都调这一份。
+ */
+export function spaceHeaderText(text: string, chars: { text: string; cx: number }[] | undefined, strip: Binary, box: Rect): string {
+  return recoverSpacesByInk(strip, text, box, chars, true);
+}
 
 /** 力度（另有一路按字形认，`dynamics.ts`；它漏掉的由这里读出来的补）。字行以力度字母起头、后面跟着别的（歌词的头一个字）也算。 */
 const DYNAMIC_RE = /^(ppp|pp|p|mp|mf|fff|ff|f|sfz|sf|fz|fp)(?![a-z])/;
