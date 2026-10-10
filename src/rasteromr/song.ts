@@ -15,7 +15,8 @@ import { markSplitBars } from "../staffomr/notedata";
 import { buildScore } from "../staffomr/score";
 import type { StaffReviewResult, StaffReviewStats } from "../staffomr/review";
 import { scoreToMusicXml } from "../staffomr/toxml";
-import type { Staff } from "../staffomr/model";
+import type { SPage, Staff } from "../staffomr/model";
+import type { LyricLine } from "../staffomr/textanalyze";
 import type { StaffNote } from "../staffomr/notedata";
 import { settleLyricVerses } from "./lyricpost";
 
@@ -67,6 +68,8 @@ export async function recognizeRasterSong(
   let carryTime: { beats: number; beatType: number } | undefined;
   let carryKey: CarryKey | undefined;
   const barPages: Parameters<typeof markSplitBars>[0] = [];
+  /** 闭合人声谱：两行谱之间印着歌词的上一行（见 `buildScore` 的同名选项） */
+  const lyricsBelow = new Set<Staff>();
   const total = sources.reduce((n, s) => n + (s.pdf.numPages as number), 0);
   let done = 0;
   /** 曲首页（第一页有谱的）的页眉 */
@@ -100,6 +103,7 @@ export async function recognizeRasterSong(
           stats.halftone ??= r.raster?.halftone ?? null;
           stats.kind ??= r.raster?.kind ?? null;
           entries.push({ page: r.page, ctx: r.ctx });
+          markLyricsBelow(r.page, r.lyricLines, lyricsBelow);
           for (const n of r.notes) {
             const a = notesByStaff.get(n.staff) ?? [];
             a.push(n);
@@ -134,7 +138,7 @@ export async function recognizeRasterSong(
   if (!entries.length) return { xml: null, score: null, stats, pages, noteBoxes, assignment: emptyAssign, rebuild: () => { throw new Error("没有谱表"); } };
   // 拉丁段挪到全曲中文段后面（页内先占位，见 `lyricpost.ts::settleLyricVerses`）
   settleLyricVerses([...notesByStaff.values()].flat());
-  let score = buildScore(entries);
+  let score = buildScore(entries, { lyricsBelow });
   const credits = (header ?? []).map(({ text, type, justify }) => ({ text, type, justify }));
   // 没给标题（编辑器里打开的图、PDF）就拿页眉的头一个标题
   const title = opts.title ?? credits.find((c) => c.type === "title")?.text;
@@ -145,8 +149,20 @@ export async function recognizeRasterSong(
     xml, score, stats, pages, noteBoxes,
     assignment: () => score.systems.map((e, si) => e.sys.staves.map((st) => score.scoreStaves.findIndex((ss) => ss.staves[si] === st))),
     rebuild: (slots) => {
-      score = buildScore(entries, { slots });
+      score = buildScore(entries, { slots, lyricsBelow });
       return { xml: scoreToMusicXml(score, notesOf, { title, credits, ...(noteId ? { noteId } : {}) }), score };
     },
   };
+}
+
+/** 同一系统里上下紧挨着的两行谱之间有一行歌词（不管挂在哪一行上），记下上面那行。 */
+function markLyricsBelow(page: SPage, lines: readonly LyricLine[], out: Set<Staff>): void {
+  for (const sys of page.systems) {
+    const rows = [...sys.staves].sort((a, b) => a.box.top - b.box.top);
+    for (let k = 0; k + 1 < rows.length; k++) {
+      const up = rows[k];
+      const down = rows[k + 1];
+      if (lines.some((l) => l.syllables.length && l.top > up.box.bottom && l.top < down.box.top)) out.add(up);
+    }
+  }
 }

@@ -332,6 +332,8 @@ export function buildScore(
     profileOf?: (stf: Staff) => StaffProfile;
     /** 外面给的指派（编辑器的「谱表 ↔ 声部」关联表）：`slots[系统][谱行]` = 第几个声部行，-1 = 忽略这行谱。给了就不自己猜 */
     slots?: number[][];
+    /** 下方紧挨着一行谱、两行之间印着歌词的谱行（闭合人声谱的上谱表）：大谱表那两条并声部的规则遇到这样的一对不并，另起声部并用方括号括起 */
+    lyricsBelow?: ReadonlySet<Staff>;
   } = {},
 ): StaffScore {
   const systems: StaffScore["systems"] = [];
@@ -352,7 +354,7 @@ export function buildScore(
     slots.forEach((pick, si) => pick.forEach((k, ri) => {
       if (k >= 0 && scoreStaves[k] && tokensOf[si]?.[ri]) scoreStaves[k].staves[si] = tokensOf[si][ri].staff;
     }));
-    return finishScore(systems, scoreStaves);
+    return finishScore(systems, scoreStaves, opts.lyricsBelow);
   }
 
   /** 当前状态：每个 ScoreStaff 最近一次见到的签名。 */
@@ -392,11 +394,11 @@ export function buildScore(
     state = next;
   });
 
-  return finishScore(systems, scoreStaves);
+  return finishScore(systems, scoreStaves, opts.lyricsBelow);
 }
 
 /** 补齐长度、编号、分声部——两条路（增量 LCS 与全局指派）共用的收尾。 */
-function finishScore(systems: StaffScore["systems"], scoreStaves: ScoreStaff[]): StaffScore {
+function finishScore(systems: StaffScore["systems"], scoreStaves: ScoreStaff[], lyricsBelow?: ReadonlySet<Staff>): StaffScore {
   // 补齐长度（后面才出现的 ScoreStaff，前面那些系统都是 null）
   for (const ss of scoreStaves) {
     for (let i = 0; i < systems.length; i++) if (ss.staves[i] === undefined) ss.staves[i] = null;
@@ -409,6 +411,8 @@ function finishScore(systems: StaffScore["systems"], scoreStaves: ScoreStaff[]):
   // 只靠原文那条判据，钢琴谱的两行会各成一个声部。补的判据是刻谱的通行约定：
   // **同一系统里相邻的「G 谱号 + F 谱号」是大谱表**，合成一个声部。
   const parts: Part[] = [];
+  /** 拆开的闭合人声谱：上谱表那个声部的序号（下谱表是它的下一个） */
+  const vocalPairs: number[] = [];
   let prevTok: StaffToken | null = null;
   for (const ss of scoreStaves) {
     const tok = lastToken(ss, systems);
@@ -426,6 +430,12 @@ function finishScore(systems: StaffScore["systems"], scoreStaves: ScoreStaff[]):
     ) {
       newPart = false;
     }
+    // **闭合人声谱**：两行之间印着歌词的是上下两个声部（女高女低 / 男高男低），不是一件乐器的大谱表——各成一个声部、方括号括起。
+    // 不看括号形状：有的版本根本不印括号（Holy Holy Holy），印方括号的也有齐唱 + 伴奏（向主唱新歌，同样拆）
+    if (!newPart && lyricsBelow && voicePairSplit(parts[parts.length - 1].scoreStaves, ss, lyricsBelow)) {
+      newPart = true;
+      vocalPairs.push(parts.length - 1);
+    }
     if (newPart) parts.push(new Part());
     parts[parts.length - 1].scoreStaves.push(ss);
     prevTok = tok;
@@ -433,6 +443,11 @@ function finishScore(systems: StaffScore["systems"], scoreStaves: ScoreStaff[]):
   parts.forEach((p, i) => (p.index = i));
   nameParts(systems, parts);
   const groups = groupParts(systems, parts);
+  for (const first of vocalPairs) {
+    if (groups.some((g) => first + 1 >= g.first && first <= g.last)) continue;
+    groups.push({ symbol: "bracket", first, last: first + 1, barline: false });
+  }
+  groups.sort((a, b) => a.first - b.first);
   return { systems, scoreStaves, parts, ...(groups.length ? { groups } : {}) };
 }
 
@@ -510,6 +525,21 @@ function braceInSystemOf(ss: ScoreStaff, systems: StaffScore["systems"]): boolea
     });
   }
   return false;
+}
+
+/** 上一个声部的末行与这行谱同在的系统里，过半数两行之间印着歌词（上一行在 `lyricsBelow` 里）。 */
+function voicePairSplit(prev: ScoreStaff[], ss: ScoreStaff, lyricsBelow: ReadonlySet<Staff>): boolean {
+  const last = prev[prev.length - 1];
+  if (!last) return false;
+  let both = 0;
+  let hit = 0;
+  for (let i = 0; i < ss.staves.length; i++) {
+    const up = last.staves[i];
+    if (!up || !ss.staves[i]) continue;
+    both++;
+    if (lyricsBelow.has(up)) hit++;
+  }
+  return both > 0 && hit * 2 > both;
 }
 
 /** 两行谱有没有在某个系统里同时出现过（同一系统 = 同时演奏）。 */

@@ -752,6 +752,16 @@ export function parseLyricBody(ctx: Ctx, src: string, startColumn: number): Lyri
       continue;
     }
 
+    // 行内的 `[hy]` / `[hy!]`（一个歌本里男声呼应小字那几行行首、行末的标记）：整体略过，不占音符位。
+    // 只认方括号里全是拉丁字母（可带 `!`）的，别的方括号照字处理
+    if (ch === "[") {
+      const m = /^\[[A-Za-z]+!?\]/.exec(src.slice(i));
+      if (m) {
+        i += m[0].length;
+        continue;
+      }
+    }
+
     // 行末落单的 `}`：把相邻几段歌词括在一起的联合括号，不是并字，也不占音符位
     if (ch === "}") {
       i += 1;

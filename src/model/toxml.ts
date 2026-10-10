@@ -37,6 +37,7 @@ import type {
   MeasureAttrs,
   Note,
   Part,
+  PartGroup,
   Print,
   ScoreDoc,
   Song,
@@ -883,23 +884,30 @@ export function scoreDocToMusicXml(doc: ScoreDoc, options: ToXmlOptions = {}): s
 
   o.open("part-list");
   const groups = song.partGroups ?? [];
-  for (const g of groups) {
-    o.open("part-group", ` type="start" number="${escAttr(g.number)}"`);
-    if (g.symbol) o.text("group-symbol", g.symbol);
-    if (g.name) o.text("group-name", g.name);
-    if (g.abbrev) o.text("group-abbreviation", g.abbrev);
-    if (g.groupBarline) o.text("group-barline", "yes");
-    o.close();
-  }
-  for (const p of song.parts) {
+  // 组的起止夹在它覆盖的那几个 score-part 前后（「SATB 组 + 钢琴」只括前几个）；没写覆盖哪些的罩全部
+  const idx = new Map(song.parts.map((p, i) => [p.id, i]));
+  const span = (g: PartGroup): [number, number] => {
+    const at = g.parts.map((id) => idx.get(id)).filter((i): i is number => i !== undefined);
+    return at.length ? [Math.min(...at), Math.max(...at)] : [0, song.parts.length - 1];
+  };
+  song.parts.forEach((p, pi) => {
+    for (const g of groups) {
+      if (span(g)[0] !== pi) continue;
+      o.open("part-group", ` type="start" number="${escAttr(g.number)}"`);
+      if (g.symbol) o.text("group-symbol", g.symbol);
+      if (g.name) o.text("group-name", g.name);
+      if (g.abbrev) o.text("group-abbreviation", g.abbrev);
+      if (g.groupBarline) o.text("group-barline", "yes");
+      o.close();
+    }
     o.open("score-part", ` id="${escAttr(p.id)}"`, surfaceOf(p, "score-part"));
     // MuseScore 兼容：`<part-name>` 留空并 print-object="no"（见 MusicXML-导出.md）
     if (p.name) o.text("part-name", p.name);
     else o.leaf("part-name", ' print-object="no"');
     if (p.abbrev) o.text("part-abbreviation", p.abbrev);
     o.close();
-  }
-  for (const g of groups) o.leaf("part-group", ` type="stop" number="${escAttr(g.number)}"`);
+    for (const g of groups) if (span(g)[1] === pi) o.leaf("part-group", ` type="stop" number="${escAttr(g.number)}"`);
+  });
   o.close();
 
   for (const p of song.parts) partXml(o, p, song, cx);
