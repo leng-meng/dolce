@@ -30,6 +30,7 @@ import { alignPartsBySystem } from "./alignparts";
 import { applyPageMetaToDefaults } from "./pagemeta";
 import { decoKey } from "./deconames";
 import { applyBreaks } from "./breaks";
+import { songFifths } from "./keyshift";
 
 
 /** 记号原名 → `<articulations>` 元素名（`&xx` 与 123 的 `!xx!` 同名）。 */
@@ -85,7 +86,7 @@ export function projectForMusicXml(src: Song, options: ProjectOptions = {}): Son
   // 多声部按组对齐：一组不一定含全部声部，缺席/偏短的补无声小节，各 part 小节才对得上（issue 11）
   alignPartsBySystem(song);
   if (options.lineStarts?.size) applyLineStarts(song, options.lineStarts, options.midLineStarts ?? false);
-  const fifths = fifthsOf(song);
+  const fifths = songFifths(song);
   const hosts = sustainHosts(song);
   const tuplets = tupletRatios(song);
   const factor = divisionFactor(song, tuplets);
@@ -137,14 +138,6 @@ export function projectForMusicXml(src: Song, options: ProjectOptions = {}): Son
  *  多声部各声部的切点对不齐，也顺延。`newPage` 不动。一个也对不上（id 过期）就不改。 */
 function applyLineStarts(song: Song, starts: ReadonlySet<ElementId>, mid: boolean): boolean {
   return applyBreaks(song, [...starts].map((id) => ({ id })), { mid: mid ? "inline" : "source", pages: "keep" });
-}
-
-function fifthsOf(song: Song): number {
-  const k = song.key;
-  if (!k) return 0;
-  if (k.fifths !== 0 || !k.spelling) return k.fifths;
-  const f = MusicCommon.keyNameToFifth(k.spelling);
-  return f >= -7 && f <= 7 ? f : 0;
 }
 
 function creditsOf(song: Song): NonNullable<Song["credits"]> {

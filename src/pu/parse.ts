@@ -177,7 +177,8 @@ function scanGraceNotes(ctx: Ctx, body: string, columnBase: number): NoteElement
 interface QuotedMeaning {
   chord?: string;
   meter?: Meter;
-  keyShift?: number;
+  /** 曲中转调 `k:#4` 的级数原写法（`#4`），`;` 后面的标签另记 `keyLabel` */
+  key?: string;
   keyLabel?: string;
   graceBefore?: NoteElement[];
   graceAfter?: NoteElement[];
@@ -195,7 +196,7 @@ function parseMeter(raw: string, parenthesized = false): Meter | undefined {
   return { numerator, denominator, parenthesized };
 }
 
-/** 双引号里可能是和弦 `hx:`、临时拍号 `p:`、倚音（有谱 `yy:`/`hyy:`）或普通注释。 */
+/** 双引号里可能是和弦 `hx:`、临时拍号 `p:`、曲中转调 `k:`、倚音（有谱 `yy:`/`hyy:`）或普通注释。 */
 function interpretQuoted(ctx: Ctx, body: string, columnBase: number): QuotedMeaning {
   const hx = /^hx:\s*/i.exec(body);
   if (hx) return { chord: body.slice(hx[0].length) };
@@ -206,11 +207,8 @@ function interpretQuoted(ctx: Ctx, body: string, columnBase: number): QuotedMean
     report(ctx, "bad-temporary-meter", tr("diag.pu.tempMeter", { body }), columnBase, body.length);
     return { annotation: body };
   }
-  const kc = /^k:\s*([#b]?)([1-7])\s*(?:;(.*))?$/i.exec(body);
-  if (kc) {
-    const semi = [0, 0, 2, 4, 5, 7, 9, 11][Number(kc[2])]! + (kc[1] === "#" ? 1 : kc[1] === "b" ? -1 : 0);
-    return { keyShift: semi, keyLabel: kc[3]?.trim() || undefined };
-  }
+  const kc = /^k:\s*([#b]?[1-7])\s*(?:;(.*))?$/i.exec(body);
+  if (kc) return { key: kc[1]!, keyLabel: kc[2]?.trim() || undefined };
   const grace = /^(h?yy):\s*/i.exec(body);
   if (grace) {
     const notes = scanGraceNotes(ctx, body.slice(grace[0].length), columnBase + grace[0].length);
@@ -223,8 +221,8 @@ type Attachable = NoteElement | SustainElement | BarlineElement;
 
 function applyQuoted(target: Attachable, q: QuotedMeaning, source: SourceSpan): void {
   if (q.meter !== undefined && target.kind === "barline") target.temporaryMeter = q.meter;
-  if (q.keyShift !== undefined && target.kind === "barline") {
-    target.temporaryKey = q.keyShift;
+  if (q.key !== undefined && target.kind === "barline") {
+    target.temporaryKey = q.key;
     if (q.keyLabel) target.annotation = q.keyLabel;
   }
   if (q.annotation !== undefined) {
@@ -577,8 +575,13 @@ export function parseMusicLine(
         i = src.length;
         continue;
       }
-      const meaning = interpretQuoted(ctx, quoted.body, i + 1);
+      let meaning = interpretQuoted(ctx, quoted.body, i + 1);
       const target = lastAttachable(elements);
+      // 转调只认写在小节线上的；挂到音符上的照普通注释印出来，并提示
+      if (meaning.key !== undefined && target !== undefined && target.kind !== "barline") {
+        report(ctx, "key-change-off-barline", tr("diag.pu.keyOffBarline", { body: quoted.body }), i + 1, quoted.body.length);
+        meaning = { annotation: quoted.body };
+      }
       if (target === undefined) {
         report(ctx, "orphan-annotation", tr("diag.pu.orphanAnnotation", { body: quoted.body }), i);
       } else {

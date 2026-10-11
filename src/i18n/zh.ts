@@ -523,6 +523,7 @@ export const zh = {
   // 解析诊断（随解析按界面语言产出）
   "diag.pu.graceChar": "倚音里无法识别的字符 '{ch}'",
   "diag.pu.tempMeter": "临时拍号无法解析：'{body}'",
+  "diag.pu.keyOffBarline": "转调 \"{body}\" 要写在小节线后面，这里当普通注释",
   "diag.pu.orphanAnchor": "'@' 前面没有可跟词的符号",
   "diag.pu.badBarline": "无法识别的小节线 '{ch}'",
   "diag.pu.extraParen": "多余的 ')'",

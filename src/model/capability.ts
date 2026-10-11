@@ -101,9 +101,9 @@ export const TARGET_LABEL: Readonly<Record<TargetFormat, string>> = {
 
 /** 文本谱两种方言都装不下的。依据见 `model/topu.ts` 开头与 `docs/模块/源格式-文本谱.md` 的已知限制：
  *  样式表引用、演唱顺序、扩展 meta 没有字段可落（文本谱只有按位置的 XL/XR/TL/TR/BL/BC/BR，不往里猜）；
- *  没有曲中转调的写法；音符堆只写简谱印的那个音；弧线与多连音共用一个先开先闭的括号队列。 */
+ *  音符堆只写简谱印的那个音；弧线与多连音共用一个先开先闭的括号队列。 */
 const PU_GONE: Feature[] = [
-  "style", "playOrder", "harmonyOffset", "meta", "paper", "keyChange", "noteStack", "nestedArc", "oddTuplet",
+  "style", "playOrder", "harmonyOffset", "meta", "paper", "noteStack", "nestedArc", "oddTuplet",
 ];
 
 const ALL: Feature[] = Object.keys(FEATURE_NAMES) as Feature[];

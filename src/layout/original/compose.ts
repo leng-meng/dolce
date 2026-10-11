@@ -21,7 +21,7 @@ import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../harmony";
 import { jpBarlineItems, jpDot, jpTimeSigItems } from "../jpglyph";
 import type { BarlineSpec } from "../entry";
 import { BarStyle } from "../../score/enums";
-import type { BarlineElement, Metadata, NoteElement } from "../../pu/ast";
+import type { Metadata, NoteElement } from "../../pu/ast";
 import ORIGINAL_SS from "../../style/books/original.ss?raw";
 import ORIGINAL_SHIGE_SS from "../../style/books/original-shige.ss?raw";
 import { computeStyleForPaper } from "../../style/themes";
@@ -1080,6 +1080,15 @@ function paintNote(c: OriginalCtx,
     t.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
     g.add(t);
   }
+  // 曲中转调标签：新调首音上方，与和弦/注释同一槽；那一槽已有字就再往上叠一行（`place.ts::noteTextTop`）。
+  // 左缘对齐数字左缘、往右写——居中的话行首那个会伸出左边距
+  if (note.keyLabel) {
+    const font = new Font(m.font.text, m.size.chord);
+    const y = baseline + m.note.chordY - (note.chord || note.annotation ? m.size.chord * 1.2 : 0);
+    const t = text(note.keyLabel, x - m.ink.noteHeight * 0.35, y, font, c.ink); // 数字宽约墨迹高的 0.7
+    t.classes.add("key-change");
+    g.add(t);
+  }
 
   // 倚音：主音左/右侧的小号数字（默认八分，故带一条减时线）
   paintGrace(c, g, note.graceBefore, x, baseline, -1);
@@ -1257,7 +1266,6 @@ function paintBarline(c: OriginalCtx,
       const font = new Font(m.font.text, m.size.keyMeter * 0.85);
       paintMeter(c, root, x, baseline, el.temporaryMeter, font);
     }
-    paintKeyLabel(c, root, x, baseline, el, spanHeight);
     return null;
   }
 
@@ -1271,7 +1279,6 @@ function paintBarline(c: OriginalCtx,
     const font = new Font(m.font.text, m.size.keyMeter * 0.85);
     paintMeter(c, root, x + m.stroke.doubleBarlineGap, baseline, el.temporaryMeter, font);
   }
-  paintKeyLabel(c, root, x, baseline, el, spanHeight);
 
   // 粗细组合、反复点、线间距**全部走谱面那一路的画法**（jpglyph.ts::jpBarlineItems）。
   // 原先这里是自成一套：填充 rect 而不是 GraphicLine、粗线 ×2.6、线距 barlineDoubleGap、
@@ -1299,35 +1306,6 @@ function paintBarline(c: OriginalCtx,
   }
   root.add(g);
   return g;
-}
-
-/** 曲中转调标签（`"k:2;…"` 的 `;` 后面那段）。「【升G调】」这类带方括号的画在小节线上方居中（方框标注式）；
- *  其余（如「1= D」）是行内式：与数字同字号、同一行，画在小节线右侧，后面再补一条细小节线（`‖ 1= D |`），
- *  宽度由 `place.ts` 预留。 */
-function paintKeyLabel(c: OriginalCtx, root: Group, x: number, baseline: number, el: BarlineElement, spanHeight = 0): void {
-  if (el.temporaryKey === undefined || !el.annotation) return;
-  const m = c.metrics;
-  if (el.annotation.startsWith("【")) {
-    const f = new Font(m.font.text, m.size.chord);
-    const w = f.measureText(el.annotation);
-    root.add(text(el.annotation, x - w / 2, baseline - m.note.barlineHeight * 0.5 - m.size.chord * 1.8, f, c.ink));
-    return;
-  }
-  const f = new Font(m.font.text, m.size.note);
-  const tx = x + m.size.note * 0.65;
-  root.add(text(el.annotation, tx, baseline + m.ink.noteHeight / 2, f, c.ink));
-  const spec = PU_BARLINE_SPEC["normal"];
-  if (!spec) return;
-  const half = m.note.barlineHeight * 0.5;
-  const r = jpBarlineItems(spec, false, {
-    top: -half, bot: half + spanHeight, light: m.stroke.barline, heavy: m.stroke.barline * 2.6, dotRadius: m.stroke.repeatDotRadius, color: c.ink,
-  });
-  const ox = tx + f.measureText(el.annotation) + m.size.note * 0.4 - r.width / 2;
-  for (const item of r.items) {
-    item.x += ox;
-    item.y += baseline;
-    root.add(item);
-  }
 }
 
 /**

@@ -524,6 +524,7 @@ export const en: Record<MsgKey, string> = {
   // 解析诊断（随解析按界面语言产出）
   "diag.pu.graceChar": "Unrecognized character '{ch}' in grace notes",
   "diag.pu.tempMeter": "Can't parse the temporary time signature '{body}'",
+  "diag.pu.keyOffBarline": "Key change \"{body}\" must follow a barline; shown as a plain annotation here",
   "diag.pu.orphanAnchor": "Nothing before '@' to attach lyrics to",
   "diag.pu.badBarline": "Unrecognized barline '{ch}'",
   "diag.pu.extraParen": "Unmatched ')'",

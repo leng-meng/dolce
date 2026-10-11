@@ -38,6 +38,7 @@ import { fillDegreesFromPitch, harmonyText, keySpelling, melodyLane, quarterTemp
 import { ownIds, ownMarks, partRanges, systemRanges, type SystemRange } from "./emitutil";
 import { relayoutDocBreaks } from "./relayout";
 import { decoKey } from "./deconames";
+import { degreeOfKey, songFifths } from "./keyshift";
 
 // ───────────────────────── 头部 ─────────────────────────
 
@@ -355,6 +356,9 @@ interface PartState {
   openVoltas: number;
   /** 当前生效的拍号（曲中转拍写 `"p:3/4"`；减时线连断的拍位也按它算） */
   time: Time | undefined;
+  /** 首调号与当前调号的 fifths（曲中转调写 `"k:2"`，级数相对首调） */
+  home: number;
+  key: number;
   /** 是否由写出端补 `~`/`^`（原文就有连断记号的——文本谱读进来的——照原样写，不补） */
   autoBoundaries: boolean;
   /** 已经并到上一小节右线里写掉的左线 */
@@ -667,19 +671,24 @@ function writeRightBarline(measures: readonly Measure[], mi: number, line: Line,
   const nextTime = next?.attrs?.time;
   const meter = bar?.time ?? (nextTime && (!st.time || nextTime.beats !== st.time.beats || nextTime.beatType !== st.time.beatType) ? nextTime : undefined);
   if (type === null && !lineEnd && next) type = "normal";
-  if (type === null && meter) type = "hidden";
+  // 曲中转调：`"k:2"` 同样写在线后面，线上的注记并进去当转调标签（`"k:2;1=D"`）
+  const nextKey = next?.attrs?.key;
+  const keyCode = nextKey && nextKey.fifths !== st.key ? `k:${degreeOfKey(st.home, nextKey.fifths)}` : undefined;
+  if (type === null && (meter || keyCode)) type = "hidden";
   if (type !== null) {
     if (bar) writeInline(bar.before, line, st);
     let s = barlineCode(d, type);
     s += closeText;
     for (const o of [...(bar?.ornaments ?? []), ...(nextLeft?.ornaments ?? [])]) s += commandText(o);
     if (meter) s += quoted(`p:${meter.beats}/${meter.beatType}`);
-    if (bar?.annotation) s += quoted(bar.annotation);
+    if (keyCode) s += quoted(bar?.annotation ? `${keyCode};${bar.annotation}` : keyCode);
+    else if (bar?.annotation) s += quoted(bar.annotation);
     line.push(s);
   } else if (closeText) {
     line.glue(closeText);
   }
   if (nextTime) st.time = nextTime;
+  if (nextKey) st.key = nextKey.fifths;
   // 曲末还开着的房号（没有结束线收）：就地收口，免得一直开到下一首
   if (!next) closeVoltas(line, st);
   return type === null;
@@ -916,12 +925,13 @@ export function emitPuSong(src: Song, dialect: Dialect, opts: EmitPuOptions = {}
   // 原文就有连断记号的（文本谱读进来的）照原样写；别的来源由写出端按拍补
   const hasBoundaries = song.parts.some((p) => p.measures.some((m) => m.elements.some((el) =>
     el.kind === "chord" && (el.before ?? []).some((it) => it.kind === "boundary"))));
+  const home = song.key ? songFifths(song) : song.parts[0]?.measures[0]?.attrs?.key?.fifths ?? 0;
   const states = song.parts.map((part): PartState => {
     const own = ownIds(part, (el, mi) => isStreamElement(el, part.measures[mi]!));
     const pos = positions(part);
     return {
       d, plan: planArcs(ownMarks(song, own), pos), pos, voltaOpenEnd: voltaEnds(part), openVoltas: 0,
-      time: song.time, autoBoundaries: !hasBoundaries, consumedLeft: new Set(), closeOpenVoltas: !opts.fromPu, carryBeat: 0,
+      time: song.time, home, key: home, autoBoundaries: !hasBoundaries, consumedLeft: new Set(), closeOpenVoltas: !opts.fromPu, carryBeat: 0,
     };
   });
 

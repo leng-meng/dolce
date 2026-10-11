@@ -382,10 +382,6 @@ function layoutVoiceLine(
     if (el.kind === "barline" && el.ornaments.some((o) => o.name === "sbf")) {
       advance += m.ink.noteHeight * 1.5;
     }
-    // 曲中转调的行内标签（「1=D」）占数字行的一截，后面的音符要让出来；方框式（「【…】」）在线上方，不占宽
-    if (el.kind === "barline" && el.temporaryKey !== undefined && el.annotation && !el.annotation.startsWith("【")) {
-      advance += m.size.note * (0.45 * [...el.annotation].length + 0.95); // 标签 + 其后一条细小节线
-    }
     // 变音记号写在数字前，得给它让出位置
     if (next?.kind === "note" && next.accidental !== undefined) advance += m.stroke.accidentalSpace;
     // 前倚音也排在数字左边，同样要让位——不让的话倚音会挤在前后两个音符正中间，
@@ -561,6 +557,12 @@ function annotationTop(m: JianpuGrid): number {
   return m.note.chordY - m.size.chord * 0.9;
 }
 
+/** 音符头顶那一槽的墨迹顶：和弦/注释一行，转调标签（`keyLabel`）与它们同在时叠到上一行。没有字返回 null */
+function noteTextTop(el: NoteElement, m: JianpuGrid): number | null {
+  const rows = (el.chord || el.annotation ? 1 : 0) + (el.keyLabel ? 1 : 0);
+  return rows === 0 ? null : annotationTop(m) - (rows - 1) * m.size.chord * 1.2;
+}
+
 /**
  * 一组曲行头顶需要留多少空间——记号是往上画的（弧线、跳房子、渐强渐弱、装饰音、
  * 临时伴奏），不预留就会压到上一组的歌词。
@@ -585,9 +587,8 @@ function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
       // 和弦/注释画在 annotationY 那条**基线**上，字还要往上长一截——只留 annotationY
       // 的话，system 间距一收紧（gapGroup 按无和弦的底本量得）和弦就顶进上一组的低音点。
       // 再往上让一个数字高：只让到墨迹顶是「不打架」，两组之间还得看得出是两组。
-      if (el.kind === "note" && (el.chord || el.annotation)) {
-        consider(annotationTop(m) - m.ink.noteHeight);
-      }
+      const nt = el.kind === "note" ? noteTextTop(el, m) : null;
+      if (nt !== null) consider(nt - m.ink.noteHeight);
       if (el.kind === "sustain" && el.chord) consider(annotationTop(m) - m.ink.noteHeight);
       if (el.kind === "note" || el.kind === "sustain" || el.kind === "barline") {
         for (const orn of el.ornaments) {
@@ -624,7 +625,8 @@ function voiceHeadroom(voice: ScoreLine, m: JianpuGrid): number {
     }
   }
   for (const el of voice.elements) {
-    if (el.kind === "note" && (el.chord || el.annotation)) consider(annotationTop(m));
+    const nt = el.kind === "note" ? noteTextTop(el, m) : null;
+    if (nt !== null) consider(nt);
     if (el.kind === "sustain" && el.chord) consider(annotationTop(m)); // 增时线上的和弦同样要留头顶
     if (el.kind === "note" || el.kind === "sustain" || el.kind === "barline") {
       for (const orn of el.ornaments) {

@@ -107,6 +107,9 @@ export interface NoteElement {
   /** 音符上方的双引号注释；`hx:` 开头的和弦另存 `chord` */
   annotation?: string;
   chord?: string;
+  /** 曲中转调后的首个音符上方印的标签（`"k:2;1=D"` 的标签，没写就是「转1=D」）。
+   *  解析端不填：由行视图按模型的 `Measure.attrs.key` 补（`slots.ts::docView`） */
+  keyLabel?: string;
   /** `annotation` / `chord` 在原文里的位置（整个 `"…"` 或不带引号的和弦名）。只给编辑用 */
   annotationSource?: SourceSpan;
   chordSource?: SourceSpan;
@@ -148,8 +151,8 @@ export interface BarlineElement {
   ornaments: Ornament[];
   /** 小节线注释里的 `p:x/x` 临时拍号 */
   temporaryMeter?: Meter;
-  /** 小节线注释里的 `k:2` 曲中转调：相对主调的半音数（从本小节线之后生效，`k:1` 回主调） */
-  temporaryKey?: number;
+  /** 小节线注释里的 `k:2` 曲中转调：新调主音在主调里的级数原写法（`2`、`#4`、`b7`），从本小节线之后生效，`k:1` 回主调 */
+  temporaryKey?: string;
   annotation?: string;
   code: string;
   source: SourceSpan;

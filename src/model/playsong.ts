@@ -158,12 +158,6 @@ function songMeasures(doc: ScoreDoc, songIdx: number, options: PlaySongOptions, 
   // 调名缺省时取模型的 fifths：`.jpwabc` 来源只记 fifths、不记调名拼写（`.Title` 的调号）
   const fifths = doc.songs[songIdx]!.key?.fifths;
   key.fifths = meta.mode === undefined && fifths !== undefined ? fifths : MusicCommon.keyNameToFifth(meta.mode ?? "C");
-  // 曲中转调（`"k:2"`）：先把各声部写的转调收成一张按小节序号的表，再逐声部建，所有声部同步转
-  const keyShifts = new Map<number, number>();
-  for (const v of voices) {
-    const ls = linesOfVoice(song, v);
-    if (ls.length > 0) buildMeasures(ls, () => {}, !!options.forExpanded, undefined, keyShifts);
-  }
   const parts: MeasureOut[][] = [];
   const names: (string | undefined)[] = [];
   const docRank: number[] = [];
@@ -179,7 +173,7 @@ function songMeasures(doc: ScoreDoc, songIdx: number, options: PlaySongOptions, 
     const built = buildMeasures(lines, (ch, el) => {
       const id = view.idOf.get(el);
       if (id !== undefined) ch.id = id;
-    }, !!options.forExpanded, pitch, keyShifts);
+    }, !!options.forExpanded, pitch);
     // 八度谱号的声部（四声部简谱的男高、男低按高八度记）实际低八度发声
     const part = withPitch ? partOfVoice(doc.songs[songIdx]!, v) : undefined;
     const oc = part ? writtenOctaveOf(part) : 0;

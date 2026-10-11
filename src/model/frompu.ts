@@ -35,6 +35,7 @@ import type {
   Chord,
   ElementId,
   InlineItem,
+  Key,
   Lyric,
   LyricLineInfo,
   Mark,
@@ -49,6 +50,7 @@ import { SIMPLE_DIVISIONS } from "./doc";
 import { normalizeSpelling } from "../j123/fields";
 import { IdGen, emptyDoc, emptySong } from "./helpers";
 import { creatorOf } from "./metakeys";
+import { keyOfDegree, songFifths } from "./keyshift";
 
 /** `PuDoc` 的 BarlineType → `ScoreDoc` 的 bar-style + repeat。 */
 function fromPuBarline(el: BarlineElement): Barline {
@@ -69,7 +71,6 @@ function fromPuBarline(el: BarlineElement): Barline {
     b.time = { beats: el.temporaryMeter.numerator, beatType: el.temporaryMeter.denominator };
     if (el.temporaryMeter.parenthesized) b.time.parenthesized = true;
   }
-  if (el.temporaryKey !== undefined) b.keyShift = el.temporaryKey;
   if (el.annotation !== undefined) b.annotation = el.annotation;
   b.source = el.source;
   return b;
@@ -178,6 +179,10 @@ interface LineResult {
 /** 跨行承接状态：行首的 `-` 要照抄的前音 */
 interface Carry {
   last: Chord | null;
+  /** 首调号的 fifths（`"k:2"` 按它换算） */
+  home: number;
+  /** 小节线上 `"k:…"` 定下的新调号，落到线后那个小节（行末的线就落到下一行行首） */
+  key?: Key;
 }
 
 /** 一行曲（或一段临时伴奏层）→ 小节数组。 */
@@ -192,7 +197,8 @@ function convertLine(
   const idAt = new Map<number, ElementId>();
   const measureAt = new Map<number, number>();
   const anchors: (Chord | Sustain)[] = [];
-  let mea: Measure = { number: String(startMeasureNo), elements: [] };
+  const fresh = (no: number): Measure => (carry.key ? { number: String(no), elements: [], attrs: { key: carry.key } } : { number: String(no), elements: [] });
+  let mea: Measure = fresh(startMeasureNo);
   /** 本小节里增时线可以并进去的那个和弦；小节线后清空（跨线的 `-` 是承接前音） */
   let host: Chord | null = null;
   /** 还没找到宿主的夹层（`~`/`^`/临时伴奏），挂到下一个符号上 */
@@ -204,10 +210,14 @@ function convertLine(
       pending = [];
     }
   };
-  const flush = (bar?: Barline): void => {
+  const flush = (bar?: Barline, key?: string): void => {
     if (bar) (mea.barlines ??= []).push(bar);
-    if (mea.elements.length || mea.barlines?.length) measures.push(mea);
-    mea = { number: String(startMeasureNo + measures.length), elements: [] };
+    if (mea.elements.length || mea.barlines?.length) {
+      measures.push(mea);
+      if (mea.attrs?.key === carry.key) delete carry.key;
+    }
+    if (key !== undefined) carry.key = keyOfDegree(carry.home, key);
+    mea = fresh(startMeasureNo + measures.length);
     host = null;
   };
 
@@ -218,7 +228,7 @@ function convertLine(
         const b = fromPuBarline(el);
         takePending(b);
         measureAt.set(i, measures.length);
-        flush(b);
+        flush(b, el.temporaryKey);
         break;
       }
 
@@ -291,7 +301,7 @@ function convertLine(
 
       case "inline-layer": {
         // 伴奏层是独立的一小段元素流：自带小节与记号，承接状态不跟主旋律串
-        const sub = convertLine(el.elements, voice, ids, 1, { last: null });
+        const sub = convertLine(el.elements, voice, ids, 1, { last: null, home: carry.home });
         const marks: Mark[] = [];
         convertMarks(el.marks, sub, marks, { pending: new Map() }, sub.measures);
         pending.push({ kind: "layer", role: el.role, measures: sub.measures, marks, source: el.source });
@@ -304,7 +314,8 @@ function convertLine(
     if (mea.elements.length || mea.barlines?.length || measures.length === 0) {
       mea.trailing = pending;
       measures.push(mea);
-      mea = { number: String(startMeasureNo + measures.length), elements: [] };
+      if (mea.attrs?.key === carry.key) delete carry.key;
+      mea = fresh(startMeasureNo + measures.length);
     } else {
       measures[measures.length - 1]!.trailing = pending;
     }
@@ -690,7 +701,7 @@ export function puToScoreDoc(pu: PuDoc): ScoreDoc {
           if (!pv) {
             const part: Part = { id: `P${line.voice}`, measures: [] };
             if (line.caption !== undefined) part.name = line.caption;
-            pv = { part, carry: { last: null }, voltas: { open: [] } };
+            pv = { part, carry: { last: null, home: songFifths(song) }, voltas: { open: [] } };
             byVoice.set(line.voice, pv);
           }
           const r = convertLine(line.elements, line.voice, ids, pv.part.measures.length + 1, pv.carry);
@@ -723,6 +734,15 @@ export function puToScoreDoc(pu: PuDoc): ScoreDoc {
       });
     });
     song.parts = [...byVoice.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v.part);
+    // 转调是全曲的：只在某一声部写了 `"k:…"` 的，别的声部同一小节一起转
+    const keyAt = new Map<number, Key>();
+    for (const part of song.parts) part.measures.forEach((m, i) => { if (m.attrs?.key && !keyAt.has(i)) keyAt.set(i, m.attrs.key); });
+    for (const part of song.parts) {
+      for (const [i, k] of keyAt) {
+        const m = part.measures[i];
+        if (m && !m.attrs?.key) m.attrs = { ...m.attrs, key: { ...k } };
+      }
+    }
     // 文本谱每行行尾都换行：123 写出时最后一行也带 `$`
     for (const part of song.parts) part.endBreak = "system";
     for (const part of song.parts) {

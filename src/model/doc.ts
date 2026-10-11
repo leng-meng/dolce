@@ -584,8 +584,6 @@ export interface Barline {
   ornaments?: SourceOrnament[];
   /** 小节线上标注的临时拍号（文本谱 `"p:3/4"`），自下一小节起生效 */
   time?: Time;
-  /** 文本谱 `"k:2"` 曲中转调：相对主调的半音数，从本小节线之后生效 */
-  keyShift?: number;
   /** 小节线上的注记文字 */
   annotation?: string;
   /** 见 `InlineItem` */

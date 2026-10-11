@@ -158,12 +158,9 @@ export function buildMeasures(
     /** 曲中转调：这个音所在小节的调号（fifths）。不给就全曲一个调（`pitch.key`） */
     fifthsOf?: (el: NoteElement) => number | undefined;
   },
-  /** 曲中转调表：小节序号 → 相对主调的半音数。任一声部写的 `"k:…"` 都进表，所有声部在该小节同样生效 */
-  keyShifts?: Map<number, number>,
 ): { measures: MeasureOut[]; jumps: JumpOut[] } {
   const measures: MeasureOut[] = [];
   const jumps: JumpOut[] = [];
-  const homeKey = pitch ? { basePitch: pitch.key.basePitch, fifths: pitch.key.fifths } : null;
   let measure: MeasureOut | null = null;
   let newMeasureNeeded = true;
   let lastChord: ChordOut | null = null;
@@ -185,13 +182,6 @@ export function buildMeasures(
         return last.position.plus(last.duration);
       },
     };
-    const sh = keyShifts?.get(measures.length);
-    if (sh !== undefined && pitch && homeKey) {
-      pitch.key.basePitch = homeKey.basePitch + sh;
-      let f = (((homeKey.fifths + sh * 7) % 12) + 12) % 12;
-      if (f > 6) f -= 12;
-      pitch.key.fifths = f;
-    }
     measure = m;
     measures.push(m);
     return m;
@@ -235,7 +225,6 @@ export function buildMeasures(
           // 只给紧跟着的那个小节记「反复起点」
           pendingRepeatForward = true;
           newMeasureNeeded = true;
-          if (el.temporaryKey !== undefined) keyShifts?.set(measures.length, el.temporaryKey);
           return;
         }
         const mea: MeasureOut = measure ?? open();
@@ -260,7 +249,6 @@ export function buildMeasures(
         }
         newMeasureNeeded = true;
         if (pitch) pitch.key.alter = {}; // 临时记号到小节线为止
-        if (el.temporaryKey !== undefined) keyShifts?.set(measures.length, el.temporaryKey);
         return;
       }
 

@@ -39,7 +39,8 @@ import { getMeta } from "../model/metakeys";
 import type { Dialect } from "./dialect";
 import { projectForJianpu } from "../model/jianpuproject";
 import { decoKey } from "../model/deconames";
-import { quarterTempos } from "../model/jianpu";
+import { keySpelling, quarterTempos } from "../model/jianpu";
+import { songFifths } from "../model/keyshift";
 import { MusicCommon } from "../score/jppitch";
 import type {
   Barline,
@@ -306,7 +307,6 @@ function puBar(b: Barline): BarlineElement {
       parenthesized: b.time.parenthesized ?? false,
     };
   }
-  if (b.keyShift !== undefined) e.temporaryKey = b.keyShift;
   if (b.annotation !== undefined) e.annotation = b.annotation;
   return e;
 }
@@ -643,6 +643,22 @@ export interface DocView {
   syllableOwner: Map<LyricSyllable, ElementId>;
 }
 
+/** 一个声部里真正换了调的小节 → 转调标签。与前一小节同调的 `attrs.key`（MusicXML 每行重申的）不算 */
+function keyChangeLabels(song: Song, part: Part): Map<Measure, string> {
+  const out = new Map<Measure, string>();
+  let cur = part.measures[0]?.attrs?.key?.fifths ?? songFifths(song);
+  part.measures.forEach((m, i) => {
+    const k = m.attrs?.key;
+    if (i === 0 || !k || k.fifths === cur) return;
+    cur = k.fifths;
+    const prev = part.measures[i - 1]!.barlines?.find((b) => b.location === "right" && b.annotation);
+    // 升降号用真符号、写在字母前（同页眉调号）；字样同编辑器那一路的 `KeySig`
+    const name = keySpelling(k).replace(/b/g, "\u266D").replace(/#/g, "\u266F");
+    out.set(m, prev?.annotation ?? `转1=${name}`);
+  });
+  return out;
+}
+
 /** 连音：`Chord.duration.timeMod` → Mark tuplet。
  *  `PuDoc` 靠它画连音括号、`jianpuinput` 靠它置 `tupletBegin`（写出端才能写 `n[ … ]`）。
  *  ⚠ jly 这条路把连音记在 **`duration.timeMod`** 上，而 123/ABC 的解析器是**同时**写 pu 标记的
@@ -761,12 +777,23 @@ export function docView(doc: ScoreDoc): DocView {
     elementOf: new Map(),
     syllableOwner: new Map(),
   };
+  const labelsOf = new Map<Part, Map<Measure, string>>();
+  const labelled = new Set<Measure>();
   for (const sv of view.songs) {
     for (const pg of sv.pages) {
       for (const g of pg.groups) {
         for (const row of g.voices) {
+          let labels = labelsOf.get(row.part);
+          if (!labels) labelsOf.set(row.part, (labels = keyChangeLabels(sv.song, row.part)));
           row.elements.forEach((el, i) => {
-            const id = row.refs[i]!.id;
+            const ref = row.refs[i]!;
+            const label = labels.get(ref.measure);
+            // 转调全曲同步（`frompu.ts` 补齐了各声部），标签只印在一组的第一个声部上
+            if (label !== undefined && row === g.voices[0] && el.kind === "note" && ref.chord && !labelled.has(ref.measure)) {
+              labelled.add(ref.measure);
+              el.keyLabel = label;
+            }
+            const id = ref.id;
             if (id === undefined) return;
             view.idOf.set(el, id);
             if (!view.elementOf.has(id)) view.elementOf.set(id, el);
