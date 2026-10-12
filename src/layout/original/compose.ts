@@ -32,7 +32,7 @@ import type { Dialect } from "../../pu/dialect";
 import { layoutRegion, songFields } from "../../style/template";
 import { emptyMetadata } from "../../pu/ast";
 import type { ElementId, ScoreDoc } from "../../model/doc";
-import { docView, type DocView } from "../../pu/slots";
+import type { DocView } from "../../pu/slots";
 import { originalInputOf } from "./input";
 import {
   layoutDocument,
@@ -1419,11 +1419,6 @@ export interface OriginalDocumentLayout {
   readonly syllableItems: ReadonlyMap<string, { page: number; item: PageItem }>;
   readonly barlineItems: ReadonlyMap<string, { page: number; item: PageItem }>;
   readonly slurItems: ReadonlyMap<string, { page: number; item: PageItem }>;
-}
-
-/** 这份文档在**不加手动字号**时的数字字号（pt）——面板拿它当「跟随版式」的默认值。 */
-export function baseDigitFontSize(doc: ScoreDoc): number {
-  return docMetricsOf(docView(doc)).size.note;
 }
 
 /** 排一份文档并生成全部页面（原 `PuPainter.load`）。 */

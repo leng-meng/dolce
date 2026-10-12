@@ -169,11 +169,6 @@ const RAW_ACTIONS: readonly Omit<VisualAction, "label" | "help">[] = [
 
 export const VISUAL_ACTIONS: readonly VisualAction[] = RAW_ACTIONS.map(act);
 
-/** 按下的键对应哪个动作（没有返回 null）。 */
-export function actionOfKey(ev: KeyboardEvent): VisualAction | null {
-  return keyHit(ev)?.action ?? null;
-}
-
 /** 按下的键对应哪个动作、以及它代表的字符（按物理键认的绑定给 `KeyBinding.key`，不是 Option 打出来的 `£`）。 */
 export function keyHit(ev: KeyboardEvent): { action: VisualAction; key: string } | null {
   const mod = ev.ctrlKey || ev.metaKey;

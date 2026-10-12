@@ -12,12 +12,6 @@ import type { RoleDecl, StyleSheet } from "./sheet";
 import { resolveLength } from "./units";
 
 export { HEADER_ROLES, headerRoleOfCredit, type HeaderRole } from "../model/pagemeta";
-export const HEADER_LABEL: Readonly<Record<HeaderRole, string>> = {
-  title: "标题",
-  subtitle: "副标题",
-  scripture: "经文",
-  credit: "词曲作者",
-};
 
 /** 一项页眉文字的字体：族（CSS font-family）、字号（pt）、粗体。 */
 export interface HeaderFont {

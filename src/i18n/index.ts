@@ -27,9 +27,6 @@ export function tOpt(key: string, params?: Record<string, string | number>): str
   return key in zh ? t(key as MsgKey, params) : undefined;
 }
 
-/** 两种语言各取一份（给不随界面走、但要双语的地方用）。 */
-export function tIn(lang: Lang, key: MsgKey): string { return DICTS[lang][key]; }
-
 export function onLangChange(fn: (lang: Lang) => void): () => void {
   listeners.add(fn);
   return () => listeners.delete(fn);

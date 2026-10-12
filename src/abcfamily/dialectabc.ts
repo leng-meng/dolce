@@ -16,7 +16,7 @@
 
 import type { Accidental } from "../model/doc";
 import { AbcFamilyLexer } from "./lex";
-import type { DurationScan, NoteScan, Token } from "./types";
+import type { DurationScan, NoteScan } from "./types";
 
 /** 前置变音记号（ABC §4.2）。**按从长到短**匹配。 */
 const ACCIDENTALS: ReadonlyArray<readonly [string, Accidental, number]> = [
@@ -175,6 +175,3 @@ export class LexerAbc extends AbcFamilyLexer {
 
 /** 单例——词法器无状态。 */
 export const LEXER_ABC = new LexerAbc();
-
-/** 倚音 token 里的音符（ABC 的 `{ab}`）。 */
-export type GraceNotes = Token[];

@@ -10,7 +10,6 @@
 //     绝不写 123 那个 `$`（jianpu-ly 不认它，写进去就是往谱里塞垃圾 ✗）。
 //   · 增时线是**独立 token** `-`（与 123 同）✓。
 
-import { BARE_CHORD_RE } from "../../../abcfamily/dialect123";
 import { chordTimeline, harmonyToChordToken } from "../../../model/jlychords";
 import { isJlyMusicLine } from "../../../model/fromjly";
 import { t as tr } from "../../../i18n";
@@ -113,10 +112,9 @@ export const DIALECT_JLY: EditDialect = {
   chordEdit,
 };
 
-/** 和弦名：jianpu-ly 的和弦**不在音符旁边**，而在文件头上一条 `chords=` 行上（`c2. g:7 c`，
- *  token 是 LilyPond 和弦语法 + 时值，靠时值排成时间线）。所以不给 `chordText`（那会往曲行里
- *  插一个上游不认的词 ✗），改用 `chordEdit` 按时间线改那一行。 */
-export const JLY_CHORD_UNSUPPORTED = BARE_CHORD_RE;
+// 和弦名：jianpu-ly 的和弦**不在音符旁边**，而在文件头上一条 `chords=` 行上（`c2. g:7 c`，
+// token 是 LilyPond 和弦语法 + 时值，靠时值排成时间线）。所以不给 `chordText`（那会往曲行里
+// 插一个上游不认的词 ✗），改用 `chordEdit` 按时间线改那一行。
 
 /** 谱上点一个音、改它的和弦名：算出这个音在曲首起的时间线里落在哪，去改 `chords=` 那一行。
  *

@@ -78,9 +78,3 @@ export class Font {
     return measureFontMetrics(this.family, this.size, this.weight, this.style);
   }
 }
-
-// Resolve the configured logical font names to families available in the webview.
-// (Original used 苹方-简 / Microsoft YaHei / Times New Roman via system fonts.)
-export function resolveFamily(name: string): string {
-  return name;
-}

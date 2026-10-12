@@ -11,9 +11,3 @@ export type JianpuLayoutMode = "expanded" | "original";
 
 /** `.jpwabc` 当前的排版输出档名（`pptx` = 展开、`normal` = 原样；名字沿用存量设置）。 */
 export type JpProfileName = "normal" | "pptx";
-
-/** 界面上的名字。 */
-export const LAYOUT_MODE_LABEL: Readonly<Record<JianpuLayoutMode, string>> = {
-  expanded: "展开",
-  original: "原样",
-};

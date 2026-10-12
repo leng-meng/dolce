@@ -1478,5 +1478,3 @@ export function pasteClip(doc: ScoreDoc, anchor: InsertAnchor, items: readonly C
   }
   return added.length ? { select: added } : { error: tr("me.clipNoNotes") };
 }
-
-export { STEPS as PITCH_STEPS };

@@ -111,14 +111,6 @@ export async function asRasterPdf(bytes: Uint8Array, mime?: string): Promise<Uin
   return jpegToPdf(isJpeg(bytes) ? bytes : await toJpeg(bytes, mime));
 }
 
-/**
- * 这份输入该不该走位图五线谱：前三页（封面、目录页没有谱表）里有一页认得出五线谱表就算。
- * 判据见 `detect.ts`；矢量 PDF（没有整页位图）不在这里认，由矢量那条路（`staffomr`）先判。
- */
-export async function looksLikeStaffBytes(pdfBytes: Uint8Array): Promise<boolean> {
-  return (await probeRasterStaff(pdfBytes)).isStaff;
-}
-
 /** 判路的结果，外加判的时候栅格化过的页（页号 → 结果）：交给 `recognizeRasterPdfs` 的 `firstPages`，那几页不再栅格化一遍。 */
 export interface RasterProbe {
   isStaff: boolean;

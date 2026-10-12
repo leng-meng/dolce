@@ -577,27 +577,3 @@ export class RepeatSpecItem {
     return `${head}-${tail}V${this.verse}${this.page ? "P" : ""}`;
   }
 }
-
-export class RepeatSpec {
-  items: RepeatSpecItem[] = [];
-  constructor(s: string) {
-    for (const it of s.split("\n")) {
-      const arr = it.split("V");
-      // 段号后可带 `P`：这一段唱完换页（乐句排版把主歌/副歌分页用）。
-      const page = /p\s*$/i.test(arr[1] ?? "");
-      const v = parseInt(arr[1]!, 10);
-      const rng = arr[0]!.split("-");
-      // 首端可写作 `小节.音符序号`（1 基），表示这一遍从该小节的第 n 个音符起接入。
-      // 逗号在 .Repeat 里是条目分隔符（见 RepeatSection.parse），故用点号；
-      // 旧解析器 parseInt("11.2") 仍得 11，退化成整小节接入而不是报错。
-      const fst = rng[0]!.split(".");
-      const first = parseInt(fst[0]!, 10) - 1;
-      const skip = fst.length > 1 ? Math.max(0, parseInt(fst[1]!, 10) - 1) : 0;
-      // 末端同样可写 `小节.音符个数`：这一段只唱到该小节的第 n 个音符为止。
-      const lst = rng[rng.length - 1]!.split(".");
-      const last = parseInt(lst[0]!, 10) - 1;
-      const limit = lst.length > 1 ? Math.max(0, parseInt(lst[1]!, 10)) : -1;
-      this.items.push(new RepeatSpecItem(first, last, v, skip, page, limit));
-    }
-  }
-}

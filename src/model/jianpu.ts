@@ -30,10 +30,8 @@ import type {
   Clef,
   Degree,
   Element,
-  ElementId,
   Harmony,
   Key,
-  Mark,
   Measure,
   Note,
   Part,
@@ -377,53 +375,6 @@ export function topNote(ch: Chord): Note | undefined {
 
 // ───────────────────────── 对端 ─────────────────────────
 
-/** 跨元素记号（弧、延音线记号、连音、渐强…）按**元素 id** 建的起止索引。 */
-export function marksByElement(song: Song): { starts: Map<ElementId, Mark[]>; ends: Map<ElementId, Mark[]> } {
-  const starts = new Map<ElementId, Mark[]>();
-  const ends = new Map<ElementId, Mark[]>();
-  const add = (map: Map<ElementId, Mark[]>, id: ElementId, mk: Mark): void => {
-    const list = map.get(id);
-    if (list) list.push(mk);
-    else map.set(id, [mk]);
-  };
-  for (const mk of song.marks ?? []) {
-    add(starts, mk.start, mk);
-    add(ends, mk.end, mk);
-  }
-  return { starts, ends };
-}
-
-/** 延音线（`Note.tie.start`）的对端：同谱表同声部**往后第一个**带 `tie.stop`、音高相同的音。
- *  跨小节、跨行都靠它（`Note.tie` 只是起止标志，不带对端）。 */
-export function tieTargets(part: Part): Map<Note, { chord: Chord; note: Note }> {
-  const out = new Map<Note, { chord: Chord; note: Note }>();
-  const open = new Map<string, { note: Note; key: string }[]>();
-  const pitchKey = (n: Note): string =>
-    n.pitch ? `${n.pitch.step}${n.pitch.alter}/${n.pitch.octave}` : n.degree ? `d${n.degree.number}/${n.degree.octaveShift}` : "";
-  for (const m of part.measures) {
-    for (const el of m.elements) {
-      if (el.kind !== "chord") continue;
-      const lane = `${el.staff}:${el.voice}`;
-      for (const n of el.notes) {
-        if (n.tie?.stop) {
-          const list = open.get(lane);
-          const k = pitchKey(n);
-          const i = list?.findIndex((o) => o.key === k) ?? -1;
-          if (list && i >= 0) {
-            out.set(list[i]!.note, { chord: el, note: n });
-            list.splice(i, 1);
-          }
-        }
-        if (n.tie?.start) {
-          const list = open.get(lane) ?? [];
-          list.push({ note: n, key: pitchKey(n) });
-          open.set(lane, list);
-        }
-      }
-    }
-  }
-  return out;
-}
 
 /** 速度按**四分等值**：`tempoBeat` 为 3/8（附点四分）时 `♩.=60` → 90。试听与写不下拍单位的
  *  格式（`.jpwabc`、文本谱只认 ♩）都取这一份，速度快慢才不变；文字术语原样。 */

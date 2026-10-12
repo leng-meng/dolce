@@ -86,8 +86,3 @@ const decoField = StateField.define<DecorationSet>({
 
 /** 装进代码区的扩展。 */
 export const visualCursorExtension: Extension = [stateField, decoField];
-
-/** 谱面此刻有没有焦点（读代码区里记着的那份）。 */
-export function scoreHasFocus(state: EditorState): boolean {
-  return state.field(stateField, false)?.scoreFocus ?? false;
-}

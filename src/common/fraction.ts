@@ -97,7 +97,3 @@ export class Fraction {
     return `${this.numerator}/${this.denominator}`;
   }
 }
-
-export function toFraction(s: string): Fraction {
-  return Fraction.fromString(s);
-}

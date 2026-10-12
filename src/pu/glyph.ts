@@ -105,14 +105,3 @@ export const BRACKET = {
 
 /** 伴奏括弧：写在音符后的 `&zkh` / `&ykh`。 */
 export const ACCOMP_BRACKET = new Set(["zkh", "ykh"]);
-
-/** 该记号是不是「画在谱上的东西」——不是的话（如 sbf）只影响排版。 */
-export function isDrawable(name: string): boolean {
-  return (
-    name in ORNAMENTS ||
-    name in DYNAMICS ||
-    name in TERMS ||
-    name in BARLINE_MARKS ||
-    ACCOMP_BRACKET.has(name)
-  );
-}
