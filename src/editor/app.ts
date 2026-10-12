@@ -4,10 +4,7 @@
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
 import { Compartment, EditorState } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
-import { parsePu, sniffDialect, type Dialect } from "../pu";
-import { parse123, parseAbc, parseJcx } from "../j123/parse";
-import { parseJly } from "../model/fromjly";
-import { eachChord } from "../model/helpers";
+import { sniffDialect, type Dialect } from "../pu";
 import type { ElementId, ScoreDoc } from "../model/doc";
 import { applyBreaks } from "../model/breaks";
 import type { JScore } from "../layout/input";
@@ -37,7 +34,7 @@ import { convertScoreDoc, convertSourceText, detectHanDirection } from "../model
 import { isTauriRuntime } from "./fileio";
 import { is123File, isJcxFile, isJlyFile, isProjectFile, isPuFile } from "../common/filetypes";
 import type { Draft } from "./autosave";
-import { formatOf, musicXmlFormat, type DocFormatId, type FormatAdapter, type FormatHost } from "./formats";
+import { formatOf, musicXmlFormat, type DocFormatId, type FormatAdapter, type FormatHost, type ScoreDocAdapter } from "./formats";
 import { SyncIndex, type SyncEntry } from "./sync";
 import { VisualEditController, type VisualHost } from "./visual/controller";
 import { visualCursorExtension } from "./visual/cursor";
@@ -50,7 +47,7 @@ import { dropEmbeddedLayout } from "../model/xmlsurface";
 import { CONVERT_TARGETS, isConvertTarget, targetSpec, type ConvertTarget } from "../model/convert";
 import { showChoiceDialog } from "./dialogs";
 import { t } from "../i18n";
-import { diagText, dialectLabel, targetLabel, type DiagLike } from "../i18n/labels";
+import { diagText, targetLabel, type DiagLike } from "../i18n/labels";
 import { buildMusicXml, sourceMusicXmlBare } from "./export";
 import { scoreDocToMusicXml } from "../model/toxml";
 import { jpwToScoreDoc } from "../model/fromjpw";
@@ -796,7 +793,8 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
       void this._renderMixedPages();
       return true;
     }
-    return this.adapter.reload(this, text);
+    const a = this.adapter;
+    return a.reload ? a.reload(this, text) : this._reloadScoreDoc(a as ScoreDocAdapter, text);
   }
 
   /** 混排档下 `.jpwabc` 不走 `reloadJpwabc`，`_jpwDoc` 在这里跟上源文。 */
@@ -901,142 +899,38 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
 
 
-  /** 文本谱（番茄 / 诗歌本）：解析 → 排版 → 渲染。展开档先投影成简谱引擎输入、与 `.jpwabc` 同一个排版器；
-   *  原样档走原样文档布局（印刷原版的观感）。 */
-  reloadPu(text: string): boolean {
-    let sdoc: ScoreDoc;
-    try {
-      sdoc = parsePu(text);
-    } catch (e) {
-      console.error("文本谱解析失败", e);
-      this.setStatus(t("status.parseFailed", { what: t("fmt.textScore"), error: (e instanceof Error ? e.message : String(e)) }));
-      return false;
-    }
-    const fatal = sdoc.diagnostics.find((d) => d.severity === "error");
-    if (fatal) {
-      this.setStatus(t("status.puFatal", { error: diagText(fatal) }));
-      return false;
-    }
-    this._scoreDoc = { text, doc: sdoc };
-    this._puScoreCache = null; // 文本变了，引擎输入要重建
-    this._syncPhraseBase(text);
-    const dialect = (sdoc.puDialect ?? "tomato") as Dialect;
-    this._puDialect = dialect;
-    this._syncFormatLabel();
-    if (!this._layoutScoreDoc(sdoc, t("fmt.textScore"))) return false;
-    // 解析告警不拦排版，但要让用户看得见（谱面往往仍然是对的）
-    this._reportDiagnostics(dialectLabel(dialect), sdoc.diagnostics);
-    return true;
-  }
-
-  /** FormatHost：`.123`（简谱主格式）解析 → 排版 → 渲染。
-   *  原生解析直出 `ScoreDoc`，与文本谱共用同一套排版（原样档看声部数选布局 / 展开档投影成简谱引擎输入）。 */
-  reload123(text: string): boolean {
+  /** `scoredoc` 那一路（文本谱、123、ABC、jcx、jianpu-ly、MusicXML）的重排：解析 → 闸门 → 排版 → 报诊断。
+   *  各格式的差异在适配器的 `reloadSpec`（`formats.ts`）。原样档看 `caps.originalLayout` 选布局，
+   *  展开档投影成简谱引擎输入、与 `.jpwabc` 同一个排版器。 */
+  private _reloadScoreDoc(adapter: ScoreDocAdapter, text: string): boolean {
+    const spec = adapter.reloadSpec;
+    const what = spec.what();
+    spec.before?.(this, text);
     let doc: ScoreDoc;
     try {
-      doc = parse123(text);
+      doc = adapter.toScoreDoc(text);
     } catch (e) {
-      console.error("123 解析失败", e);
-      this.setStatus(t("status.parseFailed", { what: "123", error: (e instanceof Error ? e.message : String(e)) }));
+      console.error(`${what} 解析失败`, e);
+      const error = e instanceof Error ? e.message : String(e);
+      this.setStatus(spec.parseFailed?.(error) ?? t("status.parseFailed", { what, error }));
       return false;
     }
-    const fatal = doc.diagnostics.find((d) => d.severity === "error");
-    if (fatal) {
-      this.setStatus(t("status.j123Fatal", { line: fatal.source.line + 1, error: diagText(fatal) }));
+    const diagLabel = spec.diagLabel?.(doc) ?? what;
+    const rejected = spec.reject(doc);
+    if (rejected !== null) {
+      if (spec.reportOnReject) this._reportDiagnostics(diagLabel, doc.diagnostics);
+      this.setStatus(rejected);
       return false;
     }
     this._scoreDoc = { text, doc };
     this._puScoreCache = null; // 文本变了，引擎输入要重建
     this._syncPhraseBase(text);
-    this._syncFormatLabel();
-    if (!this._layoutScoreDoc(doc, "123")) return false;
-    this._reportDiagnostics("123", doc.diagnostics);
-    return true;
-  }
-
-  /** FormatHost：`.abc` 解析 → 排版 → 渲染。
-   *
-   *  **原生解析直出 `ScoreDoc`**（`parseAbc`），不经 MusicXML 转一手——
-   *  那条路把源字符偏移丢光了，双向定位最多到小节级、往返也只能「原文或全量重写」二选一。
-   *  读不出音符就报错，不回落。 */
-  reloadAbc(text: string): boolean {
-    let doc: ScoreDoc;
-    try {
-      doc = parseAbc(text);
-    } catch (e) {
-      console.error("ABC 解析失败", e);
-      this.setStatus(t("status.parseFailed", { what: "ABC", error: (e instanceof Error ? e.message : String(e)) }));
-      return false;
-    }
-    const notes = doc.songs.reduce((n, song) => n + [...eachChord(song)].length, 0);
-    if (notes === 0) {
-      this._reportDiagnostics("ABC", doc.diagnostics);
-      this.setStatus(t("status.abcNoNotes"));
-      return false;
-    }
-    this._scoreDoc = { text, doc };
-    this._puScoreCache = null;
-    this._syncPhraseBase(text);
-    this._syncFormatLabel();
-    if (!this._layoutScoreDoc(doc, "ABC")) return false;
-    this._reportDiagnostics("ABC", doc.diagnostics);
-    return true;
-  }
-
-  /** FormatHost：Muse 曲谱软件的 `.jcx` 解析 → 排版 → 渲染。ABC 家族的第三个方言（`parseJcx`），
-   *  与 `reloadAbc` 同一条路：原生解析直出 `ScoreDoc`，读不出音符就报错，不回落。 */
-  reloadJcx(text: string): boolean {
-    const what = t("fmt.jcx.label");
-    let doc: ScoreDoc;
-    try {
-      doc = parseJcx(text);
-    } catch (e) {
-      console.error("jcx 解析失败", e);
-      this.setStatus(t("status.parseFailed", { what, error: (e instanceof Error ? e.message : String(e)) }));
-      return false;
-    }
-    const notes = doc.songs.reduce((n, song) => n + [...eachChord(song)].length, 0);
-    if (notes === 0) {
-      this._reportDiagnostics(what, doc.diagnostics);
-      this.setStatus(t("status.jcxNoNotes"));
-      return false;
-    }
-    this._scoreDoc = { text, doc };
-    this._puScoreCache = null;
-    this._syncPhraseBase(text);
+    // 只有文本谱的解析带方言（代码区标签要它），别的格式归 null
+    this._puDialect = (doc.puDialect ?? (adapter.id === "pu" ? "tomato" : null)) as Dialect | null;
     this._syncFormatLabel();
     if (!this._layoutScoreDoc(doc, what)) return false;
-    this._reportDiagnostics(what, doc.diagnostics);
-    return true;
-  }
-
-  /** FormatHost：jianpu-ly 文本（`.jly`）解析 → 排版 → 渲染。
-   *
-   *  **原生解析直出 `ScoreDoc`**（`model/fromjly.ts::parseJly`），与本项目的 123 / ABC 同一条路：
-   *  每个 token 都带 `SourceSpan`（双向定位、诊断落点、往返都靠它）。
-   *  本版不收的写法（`LP:` 块、倚音和弦、布局开关…）由 `parseJly` 记进 `doc.diagnostics`，
-   *  这里原样报到状态栏与诊断列表——**不静默丢**。 */
-  reloadJly(text: string): boolean {
-    let doc: ScoreDoc;
-    try {
-      doc = parseJly(text).doc;
-    } catch (e) {
-      console.error("jianpu-ly 解析失败", e);
-      this.setStatus(t("status.parseFailed", { what: "jianpu-ly", error: (e instanceof Error ? e.message : String(e)) }));
-      return false;
-    }
-    const notes = doc.songs.reduce((n, song) => n + [...eachChord(song)].length, 0);
-    if (notes === 0) {
-      this._reportDiagnostics("jianpu-ly", doc.diagnostics);
-      this.setStatus(t("status.abcNoNotes"));
-      return false;
-    }
-    this._scoreDoc = { text, doc };
-    this._puScoreCache = null;
-    this._syncPhraseBase(text);
-    this._syncFormatLabel();
-    if (!this._layoutScoreDoc(doc, "jianpu-ly")) return false;
-    this._reportDiagnostics("jianpu-ly", doc.diagnostics);
+    // 解析告警不拦排版，但要让用户看得见（谱面往往仍然是对的）
+    this._reportDiagnostics(diagLabel, doc.diagnostics);
     return true;
   }
 
@@ -2124,7 +2018,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   }
 
   private _importBytes(bytes: Uint8Array, name: string): void {
-    // ABC 记谱：**原文就是源格式**，原生解析直接进编辑器（`reloadAbc`），不再转 MusicXML。
+    // ABC 记谱：**原文就是源格式**，原生解析直接进编辑器（`formats.ts` 的 ABC 适配器），不再转 MusicXML。
     if (/\.abc$/i.test(name)) {
       this.mixed._dropMixedDoc(); // 原来在五线谱/混排就留在那档：setText → reload 会重新派生
       this._setDocFormat("abc");
@@ -2224,30 +2118,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return true;
   }
 
-  /** FormatHost：`.musicxml` 读成 `ScoreDoc` → 简谱档排版；五线谱/混排档另读一份（`mixedDoc`）。 */
-  reloadMusicXml(text: string): boolean {
-    // 打开/落地时已按这份原文读过混排那份，原文没变就不再读
+  /** FormatHost：五线谱/混排那份跟上 MusicXML 原文。打开/落地时已按这份原文读过，原文没变就不再读。 */
+  syncMixedXml(text: string): void {
     if (!this.mixed.mixedDoc || this.mixed._mixedXmlText !== text) this.mixed._setMixedXml(text);
-    let doc: ScoreDoc;
-    try {
-      doc = musicXmlFormat.toScoreDoc(text);
-    } catch (e) {
-      console.error("MusicXML 读取失败", e);
-      this.setStatus(t("status.xmlReadFailed", { error: (e instanceof Error ? e.message : String(e)) }));
-      return false;
-    }
-    const notes = doc.songs.reduce((n, song) => n + [...eachChord(song)].length, 0);
-    if (notes === 0) {
-      this.setStatus(t("status.xmlNoNotes"));
-      return false;
-    }
-    this._scoreDoc = { text, doc };
-    this._puScoreCache = null;
-    this._syncPhraseBase(text);
-    this._syncFormatLabel();
-    if (!this._layoutScoreDoc(doc, "MusicXML")) return false;
-    this._reportDiagnostics("MusicXML", doc.diagnostics);
-    return true;
   }
 
   /**

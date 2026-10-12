@@ -11,9 +11,9 @@
 | `src/model/tojly.ts` | **写出**：`planJly`（歌词位置 + 圆滑线分组）、`ornamentsBefore` / `ornamentsAfter` / `chordBody` / `sustainOf`、`lyricLines`、`emitJlyOfScore`、`emitJly(doc)` |
 | `src/model/jlychords.ts` | **和弦符号**两个方向的转换：LilyPond 和弦语法 ↔ 谱上印的文字（`c2.:m7/bes` ↔ `Cm7/Bb`），以及整音符分数 ↔ LilyPond 时值串 |
 | `src/editor/visual/dialects/jly.ts` | **可视化编辑方言**（`DIALECT_JLY`）：顺序无关的 `scan`、规范 `printNote`、`deco`/`annotationText`/`dynamicText`、`tuplet`、`slurNesting`、`lineBreak`；`chordEdit` —— 和弦在 `chords=` 行上，按**时间线**改那一行（点一个音算出它落在第几拍，插进去，并把相邻格的时值切成两段） |
-| `src/editor/formats.ts` | 适配器 `JLY`：`defaultExt ".jly"`、`caps`、`reload → host.reloadJly`、`toScoreDoc → parseJly`、`relayoutText → rewrapJlyText`、`editDialect` |
+| `src/editor/formats.ts` | 适配器 `JLY`：`defaultExt ".jly"`、`caps`、`toScoreDoc → parseJly`、`reloadSpec`（读不出音符就拦、先报诊断）、`relayoutText → rewrapJlyText`、`editDialect` |
 | `src/common/filetypes.ts` | `.jly` 进 `DOC_EXT` 白名单（`JLY_EXT`、`isJlyFile`） |
-| `src/editor/app.ts` | `reloadJly`（解析 → 排版 → 报诊断）、`_importBytes` 的 `.jly` 分支 |
+| `src/editor/app.ts` | `_reloadScoreDoc`（解析 → 排版 → 报诊断，各格式共用）、`_importBytes` 的 `.jly` 分支 |
 | `src/editor/formatswitch.ts` | `OriginFormat` 里加 `"jly"`、`originName` 取中文名 |
 | `src/model/doc.ts` | `ScoreDoc.sourceFormat` 允许 `"jly"` |
 

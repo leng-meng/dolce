@@ -4,10 +4,10 @@
 // 高亮、存盘编码、默认扩展名、标题取法、档位旋钮、格式标签、能不能简繁转换……
 // 加第三、第四种格式时那二十处每处都要再分一次叉，漏一处就是一个只在某格式下复现的 bug。
 //
-// 这里只收**真正成表的那些**：数据与纯函数。真正因格式而异的算法
-// （文本谱的 `reloadPu` / 乐句重排 / 播放高亮走 AST 索引）仍留在 `app.ts`，
-// 适配器只负责把它们分派出去——照 `OmrHost` / `PlaybackHost` 的既有做法，
-// 用一个**列全了的**宿主接口向 App 要能力，而不是把 App 的状态搬进来。
+// 这里只收**真正成表的那些**：数据与纯函数。`scoredoc` 那一路的重排是同一个模板
+// （`App._reloadScoreDoc`：解析 → 闸门 → 排版 → 报诊断），各格式只在 `reloadSpec` 里给差异；
+// 流水线真不一样的（`.jpwabc` 的 `reloadJpwabc`）仍留在 `app.ts`，由适配器分派——照
+// `OmrHost` / `PlaybackHost` 的既有做法，用一个**列全了的**宿主接口向 App 要能力，而不是把 App 的状态搬进来。
 
 import type { Extension } from "@codemirror/state";
 import { jpwHighlighter } from "./highlight";
@@ -16,6 +16,10 @@ import { j123Highlighter } from "../j123/highlight";
 import { decodeJpwabc, encodeJpwabc } from "./fileio";
 import { parsePu } from "../pu";
 import { t } from "../i18n";
+import { diagText, dialectLabel } from "../i18n/labels";
+import type { Diagnostic } from "../model/doc";
+import { eachChord } from "../model/helpers";
+import type { Dialect } from "../pu";
 import { relayoutPuText } from "../pu/relayout";
 import type { FitMeasure } from "../pu/phrase";
 import { parse123, parseAbc, parseJcx } from "../j123/parse";
@@ -48,21 +52,37 @@ export interface FormatHost {
   readonly puDialectName: string | null;
   /** 当前谱面排版器认得的标题（`.jpwabc` 那路由引擎输入给）。 */
   readonly painterTitle: string;
-  /** 文本谱重排/重渲染。 */
-  reloadPu(text: string): boolean;
   /** `.jpwabc` 重排/重渲染。 */
   reloadJpwabc(text: string): boolean;
-  /** `.123` 重排/重渲染。 */
-  reload123(text: string): boolean;
-  /** `.abc` 重排/重渲染。 */
-  reloadAbc(text: string): boolean;
-  /** Muse `.jcx` 重排/重渲染（`parseJcx`）。 */
-  reloadJcx(text: string): boolean;
-  /** jianpu-ly 文本重排/重渲染（`.jly`，见 `model/fromjly.ts::parseJly`）。 */
-  reloadJly(text: string): boolean;
-  /** `.musicxml` 重排/重渲染。 */
-  reloadMusicXml(text: string): boolean;
+  /** 五线谱/混排那份模型跟上这份 MusicXML 原文（原文没变就不重读）。 */
+  syncMixedXml(text: string): void;
 }
+
+/** `scoredoc` 那一路重排的格式差异。模板本身（解析 → 闸门 → 排版 → 报诊断）在 `App._reloadScoreDoc`。 */
+export interface ScoreDocReload {
+  /** 状态栏、排版失败提示里这种格式叫什么。 */
+  what(): string;
+  /** 解析抛异常时的状态栏文案；缺省 `status.parseFailed`。 */
+  parseFailed?(error: string): string;
+  /** 解析出来拦不拦排版：返回状态栏文案就拦下（文本保留不动），null 放行。 */
+  reject(doc: ScoreDoc): string | null;
+  /** 拦下时先把诊断报出来（ABC 家族读不出音符，多半是不认的写法，诊断里有）。 */
+  reportOnReject?: boolean;
+  /** 诊断列表的来源标签；缺省 `what()`。 */
+  diagLabel?(doc: ScoreDoc): string;
+  /** 解析之前的准备（MusicXML 先让混排那份跟上原文）。 */
+  before?(host: FormatHost, text: string): void;
+}
+
+/** 闸门：有 error 级诊断就拦，报那一条。 */
+const rejectFatal = (msg: (d: Diagnostic) => string) => (doc: ScoreDoc): string | null => {
+  const fatal = doc.diagnostics.find((d) => d.severity === "error");
+  return fatal ? msg(fatal) : null;
+};
+
+/** 闸门：一个音都没读出来就拦（不回落别的读法）。 */
+const rejectNoNotes = (msg: () => string) => (doc: ScoreDoc): string | null =>
+  doc.songs.some((song) => !eachChord(song).next().done) ? null : msg();
 
 export interface FormatCaps {
   /** 有没有代码区。`.musicxml` 没有：打开只进谱面视图（五线谱编辑那一路），要编辑先转成文本格式（新文档）。 */
@@ -98,21 +118,28 @@ interface FormatAdapterBase {
   /** 用哪个档位旋钮记「展开/原样」：`jp` = `jpProfile`(normal/pptx)、`original` = `originalProfile`(print/slide)。
    *  两种格式各记各的档，换格式可能就换了档。 */
   profileKnob: "jp" | "original";
-  /** 解析 → 排版 → 渲染。失败返回 false（文本保留不动）。 */
-  reload(host: FormatHost, text: string): boolean;
   /** 可视化编辑怎么改这种格式的原文（`editor/visual/dialect.ts`）。**给了就能在谱面上改谱**；
    *  不给的格式在谱面上只能选中、移动，不能改。 */
   editDialect?: EditDialect;
 }
 
-/** `caps.layout` 与 `toScoreDoc` 的搭配：`scoredoc` 那一路必须给，`.jpwabc` 那一路没有。 */
+/** `caps.layout` 与重排办法的搭配：`scoredoc` 那一路给 `toScoreDoc` + `reloadSpec`（走 App 的同一个模板），
+ *  `.jpwabc` 那一路自己给 `reload`。 */
 type LayoutPart =
   | {
     caps: FormatCaps & { layout: "scoredoc" };
     /** 这种格式怎么得到一份 `ScoreDoc`。 */
     toScoreDoc(text: string): ScoreDoc;
+    reloadSpec: ScoreDocReload;
+    reload?: undefined;
   }
-  | { caps: FormatCaps & { layout: "jpwabc" }; toScoreDoc?: undefined };
+  | {
+    caps: FormatCaps & { layout: "jpwabc" };
+    toScoreDoc?: undefined;
+    reloadSpec?: undefined;
+    /** 解析 → 排版 → 渲染。失败返回 false（文本保留不动）。 */
+    reload(host: FormatHost, text: string): boolean;
+  };
 
 /** `caps.phraseRelayout` 与 `relayoutText` 的搭配：声明了能重排就必须给写回的办法。 */
 type RelayoutPart =
@@ -134,7 +161,7 @@ type RelayoutPart =
 export type FormatAdapter = FormatAdapterBase & LayoutPart & RelayoutPart;
 
 /** 有 `toScoreDoc` 的那些适配器（`caps.layout === "scoredoc"`）。 */
-export type ScoreDocAdapter = FormatAdapter & { toScoreDoc(text: string): ScoreDoc };
+export type ScoreDocAdapter = FormatAdapter & { toScoreDoc(text: string): ScoreDoc; reloadSpec: ScoreDocReload };
 
 const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 
@@ -195,8 +222,14 @@ const PU: FormatAdapter = {
   },
   profileKnob: "original",
   caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "document" },
-  reload: (host, text) => host.reloadPu(text),
   toScoreDoc: (text) => parsePu(text),
+  // 原样档走原样文档布局（印刷原版的观感），展开档投影成简谱引擎输入
+  reloadSpec: {
+    what: () => t("fmt.textScore"),
+    reject: rejectFatal((d) => t("status.puFatal", { error: diagText(d) })),
+    // 解析告警不拦排版，按方言报（谱面往往仍然是对的）
+    diagLabel: (doc) => dialectLabel((doc.puDialect ?? "tomato") as Dialect),
+  },
   relayoutText: (text, measure) => relayoutPuText(text, parsePu(text), { measure }),
   editDialect: DIALECT_PU,
 };
@@ -221,8 +254,11 @@ const J123: FormatAdapter = {
   },
   profileKnob: "original",
   caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "jianpu" },
-  reload: (host, text) => host.reload123(text),
   toScoreDoc: parse123,
+  reloadSpec: {
+    what: () => "123",
+    reject: rejectFatal((d) => t("status.j123Fatal", { line: d.source.line + 1, error: diagText(d) })),
+  },
   relayoutText: (text, measure) => emitFrom(text, measure, parse123, emit123),
   editDialect: DIALECT_123,
 };
@@ -249,8 +285,8 @@ const ABC: FormatAdapter = {
   },
   profileKnob: "original",
   caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "jianpu" },
-  reload: (host, text) => host.reloadAbc(text),
   toScoreDoc: parseAbc,
+  reloadSpec: { what: () => "ABC", reject: rejectNoNotes(() => t("status.abcNoNotes")), reportOnReject: true },
   relayoutText: (text, measure) => emitFrom(text, measure, parseAbc, emitAbc),
   editDialect: DIALECT_ABC,
 };
@@ -280,8 +316,8 @@ const JCX: FormatAdapter = {
   },
   profileKnob: "original",
   caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "jianpu" },
-  reload: (host, text) => host.reloadJcx(text),
   toScoreDoc: parseJcx,
+  reloadSpec: { what: () => t("fmt.jcx.label"), reject: rejectNoNotes(() => t("status.jcxNoNotes")), reportOnReject: true },
   relayoutText: (text, measure) => emitFrom(text, measure, parseJcx, emitJcx),
   editDialect: DIALECT_JCX,
 };
@@ -315,12 +351,13 @@ const JLY: FormatAdapter = {
   },
   profileKnob: "original",
   caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "jianpu" },
-  reload: (host, text) => host.reloadJly(text),
   // 「按乐句重排」：**只把曲行按每 4 小节重新断行**，词行/页头/注释一个字不动（上游不看行，
   // 但 dolce 自己按文件的行排版；一行到底就挤成一团）。尺子还没接（`measure` 先不用），
   // 用的是写出端同一套"每 4 小节一行"的出厂值。
   relayoutText: (text) => rewrapJlyText(text),
   toScoreDoc: (text) => parseJly(text).doc,
+  // 本版不收的写法（`LP:` 块、倚音和弦、布局开关…）`parseJly` 记进诊断，原样报出——不静默丢
+  reloadSpec: { what: () => "jianpu-ly", reject: rejectNoNotes(() => t("status.abcNoNotes")), reportOnReject: true },
   editDialect: DIALECT_JLY,
 };
 
@@ -341,12 +378,18 @@ const MUSICXML: ScoreDocAdapter = {
   },
   profileKnob: "original",
   caps: { textEditor: false, layout: "scoredoc", phraseRelayout: false, originalLayout: "document" },
-  reload: (host, text) => host.reloadMusicXml(text),
   // MusicXML 只给绝对音高，简谱排版要度数
   toScoreDoc: (text) => {
     const doc = loadScoreDoc(text);
     for (const song of doc.songs) fillDegreesFromPitch(song);
     return doc;
+  },
+  // 简谱档读成 `ScoreDoc` 排；五线谱/混排档另读一份（`mixedDoc`）
+  reloadSpec: {
+    what: () => "MusicXML",
+    parseFailed: (error) => t("status.xmlReadFailed", { error }),
+    reject: rejectNoNotes(() => t("status.xmlNoNotes")),
+    before: (host, text) => host.syncMixedXml(text),
   },
 };
 
