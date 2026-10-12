@@ -40,15 +40,11 @@ export class PageItem {
 
   changeColor(clr: number): void {
     for (const it of this.children) it.changeColor(clr);
-    if (this instanceof TextFrame) {
-      this.color = clr;
-    } else if (this instanceof GraphicLine) {
-      this.strokeColor = clr;
-    } else if (this instanceof GraphicPath) {
-      if (this.stroke) this.strokeColor = clr;
-      if (this.fill) this.fillColor = clr;
-    }
+    this.applyColor(clr);
   }
+
+  /** 给本 item 自己上色（不含子项）；有颜色的子类各自重写。 */
+  protected applyColor(_clr: number): void {}
 
   pos(root: PageItem | null): Point {
     let loc = new Point(this.x, this.y);
@@ -120,6 +116,11 @@ export class GraphicPath extends PageItem {
   fillColor = 0;
   stroke = false;
   fill = false;
+
+  protected override applyColor(clr: number): void {
+    if (this.stroke) this.strokeColor = clr;
+    if (this.fill) this.fillColor = clr;
+  }
 
   get d(): string {
     let s = "";
@@ -244,6 +245,10 @@ export class TextFrame extends PageItem {
    *  绝不在渲染端再叠 font-feature-settings（会挤两遍）。见 common/measure.ts。 */
   charXs: number[] | null = null;
 
+  protected override applyColor(clr: number): void {
+    this.color = clr;
+  }
+
   measureText(beg = 0, len = -1): number {
     const str = len < 0 ? this.text.substring(beg) : this.text.substring(beg, beg + len);
     return this.font.measureText(str);
@@ -269,6 +274,10 @@ export class GraphicLine extends PageItem {
   p1 = new Point();
   strokeWidth = 1;
   strokeColor = 0;
+
+  protected override applyColor(clr: number): void {
+    this.strokeColor = clr;
+  }
 
   override update(): void {
     this.y += this.p0.y;
