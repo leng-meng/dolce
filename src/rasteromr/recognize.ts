@@ -36,7 +36,7 @@ import { findStaffLabels, labelKey, normalizeLabel, type LabelStrip } from "./st
 import { findHarmonyStrips, harmonyKey, harmonyLine, readHarmonyStrip, type HarmonyStrip, type HarmonyToken } from "./harmony";
 import { findFusedWedges, findRasterWedges, type RasterWedge } from "./wedge";
 import { groupDynamics, type RasterDynamic } from "./dynamics";
-import { extendArcEnds, findFusedSlurs, findRasterDashedSlurs, findRasterSlurs, findStubSlurs } from "./slur";
+import { extendArcEnds, findFusedSlurs, findRasterDashedSlurs, findRasterSlurs, findStubSlurs, judgeArcUnion } from "./slur";
 import { ContourLedger } from "./ledger";
 import { attachHarmonies, attachLyrics, buildLyricLines, type LyricLine } from "../staffomr/textanalyze";
 import { attachSlurs, markSlurNotes, reconnectSlurs, type SlurArc } from "../staffomr/slur";
@@ -314,6 +314,17 @@ const LYRIC_ARC_REACH = 1.5;
 const TEXT_ARC_PAD = 0.5;
 /** 免判的弧离谱表（上下线）不过这么多格。 */
 const TEXT_ARC_STAFF = 2;
+/** 按游程去线图上拼弧：两截之间的空隙上限、每截的高度上限（格）。弧顶贴线那段实测 0.3~1.1 格。 */
+const RUN_BRIDGE = 1.2;
+const RUN_PIECE_H = 1;
+/** 按游程去线图上的块，逐列平均墨厚的上限（格）放宽到这么多：弧顶压线那段连着线一起留下，块比去线图上的厚（破碎 p2 m4 两个八分下方那条）。 */
+const RUN_THIN_MEAN = 0.3;
+/** 按游程补出来的短弧（不到 `RUN_FLAT_W` 格宽）高宽比上限：上沿并进谱线的空心头剩下下半个碗（1.3 格宽、高宽比 0.8，望十架 p1 m10），
+ *  真的短弧在 0.5 以下；宽的不管——盒子常被连着的残线撑高（主我敬拜你 m11 那条 2.8×1.8 格） */
+const RUN_FLAT = 0.6;
+const RUN_FLAT_W = 2;
+/** 松叶算「在上一行歌词下面」要低过字的下沿这么多格（`notations.ts::ownerStaff` 的歌词下沿按它往下让）。 */
+const LYRIC_BELOW = 0.5;
 /** 行首半截弧的窗口：第一个音左边几格以内；上下离谱表几格以内。 */
 const STUB_LEAD = 3;
 const STUB_REACH = 4;
@@ -4053,6 +4064,8 @@ export async function recognizeRasterPage(
   // 字格**不论有没有 OCR 缓存都要切**：切出来的字格是「这块墨是歌词」这一判断本身，
   // 与认不认得出那个字是两回事。账本按字格记一笔，无主表里才不会把整页歌词
   // 当成「从没看见的墨」（缓存没命中时曾经就是这样，覆盖率一下子低二十个点）。
+  /** 各行谱下方歌词的下沿：松叶隔着上一行的歌词、紧贴着下一行谱的，归下一行（`notations.ts::ownerStaff`，与矢量路同一条） */
+  const lyricBottom = new Map<Staff, number>();
   {
     // **认领了却没落成音符的「符头」也还给歌词**：歌词字的笔画（点、口字框）常被收成符头，
     // 归不上谱表又被扔掉，可认领还在，那一格字就从歌词行里缺了
@@ -4098,6 +4111,11 @@ export async function recognizeRasterPage(
       for (let i = notes.length - 1; i >= 0; i--) if (inText(notes[i])) notes.splice(i, 1);
     }
     for (const row of rows) for (const cell of row.cells) ledger.claim(cell, "lyric");
+    for (const row of rows) {
+      const st = pg.staves[row.staffIndex];
+      // 往下让半格：与歌词同一高度、印在末字右边的松叶，中心比字的下沿还低几个像素（爱是从神而来 p5 m63 女声那条），不算在歌词下面
+      if (st) lyricBottom.set(st, Math.max(lyricBottom.get(st) ?? -Infinity, ...row.cells.map((c) => c.y + c.h + unit.space * LYRIC_BELOW)));
+    }
     const objs = [];
     lyricStats.rows = rows.length;
     const stripRow = new Map<LyricStrip, LyricRow>();
@@ -4425,7 +4443,7 @@ export async function recognizeRasterPage(
       if (c) ledger.claim(c.bbox, `wedge:${wg.type}`);
     }
   }
-  attachWedges(pg, notes, wedges);
+  attachWedges(pg, notes, wedges, lyricBottom);
 
   // ── 弧线（圆滑线 / 连音线）────────────────────────────────────────────────
   //
@@ -4448,6 +4466,7 @@ export async function recognizeRasterPage(
   // **在修补图上取候选**（`prims.ts::repairLineCuts`）：贴着线斜穿的弧去线时断成几截，补回压线那几列后整条一块。
   // 修补图上的一块，组成它的去线图碎块全是候选（无主或只被符杠、歌词、谱线认过）才整块判；
   // 连上了别的东西（符头、干）的，退回去线图上一块一块判（同以前）
+  { const D = (globalThis as any).process?.env?.SLDBG?.split(",").map(Number); if (D) for (const c of cmap.contours) { const b = c.bbox; if (b.x + b.w < D[0] || b.x > D[2] || b.y + b.h < D[1] || b.y > D[3]) continue; console.log("DBG", c.id, b, "w", c.w.toFixed(2), "h", c.h.toFixed(2), "cmp", c.compact.toFixed(3), "area", c.area, ledger.claimsOf(c.id).map((k) => k.by).join("|"), "arc?", findRasterSlurs(cmap, unit, [c], 0, repaired).map((a) => [a.lx, a.ly, a.rx, a.ry])); } }
   const candIds = new Set([...ledger.unclaimed(), ...beamOnly].map((c) => c.id));
   const cand = candidateMap(cmap, rlayer, (id) => candIds.has(id));
   const whole = cand.merged;
@@ -4540,22 +4559,62 @@ export async function recognizeRasterPage(
       const cy = b.y + b.h / 2;
       return pg.staves.some((st) => cy > st.box.top - sp * 4 && cy < st.box.bottom + sp * 4);
     });
-    // 弧心下（上）一格内有个点的是延长记号（没认出来的：赞美一神低音谱表下方那个）
+    { const D = (globalThis as any).process?.env?.SLDBG?.split(",").map(Number); if (D) for (const c of runMap.contours) { const b = c.bbox; if (b.x + b.w < D[0] || b.x > D[2] || b.y + b.h < D[1] || b.y > D[3]) continue; console.log("RUN", c.id, b, "w", c.w.toFixed(2), "h", c.h.toFixed(2), "cmp", c.compact.toFixed(3), "cand", cands.includes(c), "arc?", findRasterSlurs(runMap, unit, [c], 0).map((a) => [a.lx, a.ly, a.rx, a.ry, a.above])); } }
+    // 弧心下（上）一格内有个点的是延长记号（没认出来的：赞美一神低音谱表下方那个）。
+    // 去线图上弧自己剩下的那截（弧顶压线，只剩线上一小块）不算点：它的墨在游程去线图上属于这条弧（宁静 p9 m104 两个八分上方）
     const dotUnder = (sl: SlurArc) => {
       const b = sl.obj.box;
       const w = b.right - b.left;
+      const own = new Set(runMap.contours.filter((c) => c.bbox.x >= b.left && c.bbox.y >= b.top && c.bbox.x + c.bbox.w <= b.right + 1 && c.bbox.y + c.bbox.h <= b.bottom + 1).map((c) => c.id));
+      const ofArc = (c: Contour) => {
+        const d = c.bbox;
+        for (let y = d.y; y < d.y + d.h; y++) for (let x = d.x; x < d.x + d.w; x++) if (cmap.labels[y * cmap.w + x] === c.id && own.has(runMap.labels[y * runMap.w + x]!)) return true;
+        return false;
+      };
       return cmap.contours.some((c) => {
         const d = c.bbox;
         if (d.w > sp * 0.6 || d.h > sp * 0.6) return false;
         const cx = d.x + d.w / 2, cy = d.y + d.h / 2;
         if (cx < b.left + w / 3 || cx > b.right - w / 3) return false;
-        return sl.above ? cy > b.top && cy < b.bottom + sp * 1.2 : cy < b.bottom && cy > b.top - sp * 1.2;
+        if (!(sl.above ? cy > b.top && cy < b.bottom + sp * 1.2 : cy < b.bottom && cy > b.top - sp * 1.2)) return false;
+        return !ofArc(c);
       });
     };
-    for (const sl of findRasterSlurs(runMap, unit, cands, pg.objs.length + pg.segs.length + 1000 + slurs.length)) {
-      if (dotUnder(sl)) continue;
+    const flat = (sl: SlurArc) => {
+      const w = sl.obj.box.right - sl.obj.box.left;
+      return w >= sp * RUN_FLAT_W || sl.obj.box.bottom - sl.obj.box.top <= w * RUN_FLAT;
+    };
+    for (const sl of findRasterSlurs(runMap, unit, cands, pg.objs.length + pg.segs.length + 1000 + slurs.length, undefined, RUN_THIN_MEAN)) {
+      if (dotUnder(sl) || !flat(sl)) continue;
       slurs.push(sl);
       runArcs.add(sl);
+    }
+    // 弧顶（弧底）整段贴在谱线上的，按游程也去掉了，断成左右两截、各自不够宽：相向的两头落在同一条线的线带里、隔着不过 `RUN_BRIDGE` 格的，
+    // 拼成一条再判（宁静 p8 m102、p4 m56 两个八分上下那条）
+    const endY = (c: Contour, right: boolean) => {
+      const x = right ? c.bbox.x + c.bbox.w - 1 : c.bbox.x;
+      let sum = 0, n = 0;
+      for (let y = c.bbox.y; y < c.bbox.y + c.bbox.h; y++) if (runMap.labels[y * runMap.w + x] === c.id) (sum += y), n++;
+      return n ? sum / n : NaN;
+    };
+    const used = (c: Contour) => slurs.some((sl) => c.bbox.x < sl.obj.box.right && c.bbox.x + c.bbox.w > sl.obj.box.left && c.bbox.y < sl.obj.box.bottom && c.bbox.y + c.bbox.h > sl.obj.box.top);
+    const pieces = cands.filter((c) => c.h <= RUN_PIECE_H && !used(c)).sort((a, b) => a.bbox.x - b.bbox.x);
+    const lineBand = unit.lineThick + 1;
+    for (const a of pieces) {
+      if (used(a)) continue;
+      const ay = endY(a, true);
+      const line = staffLines.find((l) => Math.abs(l.y - ay) <= lineBand);
+      if (!line) continue;
+      for (const b of pieces) {
+        const gap = b.bbox.x - (a.bbox.x + a.bbox.w);
+        if (b === a || gap < 0 || gap > sp * RUN_BRIDGE || used(b)) continue;
+        if (Math.abs(endY(b, false) - line.y) > lineBand) continue;
+        const sl = judgeArcUnion(runMap, [a, b], unit, pg.objs.length + pg.segs.length + 1000 + slurs.length);
+        if (!sl || dotUnder(sl) || !flat(sl)) continue;
+        slurs.push(sl);
+        runArcs.add(sl);
+        break;
+      }
     }
   }
   mergeArcPieces(slurs, unit.space);
@@ -4602,6 +4661,7 @@ export async function recognizeRasterPage(
       .reduce<StaffNote | undefined>((x, m) => (!x || m.sym.px > x.sym.px ? m : x), undefined);
     if (prev) a.to = prev;
   }
+  { const D = (globalThis as any).process?.env?.SLDBG?.split(",").map(Number); if (D) for (const sl of slurs) if (sl.rx > D[0] && sl.lx < D[2] && Math.max(sl.ly, sl.ry) > D[1] && Math.min(sl.ly, sl.ry) < D[3]) console.log("SL", runArcs.has(sl), sl.lx, sl.ly, sl.rx, sl.ry, sl.above, sl.from?.sym.box, sl.to?.sym.box); }
   // 按游程补出来的弧两端都要挂上音（同一个音不算）：挂不全的多是线上残留的别的墨
   for (let i = slurs.length - 1; i >= 0; i--) if (runArcs.has(slurs[i]) && (!slurs[i].from || !slurs[i].to || slurs[i].from === slurs[i].to)) slurs.splice(i, 1);
   reconnectSlurs(pg, slurs);

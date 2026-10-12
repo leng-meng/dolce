@@ -41,11 +41,11 @@ const SPREAD_MAX = 0.6;
  * @param only 只看这些 contour（传账本里**无主**的那些）。
  * @param nextId 造假 `PObj` 用的起始 id（与页面里其它对象别撞号）。
  */
-export function findRasterSlurs(map: ContourMap, unit: RasterUnit, only: Contour[], nextId: number, mask?: Binary): SlurArc[] {
+export function findRasterSlurs(map: ContourMap, unit: RasterUnit, only: Contour[], nextId: number, mask?: Binary, thinMean = THIN_MEAN): SlurArc[] {
   const out: SlurArc[] = [];
   for (const c of only) {
     if (c.w < MIN_W || c.w > MAX_W || c.h > MAX_H) continue;
-    if (c.compact > MAX_COMPACT && c.area > c.bbox.w * unit.space * THIN_MEAN) continue;
+    if (c.compact > MAX_COMPACT && c.area > c.bbox.w * unit.space * thinMean) continue;
     const arc = judgeArc(map, c, unit, nextId + out.length, mask);
     if (arc) out.push(arc);
   }
@@ -73,6 +73,18 @@ export function findStubSlurs(map: ContourMap, unit: RasterUnit, only: Contour[]
     if (arc) out.push(arc);
   }
   return out;
+}
+
+/**
+ * 几块拼成一条判：弧顶（弧底）贴着谱线走的那段连游程去线也去掉了，弧断成两截、各自不到 `MIN_W`（宁静 p8 m102、p4 m56 两个八分上下那条）。
+ * 拼起来的盒照样过弧线那几道闸，中间空着的列不算。
+ */
+export function judgeArcUnion(map: ContourMap, parts: readonly Contour[], unit: RasterUnit, id: number): SlurArc | null {
+  const ids = new Set(parts.map((c) => c.id));
+  const x0 = Math.min(...parts.map((c) => c.bbox.x)), y0 = Math.min(...parts.map((c) => c.bbox.y));
+  const x1 = Math.max(...parts.map((c) => c.bbox.x + c.bbox.w)), y1 = Math.max(...parts.map((c) => c.bbox.y + c.bbox.h));
+  if (x1 - x0 < unit.space * MIN_W) return null;
+  return judgeArcBox({ x: x0, y: y0, w: x1 - x0, h: y1 - y0 }, (x, y) => ids.has(map.labels[y * map.w + x]!), unit, id);
 }
 
 /** `mask`：只认这张图上也有墨的像素（去线图上的块按修补图判：去线时留下的谱线残段在修补图上清掉了）。 */
