@@ -1,9 +1,9 @@
-// 二值图的标准形态学操作：面积开/闭运算、方形结构元的闭运算（连通块标记在 `omrkit/ccl.ts`）。
+// 二值图的标准形态学操作：面积开/闭运算、方形结构元的闭运算、椭圆结构元的开运算（连通块标记在 `ccl.ts`）。
 //
 // 墨 = 1、白 = 0。面积类操作只看连通块大小，不动形状；闭运算的结构元是 (2r+1)² 的方块，
 // 用积分图做膨胀/腐蚀，与 r 无关地线性时间。
-import type { Binary } from "../omrkit/types";
-import { components } from "../omrkit/ccl";
+import type { Binary } from "./types";
+import { components } from "./ccl";
 
 /** **面积开运算**：抹掉面积小于 `min` 的墨块（8 连通）。 */
 export function areaOpen(bin: Binary, min: number): void {
@@ -74,4 +74,28 @@ export function close(bin: Binary, r: number): void {
   boxMorph(bin, r, false);
 }
 
-
+/**
+ * **开运算**（先腐蚀后膨胀），椭圆结构元，半轴 `rx`×`ry`（像素）：抹掉装不下这个椭圆的笔画——
+ * 比椭圆细的谱线、符干、细弧都去掉，实心符头、符杠这类够粗的块原样留下。返回新图，不改原图。
+ * 椭圆按行拆成横段，每段「全是墨 / 有墨」用积分图一次查出。
+ */
+export function ellipseOpen(bin: Binary, rx: number, ry: number): Binary {
+  const { w, h, data } = bin;
+  const rows: [number, number][] = [];
+  for (let dy = -ry; dy <= ry; dy++) rows.push([dy, Math.floor(rx * Math.sqrt(Math.max(0, 1 - (dy * dy) / ((ry + 0.5) * (ry + 0.5)))))]);
+  /** 第 y 行 [x0, x1]（闭区间，裁到图内）的墨点数。 */
+  const run = (ii: Integral, y: number, x0: number, x1: number): number => ii.rect(Math.max(0, x0), y, Math.min(w, x1 + 1), y + 1);
+  const src = new Integral(bin);
+  const er = new Uint8Array(w * h);
+  for (let y = ry; y < h - ry; y++)
+    for (let x = rx; x < w - rx; x++) {
+      if (!data[y * w + x]) continue;
+      if (rows.every(([dy, k]) => run(src, y + dy, x - k, x + k) === 2 * k + 1)) er[y * w + x] = 1;
+    }
+  const eroded = new Integral({ w, h, data: er });
+  const out = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++)
+    for (let x = 0; x < w; x++)
+      if (rows.some(([dy, k]) => y - dy >= 0 && y - dy < h && run(eroded, y - dy, x - k, x + k) > 0)) out[y * w + x] = 1;
+  return { w, h, data: out };
+}

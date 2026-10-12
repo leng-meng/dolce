@@ -46,6 +46,8 @@ import { estimateUnit, findStaffLines, groupStaves, localLineModel, pitchPos, pi
 import { completeStaffLines } from "./dewarp";
 import { rasterizePage, type RasterPage } from "./rasterpage";
 import { median, rowHasInk, unionRect as union, overlapFrac } from "../omrkit/geom";
+import { connectedComponents } from "../omrkit/ccl";
+import { close, ellipseOpen } from "../omrkit/morph";
 import { type LineFrame, makePitchSteps, ledgerCandidates, makePitchGrid, sharedLegers, ownLegers } from "./pitchgrid";
 import { bridgeFaintBars, pastSysLine, joinThroughBars, inkSystemBarlines, bridgeFaintSysLines, dropLoneBarlines, voteSystemBarlines } from "./barvote";
 import { nearRestLine, restKind, nearStaffStart, fillAround, isEighthRest, symbolInk, isStackedPair, isBarRest, enclosedWhite, crossRuns, midOfStaff, offStaffRest, sharpCrossbars, tallStrokes, longestVRun, splitAt, sharpShape, wholesByShape, openCavities, STAFF_START } from "./restshape";
@@ -205,6 +207,28 @@ const CLF_P = 0.8;
 /** 第二遍拆块的尺寸上限（线距的倍数）。取的正是 `findBlobs` 自己的上限
  *  （宽 6 格、高 9 格）——**等于不再设限**，拆出来的头全交给判别器把关。
  *  写成 9×5.5 / 12×7 / 16×9 实测结果完全相同，因为再大的块 `findBlobs` 根本不出。 */
+/** 斑点补头（判别器那一段之后）：开运算椭圆的半轴（格）——比扫描件的线宽、干宽都粗，比实心头的半高细。 */
+const SPOT_RX = 0.28;
+const SPOT_RY = 0.22;
+/** 斑点的尺寸闸（格）与离外线多远以内（格，带加线的头）。 */
+const SPOT_W = [0.6, 1.9] as const;
+const SPOT_H = [0.45, 1.5] as const;
+const SPOT_BAND = 3;
+/** 干的证据：头心起往干那头量多长（格）、那一列墨要占几成（断成虚线的干也算）。 */
+const SPOT_STEM = 2.5;
+/** 压在符杠中线上的斑点，矮过这个（格）才当杠片：真杠开运算后只剩杠厚（半格上下），头有大半格高——
+ *  扫描件上同高的几个头被残线连成一条厚「杠」，真头就压在它中线上（破碎扫描 p10 m96）。 */
+const SPOT_BEAM_H = 0.75;
+const SPOT_STEM_INK = 0.65;
+const SPOT_BAR = 3;
+/** 斑点宽、高都要到本页已认实心头斑点中位数的这么多；本页够 `SPOT_RULER_N` 个才有尺子。 */
+const SPOT_RULER = 0.8;
+const SPOT_RULER_N = 8;
+/** 斑点宽的上限：本页中位数的这么多倍。 */
+const SPOT_RULER_MAX = 1.3;
+/** 斑点那一路判别器的门槛：比块那几路（`CLF_P`）松，因为另有干的证据。扫过 0.8 / 0.65 / 0.5：
+ *  合唱谱扫描件四份 84.27·80.97·85.31·92.12 / 84.43·80.93·85.63·92.12 / 84.39·80.93·85.66·91.95（破碎扫描·是爱·望十架·爱是从神而来）。 */
+const SPOT_P = 0.65;
 const BIG_W = 6;
 const BIG_H = 9;
 
@@ -901,16 +925,18 @@ export async function recognizeRasterPage(
   }
 
   /** 块的中心压在某条符杠的中线上（半个杠厚以内）：那是提走符杠之后剩下的杠头，不是符头。 */
-  const onBeamLine = (b: Rect, ext = 0) => {
+  const onBeamLine = (b: Rect, ext = 0) => beamsThrough(b, ext) > 0;
+  /** 块的中心压在几条符杠的中线上（`onBeamLine` 的计数版）。 */
+  const beamsThrough = (b: Rect, ext = 0) => {
     const cxb = b.x + b.w / 2;
     const cyb = b.y + b.h / 2;
     // `ext`：两端各外推多远。杠的拟合常收不到最末一截（有一位神 m4，杠拟合到 757、剩下 759~773 一截连着干尖被收成 F♯5）；
     // 只给几何闸那一路外推，判别器那一路外推了会剔掉真头（当我们回到天家 −0.4）
-    return prims.beams.some((q) => {
+    return prims.beams.filter((q) => {
       if (cxb < Math.min(q.x0, q.x1) - ext || cxb > Math.max(q.x0, q.x1) + ext) return false;
       const t = q.x1 === q.x0 ? 0 : (cxb - q.x0) / (q.x1 - q.x0);
       return Math.abs(cyb - (q.y0 + (q.y1 - q.y0) * t)) <= Math.max(q.lw, unit.space * 0.25);
-    });
+    }).length;
   };
   /**
    * 块**正接在一条够厚的符杠的端头上**：杠端的 x 落在块的横向范围内（±2px）、上下与杠盒交叠，杠厚 0.35 格以上。
@@ -2877,6 +2903,96 @@ export async function recognizeRasterPage(
       }
     }
     syms.push(...clfHeads);
+
+    // ── **不靠连通块的实心头：原图开运算的斑点** ─────────────────────────────
+    //
+    // 上面几路都从连通块出发：块的尺寸、块里的拆法、块有没有被认领。扫描件上「头 + 干 + 尾」常再粘上一截弧、
+    // 几粒噪点，块就出了每一路的闸；字典又会把整块认成别的字形（节拍器的「四分音符」）。漏音归因
+    //（`raster-gap.mjs`）量出扫描件漏掉的实心头里，头的墨完好的占大半，干断成虚线的也不少。
+    // 这里直接在**原图**上找：椭圆结构元的开运算抹掉比它细的笔画——谱线、符干、细弧——实心头留成一个斑点，
+    // 不管它和谁连着。斑点只给位置，收不收要三样证据都在：落在音位格上、判别器过（`SPOT_P`，有干作证所以比块那几路松）、
+    // 旁边有干（原图上那一列墨占六成以上，断成虚线的干也算）。已有符号压着的、矮的又压在符杠中线上的不要。
+    // 两张图的斑点都当候选：原图直接开，和先补一道 3×3 闭运算再开。扫描件的头常是一片网点，直接开会缩成一小粒、甚至抹光
+    //（破碎扫描 p5 m61 G2）；先闭又会把上下贴着的和弦两个头并成一个过高的斑点（是爱 p5 m65）。同一处只收一次
+    const rx = Math.max(1, Math.round(unit.space * SPOT_RX));
+    const ry = Math.max(1, Math.round(unit.space * SPOT_RY));
+    const closed = { ...raster.bin, data: raster.bin.data.slice() };
+    close(closed, 1);
+    const spotComps = [...connectedComponents(ellipseOpen(raster.bin, rx, ry), 4), ...connectedComponents(ellipseOpen(closed, rx, ry), 4)];
+    const inBand = (y: number) => groups.some((g) => y > g.lines[0].y - unit.space * SPOT_BAND && y < g.lines[4].y + unit.space * SPOT_BAND);
+    const bin = raster.bin;
+    /** 头盒 `b` 旁边（左沿往下、右沿往上）有没有一根干：那一列从头心起 `SPOT_STEM` 格里墨占 `SPOT_STEM_INK` 以上。 */
+    const stemBeside = (b: Rect): boolean => {
+      const cy = Math.round(b.y + b.h / 2);
+      const len = Math.round(unit.space * SPOT_STEM);
+      const col = (x: number, dir: 1 | -1): number => {
+        let n = 0;
+        for (let k = 1; k <= len; k++) {
+          const y = cy + dir * k;
+          if (y < 0 || y >= bin.h) return 0;
+          n += bin.data[y * bin.w + x];
+        }
+        return n / len;
+      };
+      const best = (x0: number, x1: number, dir: 1 | -1): number => {
+        let m = 0;
+        for (let x = Math.max(0, Math.round(x0)); x <= Math.min(bin.w - 1, Math.round(x1)); x++) m = Math.max(m, col(x, dir));
+        return m;
+      };
+      return (
+        best(b.x - unit.space * 0.2, b.x + unit.space * 0.3, 1) >= SPOT_STEM_INK ||
+        best(b.x + b.w - unit.space * 0.3, b.x + b.w + unit.space * 0.2, -1) >= SPOT_STEM_INK
+      );
+    };
+    /** 斑点中段每一列在原图上都是纵贯 `SPOT_BAR` 格以上的墨：终止线、段落线那根粗线（0.6 格宽，开运算留得下，
+     *  自己又给自己作了「干」的证据；我灵镇静 m26 出了两个头）。头的干在盒边，中段只有一个头高 */
+    const solidBar = (b: Rect): boolean => {
+      for (let x = Math.round(b.x + b.w * 0.25); x <= Math.round(b.x + b.w * 0.75); x++) {
+        const run = vRunAt(bin, x, Math.round(b.y + b.h / 2));
+        if (!run || run[1] - run[0] < unit.space * SPOT_BAR) return false;
+      }
+      return true;
+    };
+    // 本页的尺子：已认实心头所在斑点的中位宽高。升号交叉处、粗圈空心头留下的斑点比真头小一圈（f37 0.69×0.59、0.82×0.64 格，
+    // 同页真头 1.1×0.85 上下）；网点印的扫描件头开运算后也缩，尺子跟着缩
+    const known = syms.filter((s0) => s0.code === "noteheadBlack").map((s0) => s0.box);
+    const onHead = spotComps.filter((c) => known.some((kb) => overlapFrac(c.bbox, kb) > 0.5));
+    const medW = onHead.length >= SPOT_RULER_N ? median(onHead.map((c) => c.bbox.w)) : 0;
+    const medH = onHead.length >= SPOT_RULER_N ? median(onHead.map((c) => c.bbox.h)) : 0;
+    const spotHeads: RasterSym[] = [];
+    for (const c of spotComps) {
+      const b = c.bbox;
+      const w = b.w / unit.space;
+      const h = b.h / unit.space;
+      if (w < SPOT_W[0] || w > SPOT_W[1] || h < SPOT_H[0] || h > SPOT_H[1]) continue;
+      if (b.w < medW * SPOT_RULER || b.h < medH * SPOT_RULER) continue;
+      // 两根干之间的一截短杠整段留成斑点（追思歌 m14：41×20 像素，同页真头斑点中位 31×22），比头宽出一截
+      if (medW && b.w > medW * SPOT_RULER_MAX) continue;
+      const cy = b.y + b.h / 2;
+      if (!inBand(cy)) continue;
+      // 节拍器字形（`metNote*`）压着的不算占用：谱表带里「头 + 干 + 尾」被字典认成了节拍器的音符（破碎扫描 p1 m6 B♭3），收了头就把它换掉；
+      // 保持音的短横也是：它比开运算的椭圆细，自己留不下斑点，头大小的斑点压着它，是头的残片被认成了保持音（同页 m16 G4）
+      const over = syms.filter((s0) => overlapFrac(b, s0.box) > 0.2 || overlapFrac(s0.box, b) > 0.2);
+      if (over.some((s0) => !/^met/.test(s0.code))) continue;
+      const beamsHit = beamsThrough(b);
+      if (beamsHit >= 2 || (beamsHit === 1 && b.h < unit.space * SPOT_BEAM_H)) continue;
+      const gy = pitchGrid(cy);
+      if (gy === null) continue;
+      if (!stemBeside(b)) continue;
+      if (solidBar(b)) continue;
+      if (headProb(clf, raster.bin, masks, unit, b, gy, onLineY(gy)) < SPOT_P) continue;
+      const hw = Math.round(unit.space * 1.25);
+      const hh = Math.round(unit.space * 0.95);
+      const box = { x: Math.round(b.x + b.w / 2 - hw / 2), y: Math.round(gy - hh / 2), w: hw, h: hh };
+      if (headTaken(box) || spotHeads.some((s0) => overlapFrac(box, s0.box) > 0.3)) continue;
+      spotHeads.push({ box, code: "noteheadBlack" });
+      ledger.claim(box, "spot:noteheadBlack");
+      for (const s0 of over) {
+        const i = syms.indexOf(s0);
+        if (i >= 0) syms.splice(i, 1);
+      }
+    }
+    syms.push(...spotHeads);
   }
 
   // ── 空心头按模板再搜 ─────────────────────────────────────────────────────

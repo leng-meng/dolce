@@ -6,9 +6,9 @@
 //
 // **不是每张图都要做**：干净位图（排版软件贴进去的）与普通扫描件的笔画本来就是实心的，
 // 做一遍只会把细节磨掉。所以先量 `halftoneRatio` 再决定，判据见 `HALFTONE_RATIO`。
-// 去网本身走标准形态学（`morph.ts`），参数从本页统计，见 `descreenMorph`。
+// 去网本身走标准形态学（`omrkit/morph.ts`），参数从本页统计，见 `descreenMorph`。
 import type { Binary } from "../omrkit/types";
-import { areaClose, areaOpen, close, Integral } from "./morph";
+import { areaClose, areaOpen, close, Integral } from "../omrkit/morph";
 import { components } from "../omrkit/ccl";
 import { quantile } from "../omrkit/geom";
 
