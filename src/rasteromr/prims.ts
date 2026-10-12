@@ -1313,6 +1313,43 @@ const SHORT_BEAM_W = 0.9;
 /** 同上：两根干之间逐列墨厚的中位数（格）。杠约半格厚；比这薄的是连线、谱线残段，比这厚的是挨着两根干的实心头。 */
 const SHORT_BEAM_THICK = [0.4, 0.6] as const;
 /** `thinOnly`：这几条线只抹竖游程不过 `THIN_ONLY_RUN` 个线宽的列（见 `recognize.ts` 调用处）。 */
+/**
+ * **按游程去线**（只给认弧用）：每条线逐列取线心处的竖游程，不过这条线的实测线宽就整段清掉，更长的整段留下
+ *（有笔画压在线上或穿过）。贴着线走的扁弧（弧腹压在线上）在 `removeStaffLines` 里连线一起抹了，这里留得下。
+ * 线宽按这条线上不过 0.4 格的游程取中位数，**不加一**：一像素厚的弧腹贴在三像素的线下，游程正好线宽 + 1（宁静 p4 m56）；
+ * 线局部厚一像素留下的残段由认弧那边按线带剔掉。
+ */
+export function removeStaffLinesByRun(bin: Binary, lineYs: number[], unit: RasterUnit): Binary {
+  const { w, h, data } = bin;
+  const out: Binary = { w, h, data: new Uint8Array(data) };
+  const runs = vRuns(bin);
+  for (const cy of lineYs) {
+    const centers = localLineCenters(bin, runs, cy, unit);
+    const ts: number[] = [];
+    for (let x = 0; x < w; x += 2) {
+      const y = Math.round(centers[x]);
+      if (y >= 0 && y < h && data[y * w + x] && runs[y * w + x] <= unit.space * 0.4) ts.push(runs[y * w + x]);
+    }
+    if (!ts.length) continue;
+    ts.sort((p, q) => p - q);
+    const T = ts[ts.length >> 1];
+    for (let x = 0; x < w; x++) {
+      let y = Math.round(centers[x]);
+      if (y < 0 || y >= h) continue;
+      if (!data[y * w + x]) {
+        if (y > 0 && data[(y - 1) * w + x]) y--;
+        else if (y + 1 < h && data[(y + 1) * w + x]) y++;
+        else continue;
+      }
+      if (runs[y * w + x] > T) continue;
+      let a = y;
+      while (a > 0 && data[(a - 1) * w + x]) a--;
+      for (let k = a; k < h && data[k * w + x]; k++) out.data[k * w + x] = 0;
+    }
+  }
+  return out;
+}
+
 export function removeStaffLines(bin: Binary, lineYs: number[], unit: RasterUnit, thinOnly: Set<number> = new Set()): Binary {
   const { w, h, data } = bin;
   const out: Binary = { w, h, data: new Uint8Array(data) };

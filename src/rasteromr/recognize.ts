@@ -22,7 +22,7 @@ import { headerCredits, type HeaderCredit, type WordLine } from "../omrkit/heade
 import { applyTuplet, attachDynamicTexts, attachNotations, attachWedges, findNotations, findTuplets, markLyricExtends } from "../staffomr/notations";
 import type { PObj, SPage, Staff, Sym, Tag } from "../staffomr/model";
 import { buildRasterPage, makeSymObj, makeTextObj, type RasterSym } from "./adapt";
-import { binSig, blobImage, extendVSegs, findBlobs, findBraces, findPrimitives, groupByLeftInk, ledgerGrid, joinVSegs, removeStaffLines, repairLineCuts, verticalStrokes, type BeamQuad, type LineSeg, type RasterPrims } from "./prims";
+import { binSig, blobImage, extendVSegs, findBlobs, findBraces, findPrimitives, groupByLeftInk, ledgerGrid, joinVSegs, removeStaffLines, removeStaffLinesByRun, repairLineCuts, verticalStrokes, type BeamQuad, type LineSeg, type RasterPrims } from "./prims";
 import { archCavity, stemWalledCavity, findRasterHeads, hollowHeadsByPitch, headsOnBareStems, headsBetweenStemPairs, probeBareStems, hollowHeadsFromCavities, hollowHeadsAlongStems, hollowHeadsFromHoles, hollowHeadsOnStemSeeds, reseatHollowHeads, stemOf, hollowHeadsOnLedgers, hollowSlit, inkColumn, judgeHeadBox, mergeHoles } from "./notehead";
 import { bootstrapClefs, matchTemplate, RasterGlyphLookup, type BootStaff } from "./rasterglyphs";
 import { sigDistance } from "../omrkit/glyphdict";
@@ -4514,6 +4514,50 @@ export async function recognizeRasterPage(
     for (const sl of fused) ledger.claim({ x: sl.obj.box.left, y: sl.obj.box.top, w: sl.obj.box.right - sl.obj.box.left, h: sl.obj.box.bottom - sl.obj.box.top }, "slur:fused");
     slurs.push(...fused);
   }
+  // ── 按游程去线的图上补认弧（`prims.ts::removeStaffLinesByRun`）──────────────
+  //
+  // 弧腹压在谱线上的扁弧（两个八分上下的小弧，宁静 p4 m56、p8 m96）在去线图上连线一起抹了，只剩两条腿，过不了弧线那几道闸。
+  // 按游程去线留得下它：线心处竖游程比线厚的整段留着。只当补充的候选——不碰已认的弧、块里没有符头；补出来的两端都挂得上音才留（`runArcs`）
+  const runArcs = new Set<SlurArc>();
+  {
+    const sp = unit.space;
+    const runNl = removeStaffLinesByRun(raster.bin, staffLines.map((l) => l.y), unit);
+    const runMap = traceContours(runNl, unit, contourStaves);
+    const taken = slurs.map((sl) => sl.obj.box);
+    const heads = notes.filter((n) => !n.rest).map((n) => n.sym.box);
+    const fermatas = cmap.contours.filter((c) => ledger.claimsOf(c.id).some((k) => /fermata/.test(k.by))).map((c) => c.bbox);
+    const cands = runMap.contours.filter((c) => {
+      const b = c.bbox;
+      if (taken.some((t) => b.x < t.right && b.x + b.w > t.left && b.y < t.bottom && b.y + b.h > t.top)) return false;
+      // 延长记号的弧（点认成了记号、弧在去线图上没留下）：弧下 1 格内有延长记号的不要（赞美一神）
+      if (fermatas.some((f) => f.x + f.w > b.x - sp * 0.5 && f.x < b.x + b.w + sp * 0.5 && f.y + f.h > b.y - sp && f.y < b.y + b.h + sp)) return false;
+      if (heads.some((hb) => (hb.left + hb.right) / 2 > b.x && (hb.left + hb.right) / 2 < b.x + b.w && (hb.top + hb.bottom) / 2 > b.y && (hb.top + hb.bottom) / 2 < b.y + b.h)) return false;
+      // 块里竖着穿过一根竖段的（干、小节线穿线那段游程长、留了下来，与两旁残留的线连成一块，善牧恩慈歌）
+      if ([...prims.vSegs, ...stemSegs].some((v) => { const vx = (v.x0 + v.x1) / 2; return vx > b.x && vx < b.x + b.w && Math.min(v.y0, v.y1) <= b.y + b.h * 0.3 && Math.max(v.y0, v.y1) >= b.y + b.h * 0.7; })) return false;
+      // 整块落在一条谱线的线带里的是线本身（扫描件谱线局部厚一像素，按线宽去不掉，两个头之间留下一截微弯的线）
+      const band = unit.lineThick + 1;
+      if (staffLines.some((l) => b.y >= l.y - band && b.y + b.h <= l.y + band + 1)) return false;
+      const cy = b.y + b.h / 2;
+      return pg.staves.some((st) => cy > st.box.top - sp * 4 && cy < st.box.bottom + sp * 4);
+    });
+    // 弧心下（上）一格内有个点的是延长记号（没认出来的：赞美一神低音谱表下方那个）
+    const dotUnder = (sl: SlurArc) => {
+      const b = sl.obj.box;
+      const w = b.right - b.left;
+      return cmap.contours.some((c) => {
+        const d = c.bbox;
+        if (d.w > sp * 0.6 || d.h > sp * 0.6) return false;
+        const cx = d.x + d.w / 2, cy = d.y + d.h / 2;
+        if (cx < b.left + w / 3 || cx > b.right - w / 3) return false;
+        return sl.above ? cy > b.top && cy < b.bottom + sp * 1.2 : cy < b.bottom && cy > b.top - sp * 1.2;
+      });
+    };
+    for (const sl of findRasterSlurs(runMap, unit, cands, pg.objs.length + pg.segs.length + 1000 + slurs.length)) {
+      if (dotUnder(sl)) continue;
+      slurs.push(sl);
+      runArcs.add(sl);
+    }
+  }
   mergeArcPieces(slurs, unit.space);
   extendArcEnds(slurs, nl, (y) => gridYs.some((ly) => Math.abs(ly - y) <= unit.lineThick), unit.space);
   // 续过谱线之后再并一次：跨谱表的大弧下截续过右手第一线才够到上截（宁静 p1 m9–12 钢琴 F2→F4 那几条）
@@ -4558,6 +4602,8 @@ export async function recognizeRasterPage(
       .reduce<StaffNote | undefined>((x, m) => (!x || m.sym.px > x.sym.px ? m : x), undefined);
     if (prev) a.to = prev;
   }
+  // 按游程补出来的弧两端都要挂上音（同一个音不算）：挂不全的多是线上残留的别的墨
+  for (let i = slurs.length - 1; i >= 0; i--) if (runArcs.has(slurs[i]) && (!slurs[i].from || !slurs[i].to || slurs[i].from === slurs[i].to)) slurs.splice(i, 1);
   reconnectSlurs(pg, slurs);
   attachEdgeSlurStarts(slurs, notes, unit.space, new Set(index > 1 ? (pg.systems[0]?.staves ?? []) : []));
   const chordTies = tieChords(slurs, notes, unit.space);
