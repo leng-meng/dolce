@@ -1,5 +1,5 @@
-// 帮助对话框：四个标签页（功能帮助、可视化编辑、记谱法、关于）。只读，自建 overlay（参照 export.ts 的
-// showExportDialog），复用 .modal-overlay/.modal-box 样式 + 本文件专属的 .help-* 样式。
+// 帮助对话框：四个标签页（功能帮助、可视化编辑、记谱法、关于）。只读，外框走 dialogs.ts 的
+// openModal（遮罩、Esc、点遮罩关闭），内容用本文件专属的 .help-* 样式。
 // 功能帮助 = 可展开主题列表（<details>）；记谱法 = 分节说明 + 实时渲染的 SVG 示例。
 import type { App } from "./app";
 import { PaintResources, ScorePainter } from "../layout/painter";
@@ -16,6 +16,7 @@ import { isTauriRuntime } from "./fileio";
 import { FEEDBACK_EMAIL, openFeedbackMail } from "./feedback";
 import { VISUAL_ACTIONS, groupLabel } from "./visual/keys";
 import { getLang, t } from "../i18n";
+import { openModal } from "./dialogs";
 import { FEATURE_TOPICS_EN, GLOSSARY_EN, NOTATION_TEXT_EN, SHORTCUTS_EN, VISUAL_TOPICS_EN } from "./help.en";
 import { EXAMPLES_123_TEXT_EN, GLOSSARY_123_EN, INTRO_123_EN } from "./help123.en";
 import { EXAMPLES_123, GLOSSARY_123, INTRO_123, SPEC_123_URL, wrap123, type NotationExample } from "./help123";
@@ -914,11 +915,6 @@ function labeledRow(label: string, control: HTMLElement): HTMLElement {
 // ---- 对话框 ----------------------------------------------------------------
 
 export function showHelpDialog(app: App): void {
-  const overlay = el("div", "modal-overlay");
-  const box = el("div", "modal-box help-box");
-
-  const title = el("div", "modal-title", t("help.title"));
-
   // 标签页：{ 标签, 内容, 首次显示时的补做 }
   const notationPane = buildNotationHelp(app);
   const pane123 = build123Help(app);
@@ -959,24 +955,7 @@ export function showHelpDialog(app: App): void {
   };
   tabBtns.forEach((btn, i) => (btn.onclick = () => activate(i)));
 
-  const footer = el("div", "modal-footer");
   const closeBtn = el("button", undefined, t("help.close"));
-  footer.append(closeBtn);
-
-  box.append(title, tabs, content, footer);
-  overlay.append(box);
-  document.body.append(overlay);
-
-  const close = () => {
-    overlay.remove();
-    document.removeEventListener("keydown", onKey);
-  };
-  const onKey = (e: KeyboardEvent) => {
-    if (e.key === "Escape") close();
-  };
+  const { close } = openModal({ title: t("help.title"), boxClass: "help-box", body: [tabs, content], footer: [closeBtn] });
   closeBtn.onclick = close;
-  overlay.onclick = (e) => {
-    if (e.target === overlay) close();
-  };
-  document.addEventListener("keydown", onKey);
 }

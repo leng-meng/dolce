@@ -15,6 +15,7 @@ import { JpwFile } from "../jpword/jpwfile";
 import { engraveScoreDoc } from "../mixed/engrave";
 import { colorToCss } from "../common/geom";
 import { t } from "../i18n";
+import { openModal } from "./dialogs";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -355,19 +356,15 @@ function saveAsItems(app: App): ExportItem[] {
 
 /** 一列按钮的对话框（导出 / 另存为）。点一项就执行，成功后关掉；出错留在框里显示。 */
 function showListDialog(app: App, titleText: string, items: readonly ExportItem[], failText: string): void {
-  const overlay = document.createElement("div");
-  overlay.className = "modal-overlay";
-  const box = document.createElement("div");
-  box.className = "modal-box";
-  const title = document.createElement("div");
-  title.className = "modal-title";
-  title.textContent = titleText;
   const list = document.createElement("div");
   list.style.cssText = "display:flex;flex-direction:column;gap:8px";
   const error = document.createElement("div");
   error.style.cssText = "display:none;color:var(--error,#f3727f);font-size:12px;line-height:1.4";
 
-  const close = () => overlay.remove();
+  const cancel = document.createElement("button");
+  cancel.textContent = t("dlg.cancel");
+  const { close } = openModal({ title: titleText, body: [list, error], footer: [cancel] });
+  cancel.onclick = close;
   for (const it of items) {
     if (!it.available(app)) continue;
     const btn = document.createElement("button");
@@ -389,19 +386,6 @@ function showListDialog(app: App, titleText: string, items: readonly ExportItem[
     list.append(btn);
   }
 
-  const footer = document.createElement("div");
-  footer.className = "modal-footer";
-  const cancel = document.createElement("button");
-  cancel.textContent = t("dlg.cancel");
-  cancel.onclick = close;
-  footer.append(cancel);
-
-  box.append(title, list, error, footer);
-  overlay.append(box);
-  overlay.onclick = (e) => {
-    if (e.target === overlay) close();
-  };
-  document.body.append(overlay);
 }
 
 export function showExportDialog(app: App): void {

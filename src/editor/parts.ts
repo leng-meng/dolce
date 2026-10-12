@@ -10,7 +10,7 @@ import {
   addPart, CLEF_LABEL, clefNameOf, type ClefName, copyLyrics, deletePart, duplicatePart, mergeInto, movePart, setPartProps,
   splitByChord, splitByVoice, stavesOf, TRANSPOSE_PRESETS, transposeKeyOf, type PartProps,
 } from "../model/parts";
-import { showConfirmDialog } from "./dialogs";
+import { openModal, showConfirmDialog } from "./dialogs";
 import { type MsgKey, t } from "../i18n";
 
 function el<K extends keyof HTMLElementTagNameMap>(tag: K, cls = "", text = ""): HTMLElementTagNameMap[K] {
@@ -105,39 +105,27 @@ export function patchVoiceLine(text: string, pi: number, props: { name?: string;
   return null;
 }
 
-let openPanel: HTMLElement | null = null;
+/** 开着的声部面板的关闭函数（重画时先关旧的，连它的 Esc 监听一起撤）。 */
+let openPanel: (() => void) | null = null;
 
 /** 打开声部面板（已开着就重画）。 */
 export function showPartsPanel(app: App): void {
-  openPanel?.remove();
-  const overlay = el("div", "modal-overlay");
-  const box = el("div", "modal-box parts-box");
-  box.setAttribute("role", "dialog");
-  box.setAttribute("aria-modal", "true");
-  const title = el("div", "modal-title", t("parts.title"));
+  openPanel?.();
   const body = el("div", "parts-body");
-  const footer = el("div", "modal-footer");
-  const close = (): void => {
-    overlay.remove();
-    openPanel = null;
-    document.removeEventListener("keydown", onKey);
-    app.scorePane.focus({ preventScroll: true });
-  };
-  const onKey = (ev: KeyboardEvent): void => {
-    if (ev.key === "Escape") close();
-  };
-  document.addEventListener("keydown", onKey);
-  overlay.addEventListener("click", (e) => {
-    if (e.target === overlay) close();
-  });
   const done = el("button", "modal-button-primary", t("parts.done"));
   done.type = "button";
+  const { close } = openModal({
+    title: t("parts.title"),
+    boxClass: "parts-box",
+    body: [body],
+    footer: [done],
+    onClose: () => {
+      openPanel = null;
+      app.scorePane.focus({ preventScroll: true });
+    },
+  });
   done.addEventListener("click", close);
-  footer.append(done);
-  box.append(title, body, footer);
-  overlay.append(box);
-  document.body.append(overlay);
-  openPanel = overlay;
+  openPanel = close;
 
   /** 改结构的一步：先问一声会不会丢注释（123 / ABC 整份重出），做完重画。 */
   /** `remap`：声部序号怎么变（旧 → 新，删掉为 -1），按声部记的会话设置跟着走 */
