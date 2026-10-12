@@ -10,7 +10,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
-import { mark } from "./deco";
+import { mark } from "../common/deco";
 import { TokenData, tokenClass } from "../jpword/tokens";
 
 

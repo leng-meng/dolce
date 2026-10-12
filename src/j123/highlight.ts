@@ -15,7 +15,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
-import { mark } from "../editor/deco";
+import { mark } from "../common/deco";
 
 /** 字段行前缀的宽松形。与 `fields.ts::ASCII_PREFIX` / `CJK_PREFIX` / `CONT_PREFIX` 同形，但不查别名表。
  *  `+` 是 ABC 的续行字段（§3.1.18，123 只用它续歌词行）；`w` 后的数字是**旧写法**，

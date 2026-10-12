@@ -14,7 +14,7 @@ import {
   type ViewUpdate,
 } from "@codemirror/view";
 import { RangeSetBuilder } from "@codemirror/state";
-import { mark } from "../editor/deco";
+import { mark } from "../common/deco";
 
 
 /** 行首前缀：`Q1"女高":` / `C1-2:` / `W:` */
