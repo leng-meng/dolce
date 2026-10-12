@@ -1702,6 +1702,7 @@ export interface BarCheck {
  * 按「系统行数 + 第几行」把各页的小节接成序列，不满、整拍数的小节满足任一条就标 `split`：
  * 在曲首；与前或后一个同样的半截小节合起来正好一整小节；在曲末、与曲首的弱起合起来正好一小节；
  * 挨着段落界（右端双纵线/反复线，或紧跟在它后面）。
+ * 上一行行末、这一行行首两个小节都不满的，是被系统换行劈开的一个小节，后半截记 `Bar.splitTail`。
  */
 export function markSplitBars(pages: { page: SPage; bars: BarCheck[] }[]): void {
   const seqs = new Map<string, BarCheck[]>();
@@ -1716,9 +1717,11 @@ export function markSplitBars(pages: { page: SPage; bars: BarCheck[] }[]): void 
   const part = (b: BarCheck | undefined) =>
     !!b && !b.full && b.sum > eps && b.sum < b.expect - eps && Math.abs(b.sum / b.beat - Math.round(b.sum / b.beat)) < eps;
   const pair = (a: BarCheck, b: BarCheck) => Math.abs(a.expect - b.expect) < eps && Math.abs(a.sum + b.sum - a.expect) < eps;
+  // 被系统换行劈开的小节：上一行行末、这一行行首两个小节都不满。后半截记下来，写出端标 `implicit`（与 GT 一样算一个小节）。
+  // 不要求整拍、不要求正好凑满一小节：行首常是半拍的弱起（232 主也爱我歌），认漏、认错一个音两半也就凑不上了（243 惟独耶稣歌）
+  const short = (x: BarCheck) => x.sum > eps && x.sum < x.expect - eps && !x.full;
   for (const seq of seqs.values())
     seq.forEach((b, i) => {
-      if (!part(b)) return;
       const prev = seq[i - 1];
       const next = seq[i + 1];
       // 段落界：右端是双纵线/反复线（段尾不满，万口欢唱 m9 一拍、副歌从下一小节强拍起），或紧跟在它后面（段首弱起）
@@ -1726,6 +1729,10 @@ export function markSplitBars(pages: { page: SPage; bars: BarCheck[] }[]): void 
       const before = b.staff.bars[b.index - 1];
       const sectionEnd = (x: typeof bar | undefined) => !!x && (x.rightRepeat || (!!x.rightStyle && x.rightStyle !== "regular"));
       const edge = sectionEnd(bar) || sectionEnd(before) || !!bar?.leftRepeat;
+      // 行末那条线的样式不作数：行末的普通小节线常被读成终止线（378 近乎上帝之心歌），GT 真在那里有线的照样配得上
+      if (bar && b.index === 0 && !edge && prev && prev.staff !== b.staff && prev.index === prev.staff.bars.length - 1 && short(prev) && short(b))
+        bar.splitTail = true;
+      if (!part(b)) return;
       if (i === 0 || edge || (part(prev) && pair(prev, b)) || (part(next) && pair(b, next)) || (i === seq.length - 1 && part(seq[0]) && pair(seq[0], b))) b.split = true;
     });
 }

@@ -430,6 +430,8 @@ export class Bar {
   endingNumber: string | null = null;
   endingStart = false;
   endingStop = false;
+  /** 行首这一小节是上一行行末那个半截的后半（两半合起来正好一整小节，见 `markSplitBars`）：写出 `implicit="yes"`。 */
+  splitTail = false;
   constructor(staff: Staff) {
     this.staff = staff;
   }

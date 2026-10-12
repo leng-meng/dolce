@@ -55,7 +55,7 @@ import { type TimeColumn, shareSystemClefs, shareOctaveClefs, shareTimeSignature
 import { findDots } from "./dots";
 import { bootstrapFlags, toBeamShapes, snapBeamEnds } from "./flags";
 import { fixDottedPairs, fixQuartersByBarSum } from "./rhythmfix";
-import { liftHarmonies, lyricsBelongBelow, foldBilingualLyrics, moveEchoLines, splitVoiceLyrics, numberVersesByScript, liftLyrics } from "./lyricpost";
+import { liftHarmonies, lyricsBelongBelow, keepGapRowOrder, foldBilingualLyrics, splitSmallEchoes, moveEchoLines, splitVoiceLyrics, numberVersesByScript, liftLyrics } from "./lyricpost";
 import { mergeArcPieces, attachSlursByStem, attachWideSlurs, attachEdgeSlurEnds, attachEdgeSlurStarts, tieChords } from "./slurattach";
 
 export interface RasterPageResult {
@@ -3991,7 +3991,9 @@ export async function recognizeRasterPage(
       }
     }
     lyricLines.push(...buildLyricLines(pg, objs, undefined, (row) => lyricsBelongBelow(row, verseObjs, notes, unit.space)));
+    keepGapRowOrder(pg, lyricLines);
     foldBilingualLyrics(pg, lyricLines);
+    splitSmallEchoes(pg, lyricLines, notes, unit.space);
     moveEchoLines(pg, lyricLines, notes, unit.space);
     splitVoiceLyrics(pg, lyricLines, notes, unit.space);
     numberVersesByScript(pg, lyricLines);

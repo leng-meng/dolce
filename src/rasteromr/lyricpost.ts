@@ -172,6 +172,86 @@ export function numberVersesByScript(pg: SPage, lines: LyricLine[]): void {
   lines.push(...extra);
 }
 
+/**
+ * **夹在两行谱之间的几行词，归下一行谱的只能是靠下的那几行**：归上一行谱的词印在它下面、归下一行谱的印在它上面，
+ * 上下次序不会颠倒。整行按对位裁决（`lyricsBelongBelow`）是逐行判的，244 我要耶稣歌第二行谱下三段词，
+ * 第 1 段「友象主。我今欢乐…」那几处女高休止、男声有音，被单独挪去了下谱表，第 2、3 段留在上谱表编成第 1、2 段，三段整体错位。
+ * 下面还压着归上一行谱的行的，挪回上一行谱。
+ */
+export function keepGapRowOrder(pg: SPage, lines: LyricLine[]): void {
+  const hOf = (l: LyricLine) => Math.max(0, ...l.syllables.flatMap((q) => q.glyphs.map((g) => g.bbox.h)));
+  for (const sys of pg.systems) {
+    const rows = [...sys.staves].sort((a, b) => a.box.top - b.box.top);
+    for (let i = 0; i + 1 < rows.length; i++) {
+      const up = rows[i];
+      const lo = rows[i + 1];
+      const gap = lines.filter((l) => (l.staff === up || l.staff === lo) && l.top > up.box.bottom && l.top < lo.box.top);
+      for (const l of gap)
+        if (l.staff === lo && gap.some((u) => u.staff === up && u.top > l.top + hOf(l) * 0.5)) l.staff = up;
+    }
+  }
+}
+
+/** 同一行里「小字」的字号上限（相对本行字号的中位数）。117 号筒吹响歌呼应小字 31~44、主歌大字 46~52。 */
+const ECHO_SMALL_H = 0.88;
+
+/** 小字串至少几个字。 */
+const ECHO_RUN_MIN = 2;
+
+/**
+ * **两行谱之间同一行里夹着的小字是下一行谱声部的词**（闭合人声谱的呼应句）：117 号筒吹响歌副歌
+ * 「时 点名时 候，在那 边 在那边 点名的」——大字是女高的词，小一号的「点名时」「在那边」是男声的呼应，与大字排在同一行。
+ * 整行按对位裁决（`lyricsBelongBelow`、`moveEchoLines`）只能整行挪：小字落在女高长音底下，只对得上男声的音，
+ * 整行连大字一起挂到了下谱表。这里先按字号把一行拆开：明显小一号、连成串、又大半落在「上一行谱没起音、下一行谱起音」处的字
+ * 另成一行、挂下一行谱，大字留在上一行谱（挪下去的整行挪回来）。全行一个字号的照旧交给对位判据。
+ */
+export function splitSmallEchoes(pg: SPage, lines: LyricLine[], notes: StaffNote[], sp: number): void {
+  const xsOf = (st: Staff) => notes.filter((n) => n.staff === st && !n.rest && !n.grace).map((n) => n.x);
+  const near = (x: number, xs: number[]) => Math.min(Infinity, ...xs.map((y) => Math.abs(y - x)));
+  // 字号取字格宽高的大者：字格是按墨切的，扁字（「一」「工」）高只有几像素、窄字宽不够，取大者才是字号。
+  // 带尾随标点的（「名，」）字格宽连着标点，参照字号不收它们；它们自己的宽封顶在参照字号上（不会因此判成大字以外的东西）
+  const punct = (q: LyricLine["syllables"][number]) => /[^\p{Script=Han}]$/u.test(q.text);
+  const dims = (q: LyricLine["syllables"][number]) => q.glyphs.map((g) => [g.bbox.w, g.bbox.h] as const);
+  const extra: LyricLine[] = [];
+  for (const sys of pg.systems) {
+    const rows = [...sys.staves].sort((a, b) => a.box.top - b.box.top);
+    for (let i = 0; i + 1 < rows.length; i++) {
+      const up = rows[i];
+      const lo = rows[i + 1];
+      const upX = xsOf(up);
+      const loX = xsOf(lo);
+      // 呼应的字落在上一行谱没起音、下一行谱起音的地方（明显离下一行谱的音更近，同 `moveEchoLines`）
+      const echoAt = (cx: number) => near(cx, upX) > near(cx, loX) + sp * 0.5;
+      for (const l of lines) {
+        if ((l.staff !== up && l.staff !== lo) || l.top <= up.box.bottom || l.top >= lo.box.top || l.syllables.length < 4) continue;
+        if (l.syllables.some((q) => /[A-Za-z]/.test(q.text))) continue;
+        const plain = l.syllables.filter((q) => !punct(q));
+        if (plain.length < 4) continue;
+        const big = median(plain.map((q) => Math.max(0, ...dims(q).map(([w, h]) => Math.max(w, h)))));
+        if (!(big > 0)) continue;
+        const sizeOf = (q: LyricLine["syllables"][number]) => Math.max(0, ...dims(q).map(([w, h]) => Math.max(punct(q) ? Math.min(w, big) : w, h)));
+        // 小字要连成串（呼应句「点名时」「在那边」）：零星一个小的多半是字格切坏了（「早」只切出半截、「奇」量成 38）
+        const small = l.syllables.map((q) => sizeOf(q) < big * ECHO_SMALL_H);
+        const run = small.map(() => false);
+        for (let k = 0; k < small.length; ) {
+          let e = k;
+          while (e < small.length && small[e]) e++;
+          // 字号小、还要大半落在呼应的位置上：字格量出的字号起伏不小（「九州四」量得偏小，可那里上一行谱照样有音）
+          const echo = l.syllables.slice(k, e).filter((q) => echoAt(q.cx)).length;
+          if (e - k >= ECHO_RUN_MIN && echo * 2 > e - k) for (let j = k; j < e; j++) run[j] = true;
+          k = Math.max(e, k + 1);
+        }
+        const nSmall = run.filter(Boolean).length;
+        if (!nSmall || l.syllables.length - nSmall < 2) continue;
+        extra.push({ ...l, staff: lo, voice: undefined, syllables: l.syllables.filter((_, k) => run[k]) });
+        l.syllables = l.syllables.filter((_, k) => !run[k]);
+        l.staff = up;
+      }
+    }
+  }
+  lines.push(...extra);
+}
+
 /** 呼应句改挂下一行谱：音节「明显离下一行谱的音更近」至少占这么多（明显 = 近半个线距以上）。 */
 const ECHO_LOWER = 0.5;
 

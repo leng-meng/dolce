@@ -705,7 +705,9 @@ function scoreToMusicXmlRaw(
             hidden = false;
           }
         }
-        body += `<measure number="${measureNo}">`;
+        // 被系统换行劈开的小节的后半截：系统里任一行谱配得上就算（一行认漏了音、凑不满，别的行照样配得上，232 主也爱我歌）
+        const splitTail = entry.sys.staves.some((st) => st.bars[bi]?.splitTail);
+        body += `<measure number="${measureNo}"${splitTail ? ' implicit="yes"' : ""}>`;
         if (attrs) body += `<attributes>${attrs}</attributes>`;
         if (bar0)
         body += barlineXml("left", {

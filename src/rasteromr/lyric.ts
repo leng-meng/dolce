@@ -430,15 +430,17 @@ const isTrailPunct = (ch: string) => LYRIC_PUNCT.test(ch) || /[”’）]/.test(
 /** 领起下一个字的标点（开引号、开括号）。 */
 const LEAD_PUNCT = /[“‘（]/;
 
-/** 行首括起来的段落标记（「(歌)」「（副歌）」「(和)」）：不是歌词，不占音符。 */
-const SECTION_LABEL = /^[(（](?:副歌|歌|和|合)[)）]$/;
+/** 行首括起来的段落标记（「(歌)」「（副歌）」「(和)」）：不是歌词，不占音符。
+ *  两个字的「副歌」括号缺一边也认（117 号筒吹响歌副歌行首的「(副歌)」OCR 掉了括号，「副」「歌」挂到了下谱表上）；单字的要有括号，
+ *  不然就是真的歌词字。 */
+const SECTION_LABEL = /^(?:[(（](?:副歌|歌|和|合)[)）]|[(（]?副歌[)）]?)$/;
 
 /** 去掉行首（段号之后）的段落标记（《所信有根基》副歌第一行「(歌)我不需要…」，「歌」挂上了第一个音）。 */
 function dropSectionLabel(chars: OcrChar[]): OcrChar[] {
   const s = [...chars].sort((a, b) => a.xFrac - b.xFrac);
   let k = 0;
   while (k < s.length && /^[0-9.．、\s]$/.test(s[k].ch)) k++;
-  for (let n = 3; n <= 4 && k + n <= s.length; n++)
+  for (let n = 2; n <= 4 && k + n <= s.length; n++)
     if (SECTION_LABEL.test(s.slice(k, k + n).map((c) => c.ch).join(""))) return [...s.slice(0, k), ...s.slice(k + n)];
   return chars;
 }
