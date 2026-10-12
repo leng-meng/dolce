@@ -2226,7 +2226,8 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
   /** FormatHost：`.musicxml` 读成 `ScoreDoc` → 简谱档排版；五线谱/混排档另读一份（`mixedDoc`）。 */
   reloadMusicXml(text: string): boolean {
-    this.mixed._setMixedXml(text);
+    // 打开/落地时已按这份原文读过混排那份，原文没变就不再读
+    if (!this.mixed.mixedDoc || this.mixed._mixedXmlText !== text) this.mixed._setMixedXml(text);
     let doc: ScoreDoc;
     try {
       doc = musicXmlFormat.toScoreDoc(text);

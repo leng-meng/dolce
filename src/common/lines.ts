@@ -1,5 +1,10 @@
 // 按行解析的公共件。
 
+/** 换行统一成 LF（CRLF、单独的 CR 都换）：与编辑器（CodeMirror）存下的原文一致。 */
+export function normalizeEol(text: string): string {
+  return text.replace(/\r\n?/g, "\n");
+}
+
 /** 各行起点的字符偏移，与 `text.split(/\r?\n/)` 的行一一对应。
  *  按**实际换行符的长度**累计：CRLF 文件用 `raw.length + 1` 累计时每行少算一个字符，
  *  到第 n 行就偏 n，SourceSpan 取回的原文全错位。 */

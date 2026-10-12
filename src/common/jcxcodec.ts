@@ -9,6 +9,8 @@
 // 浏览器与 Node 的 `TextDecoder` 都能解 GBK/BIG5，`TextEncoder` 却只出 UTF-8——GBK 写出靠一张反查表，
 // 头一次写出时逐个双字节码解一遍建起来（两万来次，一次性）。
 
+import { normalizeEol } from "./lines";
+
 let gbkMap: Map<string, number> | null = null;
 
 function gbkTable(): Map<string, number> {
@@ -68,7 +70,7 @@ export function decodeJcx(bytes: Uint8Array): string {
       }
     }
   }
-  return text.replace(/\r\n?/g, "\n");
+  return normalizeEol(text);
 }
 
 /** 文本 → 字节。`missing`：GBK 里没有、写成了 `?` 的字（调用方报给用户）。 */

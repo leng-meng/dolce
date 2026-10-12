@@ -14,6 +14,7 @@ import { staffChordSpans } from "../mixed/layoutpass";
 import { scoreDocToMusicXml } from "../model/toxml";
 import { musicXmlFormat, type DocFormatId } from "./formats";
 import { t } from "../i18n";
+import { normalizeEol } from "../common/lines";
 import type { App } from "./app";
 
 /** 混排会话向 App 要的那些能力（**列全**）。类型照 App 的取，免得两边各写一份。 */
@@ -138,8 +139,10 @@ export class MixedSession {
 
   /** FormatHost：`.jpwabc` 解析 → 排版 → 渲染。 */
   /** 五线谱/混排档的模型：MusicXML 读成 `ScoreDoc`（与简谱档那份分开读——那份会被投影、断句层补字段，混排只读原样的）。
-   *  读不出来时置空并提示，返回 false。 */
+   *  读不出来时置空并提示，返回 false。
+   *  换行先统一成 LF：存下的 `_mixedXmlText` 才与编辑器里的原文相等，`reload` 不会把 CRLF 文件当成改过再读一遍。 */
   _setMixedXml(xml: string): boolean {
+    xml = normalizeEol(xml);
     this._mixedDerivedText = null;
     try {
       this.mixedDoc = musicXmlFormat.toScoreDoc(xml);
@@ -157,6 +160,7 @@ export class MixedSession {
   /** 丢掉五线谱/混排档的模型与排版器（换文档/换格式时）。 */
   _dropMixedDoc(): void {
     this.mixedDoc = null;
+    this._mixedXmlText = null;
     this._mixedDerivedText = null;
     this._mixedToSrc.clear();
     this._srcToMixed.clear();
