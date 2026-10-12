@@ -326,6 +326,7 @@ export function findRasterDashedSlurs(
 // `attachSlurs` 够不着（宁静的伯利恒 p2 m25 低音、钢琴那几条大弧）。从弧端顺着切线逐列往外走：
 // 预计位置上下两像素内有墨就跟上，落在谱线行上没墨也照走（最多 `EXT_GAP` 格），过了线又接上墨，端点才延过去；
 // 一路没跨过谱线的不延（贴着符头、符杠的墨跟过去会越走越远）。总长不过 `EXT_MAX` 格。
+// 没跨线的端另走一种：细尾巴二值化后断成一串点（`dottedTail`），只跟细墨、断口小、碰上粗墨就停。
 
 /** 跨谱线时允许连续没墨的列数（格）。 */
 const EXT_GAP = 1.5;
@@ -335,6 +336,9 @@ const EXT_MAX = 3;
 const EXT_CROSS_PERP = 0.3;
 /** 越过谱线接上墨之后再跟多远（格）。 */
 const EXT_AFTER = 1;
+/** 断成点的细尾巴：点间断口上限、总长上限（格）。 */
+const DOT_GAP = 0.3;
+const DOT_MAX = 1.2;
 
 export function extendArcEnds(arcs: SlurArc[], nl: Binary, onLine: (y: number) => boolean, sp: number): void {
   const ink = (x: number, y: number) => x >= 0 && y >= 0 && x < nl.w && y < nl.h && nl.data[y * nl.w + x] === 1;
@@ -351,6 +355,28 @@ export function extendArcEnds(arcs: SlurArc[], nl: Binary, onLine: (y: number) =
     return b - a + 1;
   };
   const lineAt = (y: number) => onLine(Math.round(y)) || onLine(Math.round(y) - 1) || onLine(Math.round(y) + 1);
+  /** 弧的细尾巴二值化后断成一串点：顺切线往外走，垂直 ±2 像素内的细墨（竖向不过 `THIN_RUN` 格）都算，
+   *  断口不过 `DOT_GAP` 格，总长不过 `DOT_MAX` 格；碰上粗墨（干、杠、头）就停。返回最后一粒点，走不出去返回 null */
+  const dottedTail = (x0: number, y0: number, vx: number, vy: number): { x: number; y: number } | null => {
+    let last: { x: number; y: number; t: number } | null = null;
+    for (let t = 1; t <= sp * DOT_MAX; t++) {
+      if (t - (last?.t ?? 0) > Math.max(3, sp * DOT_GAP)) break;
+      const px = x0 + vx * t, py = y0 + vy * t;
+      let hit: { x: number; y: number } | null = null;
+      let thick = false;
+      for (let d = 0; d <= 2 && !hit; d++)
+        for (const sgn of d ? [-1, 1] : [1]) {
+          const qx = Math.round(px - vy * d * sgn), qy = Math.round(py + vx * d * sgn);
+          if (!ink(qx, qy)) continue;
+          if (vRun(qx, qy) > sp * THIN_RUN) thick = true;
+          else hit = { x: qx, y: qy };
+          break;
+        }
+      if (thick && !hit) break;
+      if (hit) last = { ...hit, t };
+    }
+    return last && last.t >= 2 ? { x: last.x, y: last.y } : null;
+  };
   for (const sl of arcs) {
     const b = sl.obj.box;
     const k = Math.max(3, Math.round(sp * 0.6));
@@ -365,6 +391,7 @@ export function extendArcEnds(arcs: SlurArc[], nl: Binary, onLine: (y: number) =
       let n = Math.hypot(vx, vy);
       vx /= n;
       vy /= n;
+      const tvx = vx, tvy = vy;
       let x = x0, y = y0, gap = 0, crossed = false, after = 0;
       let end: { x: number; y: number } | null = null;
       for (let step = 0; step < sp * EXT_MAX; step++) {
@@ -408,6 +435,8 @@ export function extendArcEnds(arcs: SlurArc[], nl: Binary, onLine: (y: number) =
         }
         break;
       }
+      // 没跨线可延的端：顺着断成点的细尾巴走（破碎 p4 m30、p7 m71 钢琴右手一组十六分上方的弧，起端尾巴断成几粒点，认出的起点落到第二个音头上）
+      if (!end) end = dottedTail(x0, y0, tvx, tvy);
       if (!end) continue;
       if (dir < 0) (sl.lx = end.x), (sl.ly = end.y);
       else (sl.rx = end.x), (sl.ry = end.y);

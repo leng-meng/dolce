@@ -185,6 +185,9 @@ export function attachEdgeSlurStarts(slurs: SlurArc[], notes: StaffNote[], sp: n
   }
 }
 
+/** 弧端越过那根干的容差（格）。 */
+const STEM_ORDER = 0.25;
+
 /**
  * 弧端挂不上符头时，把音连同它的符干一起当盒再挂一次：钢琴低音的八分一组干朝下、杠在下面，圆滑线画在杠下、
  * 弧端贴着干端，离符头三格开外（破碎 p2 低音 m2–m6 一整排）。挂上的是这根干上离弧端最近的那个头；
@@ -204,6 +207,10 @@ export function attachSlursByStem(slurs: SlurArc[], notes: StaffNote[], sp: numb
         const box = { left: Math.min(h.left, g.left), right: Math.max(h.right, g.right), top: Math.min(h.top, g.top), bottom: Math.max(h.bottom, g.bottom) };
         const v = validateSlurNote(isEnd, box, px, py, sp, sl.above);
         if (v === null) continue;
+        // 起端不在起音的干左边、止端不在止音的干右边（容 `STEM_ORDER` 格）：一组十六分上方的弧，起端的细尾巴二值化后断成几粒点，
+        // 认出的起点落到第二个音的头上方，按「头 + 干」的盒量第二个音反倒更近（破碎 p4 m30 钢琴右手，起点在第一根干右边 17 像素、第二根干左边 9 像素）
+        const sx = (g.left + g.right) / 2;
+        if ((isEnd ? px - sx : sx - px) > sp * STEM_ORDER) continue;
         // 同一根干上几个头：取离弧端最近的
         const d = v * 1e6 + Math.hypot((h.left + h.right) / 2 - px, (h.top + h.bottom) / 2 - py);
         if (d < bd) (bd = d), (best = n);

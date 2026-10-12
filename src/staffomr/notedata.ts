@@ -1761,6 +1761,7 @@ export function checkBars(
   carry?: { beats: number; beatType: number },
 ): BarCheck[] {
   const out: BarCheck[] = [];
+  const pending: { o: BarCheck; chords: StaffChord[]; inBar: StaffNote[]; overfull: (len: number) => boolean }[] = [];
   const sp = pg.normalStaffSpace || pg.space;
   let cur = { beats: carry?.beats ?? 4, beatType: carry?.beatType ?? 4 };
   for (const stf of pg.staves) {
@@ -1801,18 +1802,52 @@ export function checkBars(
       // 只救**真挤着两个声部**的：本小节时值和超过那个长度三成以上。单声部的短小节不用拆，
       // 拿它去凑只会把原来按次序写的小节改成按拍位写（宁静一首十来处，音符反掉）
       const overfull = (len: number) => inBar.filter((n) => !n.chordExtra && !n.grace).reduce((a, n) => a + n.duration, 0) > len * 1.3;
+      let split = false;
       if (full) splitVoice(chords, expect);
-      else if (short !== undefined && overfull(short) && (checkFull(chords, short, sp, false) || checkFull(chords, short, sp, true))) splitVoice(chords, short);
+      else if (short !== undefined && overfull(short) && (checkFull(chords, short, sp, false) || checkFull(chords, short, sp, true))) (split = true), splitVoice(chords, short);
       else assignVoicesInBar(inBar, expect, notes.some((n) => n.staff === stf && n.crossStaff && n.x >= bar.left && n.x < bar.right));
-      const heads = inBar.filter((n) => !n.chordExtra && !n.grace);
-      const sum = heads
-        .filter((n) => n.voice === (heads[0]?.voice ?? 1))
-        .reduce((a, n) => a + (n.sym.code === "restHBar" ? expect : n.duration), 0);
+      const sum = voiceSum(inBar, expect);
       // 分完声部第一声部正好一整小节的也算满（`checkFull` 两趟没凑上、按次序分出来却是满的：我一生要赞美你 m1-4）
-      out.push({ staff: stf, index: i, sum, expect, count: inBar.length, full: full || Math.abs(sum - expect) < 1e-6, beat });
+      const o: BarCheck = { staff: stf, index: i, sum, expect, count: inBar.length, full: full || Math.abs(sum - expect) < 1e-6, beat };
+      out.push(o);
+      if (!full && !split) pending.push({ o, chords, inBar, overfull });
     });
   }
+  // **被系统换行劈开的两半合起来正好一小节**：上面凑不满、也没按同系统那行的长度拆开的行末（行首）小节，下一系统同一行的第一小节
+  //（上一系统同一行的最后一小节）也不满、整拍，这一半的长度就是拍号减去那一半——按它再凑一次（齐来谢主歌 m4 三拍挤着两个声部、行末劈开，
+  // 下一行行首是一拍）。只对这一对试：按比拍号短的整拍数挨个试凑，别的不满小节也被按短长度拆了声部（独唱谱音符 −0.54）；
+  // 同一行里的前后小节也算邻的话，曲首弱起与认错了的下一小节配上，按错的长度拆（晨曦破晓 87.2 → 68.8）
+  for (const { o, chords, inBar, overfull } of pending) {
+    const eps = 1e-6;
+    const part = (b?: BarCheck) => !!b && !b.full && b.sum > eps && b.sum < b.expect - eps && Math.abs(b.sum / b.beat - Math.round(b.sum / b.beat)) < eps;
+    // 被系统换行劈开的：行末这一小节与下一系统同一行的第一小节、行首这一小节与上一系统同一行的最后一小节也算邻
+    const si = pg.systems.findIndex((sy) => sy.staves.includes(o.staff));
+    const k = si >= 0 ? pg.systems[si].staves.indexOf(o.staff) : -1;
+    const across = (d: 1 | -1) => {
+      const sy = pg.systems[si + d];
+      if (k < 0 || !sy || sy.staves.length !== pg.systems[si].staves.length) return undefined;
+      const st = sy.staves[k];
+      return d > 0 ? out.find((q) => q.staff === st && q.index === 0) : out.filter((q) => q.staff === st).sort((a, b) => b.index - a.index)[0];
+    };
+    const prev = o.index === 0 ? across(-1) : undefined;
+    const next = o.index === o.staff.bars.length - 1 ? across(1) : undefined;
+    for (const nb of [prev, next]) {
+      if (!part(nb) || Math.abs(nb!.expect - o.expect) > eps) continue;
+      const len = o.expect - nb!.sum;
+      // 挤着两个声部：小节里的音首尾相接要超过一整小节（拍号认错时整页小节都「不满」，晨曦破晓认成 9/4，按错的长度拆，87.2 → 68.8）
+      if (len < o.beat - eps || !overfull(len) || !overfull(o.expect / 1.3) || !(checkFull(chords, len, sp, false) || checkFull(chords, len, sp, true))) continue;
+      splitVoice(chords, len);
+      o.sum = voiceSum(inBar, o.expect);
+      break;
+    }
+  }
   return out;
+}
+
+/** 第一声部的时值和（整小节休止按拍号算满）。 */
+function voiceSum(inBar: StaffNote[], expect: number): number {
+  const heads = inBar.filter((n) => !n.chordExtra && !n.grace);
+  return heads.filter((n) => n.voice === (heads[0]?.voice ?? 1)).reduce((a, n) => a + (n.sym.code === "restHBar" ? expect : n.duration), 0);
 }
 
 /**

@@ -342,7 +342,7 @@ function extendStem(s: LineSeg, b: Rect): void {
 }
 
 /** 贴在这个符头左缘或右缘、且纵向相交的竖段。 */
-function stemOf(b: Rect, stems: LineSeg[], unit: RasterUnit, nl?: Binary, mid = false): LineSeg | null {
+export function stemOf(b: Rect, stems: LineSeg[], unit: RasterUnit, nl?: Binary, mid = false): LineSeg | null {
   const tol = Math.max(unit.lineThick * 2, unit.space * 0.25);
   for (const s of stems) {
     const x = (s.x0 + s.x1) / 2;
