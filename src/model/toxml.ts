@@ -44,14 +44,12 @@ import type {
   Time,
 } from "./doc";
 import { harmonyXml as chordTextXml } from "../score/harmonyxml";
+import { escapeAttr, escapeXml } from "../score/xmlutil";
 import { projectForMusicXml, type ProjectOptions } from "./xmlproject";
 import { SOURCE_ID_PREFIX } from "./helpers";
 import { surfaceOf, type EngravedLayout, type Position, type PrintLayout } from "./xmlsurface";
 import { t as tr } from "../i18n";
 
-const esc = (s: string): string =>
-  s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-const escAttr = (s: string): string => esc(s).replace(/"/g, "&quot;");
 
 /** 一层缩进两格，与 MuseScore 的输出习惯一致。 */
 const ind = (depth: number): string => "  ".repeat(depth);
@@ -195,7 +193,7 @@ function carriedAttrs(n: XNode, sur: Element): string {
   let out = "";
   for (const a of Array.from(sur.attributes)) {
     if (written.has(a.name) || (own.includes(a.name) && same?.[a.name] !== a.value)) continue;
-    out += ` ${a.name}="${escAttr(a.value)}"`;
+    out += ` ${a.name}="${escapeAttr(a.value)}"`;
   }
   return out;
 }
@@ -282,7 +280,7 @@ class Out {
 
   /** 文字元素 `<name attrs>text</name>` */
   text(name: string, text: string | number, attrs = "", sur?: Element): XNode {
-    return this.add({ name, attrs, kids: [], text: typeof text === "string" ? esc(text) : String(text), ...(sur ? { sur } : {}) });
+    return this.add({ name, attrs, kids: [], text: typeof text === "string" ? escapeXml(text) : String(text), ...(sur ? { sur } : {}) });
   }
 
   /** 原样的一段 XML */
@@ -312,10 +310,10 @@ function posAttrs(pos: Position | undefined): string {
 function fontAttrs(f: FontSpec | undefined): string {
   if (!f) return "";
   const a: string[] = [];
-  if (f.family !== undefined) a.push(`font-family="${escAttr(f.family)}"`);
+  if (f.family !== undefined) a.push(`font-family="${escapeAttr(f.family)}"`);
   if (f.size !== undefined) a.push(`font-size="${f.size}"`);
-  if (f.weight !== undefined) a.push(`font-weight="${escAttr(f.weight)}"`);
-  if (f.style !== undefined) a.push(`font-style="${escAttr(f.style)}"`);
+  if (f.weight !== undefined) a.push(`font-weight="${escapeAttr(f.weight)}"`);
+  if (f.style !== undefined) a.push(`font-style="${escapeAttr(f.style)}"`);
   return a.length ? " " + a.join(" ") : "";
 }
 
@@ -340,7 +338,7 @@ function writeKey(o: Out, k: Key): void {
 }
 
 function writeTime(o: Out, t: Time): void {
-  o.open("time", t.symbol ? ` symbol="${escAttr(t.symbol)}"` : "");
+  o.open("time", t.symbol ? ` symbol="${escapeAttr(t.symbol)}"` : "");
   o.text("beats", t.beats);
   o.text("beat-type", t.beatType);
   o.close();
@@ -399,9 +397,9 @@ function writeCredit(o: Out, c: Credit): void {
   if (c.y !== undefined) attrs.push(`default-y="${c.y}"`);
   if (c.justify) attrs.push(`justify="${c.justify}"`);
   if (c.halign) attrs.push(`halign="${c.halign}"`);
-  if (c.fontFamily !== undefined) attrs.push(`font-family="${escAttr(c.fontFamily)}"`);
+  if (c.fontFamily !== undefined) attrs.push(`font-family="${escapeAttr(c.fontFamily)}"`);
   if (c.fontSize !== undefined) attrs.push(`font-size="${c.fontSize}"`);
-  if (c.fontWeight !== undefined) attrs.push(`font-weight="${escAttr(c.fontWeight)}"`);
+  if (c.fontWeight !== undefined) attrs.push(`font-weight="${escapeAttr(c.fontWeight)}"`);
   const a = attrs.length ? " " + attrs.join(" ") : "";
   (c.words ?? c.text.split("\n")).forEach((line, i) => {
     // 模型只记首个 `<credit-words>` 的版式；有原节点时第二行起的版式全从原节点来（各行字体可以不同）
@@ -425,7 +423,7 @@ function harmonyXml(o: Out, h: Harmony, cx: Ctx): void {
   if (h.root.alter) o.text("root-alter", h.root.alter, h.root.alterLeft ? ' location="left"' : "");
   o.close();
   const kindAttrs =
-    (h.kindText !== undefined ? ` text="${escAttr(h.kindText)}"` : "") +
+    (h.kindText !== undefined ? ` text="${escapeAttr(h.kindText)}"` : "") +
     (h.useSymbols ? ' use-symbols="yes"' : "") + (h.parenthesesDegrees ? ' parentheses-degrees="yes"' : "");
   o.text("kind", h.kind, kindAttrs);
   if (h.bass) {
@@ -447,8 +445,8 @@ function harmonyXml(o: Out, h: Harmony, cx: Ctx): void {
 
 function lyricXml(o: Out, l: Lyric, cx: Ctx): void {
   const number = l.numberText ?? (l.refrain ? "chorus" : String(l.number));
-  const name = l.name !== undefined ? ` name="${escAttr(l.name)}"` : "";
-  o.open("lyric", ` number="${escAttr(number)}"${name}${posAttrs(cx.layout?.pos.get(l))}`, surfaceOf(l));
+  const name = l.name !== undefined ? ` name="${escapeAttr(l.name)}"` : "";
+  o.open("lyric", ` number="${escapeAttr(number)}"${name}${posAttrs(cx.layout?.pos.get(l))}`, surfaceOf(l));
   if (l.syllabic) o.text("syllabic", l.syllabic);
   o.text("text", (l.leadingPunctuation ?? "") + l.text + (l.trailingPunctuation ?? ""));
   if (l.extend) o.leaf("extend", l.extendType ? ` type="${l.extendType}"` : "");
@@ -545,7 +543,7 @@ function chordXml(o: Out, ch: Chord, starts: Mark[], stops: Mark[], cx: Ctx): vo
     o.text("voice", ch.voice);
     if (ch.duration.type) {
       const size = isChordNote ? note?.typeSize : (ch.typeSize ?? note?.typeSize);
-      o.text("type", ch.duration.type, size ? ` size="${escAttr(size)}"` : "");
+      o.text("type", ch.duration.type, size ? ` size="${escapeAttr(size)}"` : "");
     }
     for (let i = 0; i < ch.duration.dots; i++) o.leaf("dot");
     if (note?.accidental) o.text("accidental", note.accidental, note.accidentalParentheses ? ' parentheses="yes"' : "");
@@ -585,11 +583,11 @@ function chordXml(o: Out, ch: Chord, starts: Mark[], stops: Mark[], cx: Ctx): vo
 function soundAttrs(s: NonNullable<Direction["sound"]>): string {
   const a: string[] = [];
   if (s.dacapo) a.push('dacapo="yes"');
-  if (s.dalsegno) a.push(`dalsegno="${escAttr(s.dalsegno)}"`);
+  if (s.dalsegno) a.push(`dalsegno="${escapeAttr(s.dalsegno)}"`);
   if (s.fine) a.push('fine="yes"');
-  if (s.segno) a.push(`segno="${escAttr(s.segno)}"`);
-  if (s.coda) a.push(`coda="${escAttr(s.coda)}"`);
-  if (s.tocoda) a.push(`tocoda="${escAttr(s.tocoda)}"`);
+  if (s.segno) a.push(`segno="${escapeAttr(s.segno)}"`);
+  if (s.coda) a.push(`coda="${escapeAttr(s.coda)}"`);
+  if (s.tocoda) a.push(`tocoda="${escapeAttr(s.tocoda)}"`);
   if (s.tempo !== undefined) a.push(`tempo="${s.tempo}"`);
   return a.map((x) => " " + x).join("");
 }
@@ -726,7 +724,7 @@ function measureXml(
 ): void {
   const width = cx.layout?.widths.get(m);
   const mAttrs = (m.implicit ? ' implicit="yes"' : "") + (width !== undefined ? ` width="${width}"` : "");
-  o.open("measure", ` number="${escAttr(m.number)}"${mAttrs}`, surfaceOf(m));
+  o.open("measure", ` number="${escapeAttr(m.number)}"${mAttrs}`, surfaceOf(m));
   // 顺序是硬要求：print → 左线 → attributes → direction → (harmony/note)* → 右线
   printXml(o, m.print, cx.layout?.prints.get(m));
   for (const b of m.barlines ?? []) if (b.location === "left") barlineXml(o, b);
@@ -823,7 +821,7 @@ function partXml(o: Out, part: Part, song: Song, cx: Ctx): void {
     add(byStart, m.start, m);
     add(byEnd, m.end, m);
   }
-  o.open("part", ` id="${escAttr(part.id)}"`, surfaceOf(part));
+  o.open("part", ` id="${escapeAttr(part.id)}"`, surfaceOf(part));
   for (const m of part.measures) measureXml(o, m, byStart, byEnd, cx);
   o.close();
 }
@@ -863,7 +861,7 @@ export function scoreDocToMusicXml(doc: ScoreDoc, options: ToXmlOptions = {}): s
   if (song.work.movementTitle) o.text("movement-title", song.work.movementTitle);
   if (song.identification || song.meta || projected) {
     o.open("identification");
-    for (const c of song.identification?.creators ?? []) o.text("creator", c.text, ` type="${escAttr(c.type)}"`);
+    for (const c of song.identification?.creators ?? []) o.text("creator", c.text, ` type="${escapeAttr(c.type)}"`);
     if (song.identification?.rights) o.text("rights", song.identification.rights);
     o.open("encoding");
     for (const sw of song.identification?.software ?? ["Dolce"]) o.text("software", sw);
@@ -873,7 +871,7 @@ export function scoreDocToMusicXml(doc: ScoreDoc, options: ToXmlOptions = {}): s
     if (meta.length) {
       o.open("miscellaneous");
       for (const [name, vals] of meta) {
-        for (const v of vals) o.text("miscellaneous-field", v, ` name="${escAttr(name)}"`);
+        for (const v of vals) o.text("miscellaneous-field", v, ` name="${escapeAttr(name)}"`);
       }
       o.close();
     }
@@ -893,20 +891,20 @@ export function scoreDocToMusicXml(doc: ScoreDoc, options: ToXmlOptions = {}): s
   song.parts.forEach((p, pi) => {
     for (const g of groups) {
       if (span(g)[0] !== pi) continue;
-      o.open("part-group", ` type="start" number="${escAttr(g.number)}"`);
+      o.open("part-group", ` type="start" number="${escapeAttr(g.number)}"`);
       if (g.symbol) o.text("group-symbol", g.symbol);
       if (g.name) o.text("group-name", g.name);
       if (g.abbrev) o.text("group-abbreviation", g.abbrev);
       if (g.groupBarline) o.text("group-barline", "yes");
       o.close();
     }
-    o.open("score-part", ` id="${escAttr(p.id)}"`, surfaceOf(p, "score-part"));
+    o.open("score-part", ` id="${escapeAttr(p.id)}"`, surfaceOf(p, "score-part"));
     // MuseScore 兼容：`<part-name>` 留空并 print-object="no"（见 MusicXML-导出.md）
     if (p.name) o.text("part-name", p.name);
     else o.leaf("part-name", ' print-object="no"');
     if (p.abbrev) o.text("part-abbreviation", p.abbrev);
     o.close();
-    for (const g of groups) if (span(g)[1] === pi) o.leaf("part-group", ` type="stop" number="${escAttr(g.number)}"`);
+    for (const g of groups) if (span(g)[1] === pi) o.leaf("part-group", ` type="stop" number="${escapeAttr(g.number)}"`);
   });
   o.close();
 
