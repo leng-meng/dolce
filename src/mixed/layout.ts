@@ -27,6 +27,7 @@ import { Fraction } from "../common/fraction";
 import { Font } from "../layout/font";
 import { dynamicGlyphs } from "../engrave/dynamics";
 import { articGlyph } from "../engrave/articulation";
+import { decoKey } from "../model/deconames";
 import { EQ_PAD_EM } from "../engrave/spacing";
 import { GlyphCodes } from "../smufl/smufl";
 import type {
@@ -560,7 +561,12 @@ class DocPartLoader {
     // articulations（parser.cpp:1463）—— 重音/断奏/保持音/marcato/staccatissimo。
     // above/symbol 初始按上方字形，最终上下由 layoutNotations::setAbove 决定。
     for (const a of n?.articulations ?? []) {
-      // 字形走公共那一份（engrave/articulation.ts，五线谱的印法）；spiccato/stress/breath-mark/caesura 等 musicpp 未绘制，忽略
+      // 换气（`breath-mark`，123 的 `!breath!`）不是挂在符头上下的记号，单记一笔
+      if (decoKey(a) === "hx") {
+        ch.breath = true;
+        continue;
+      }
+      // 字形走公共那一份（engrave/articulation.ts，五线谱的印法）；spiccato/stress/caesura 等 musicpp 未绘制，忽略
       const symbol = articGlyph(a, false);
       if (!symbol) continue;
       const item = new NotationItem();
@@ -804,6 +810,7 @@ class DocPartLoader {
           if (start.relX !== null) w.dxLeft = start.relX;
           if (p.relX !== null) w.dxRight = p.relX;
           if (start.defY !== null) w.ypos = -start.defY;
+          else w.autoY = true;
           start = null;
         } else {
           start = p;

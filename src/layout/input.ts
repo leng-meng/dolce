@@ -75,17 +75,23 @@ export interface JChord {
   /** 增时线：占几拍（1 = 无增时线） */
   beats: number;
   rest: boolean;
+  /** 不可见休止（`x`）：占拍位、不印 */
+  hidden?: boolean;
   slurStart: boolean;
   /** 本和弦收几条弧（嵌套双弧在末音同时收两条） */
   slurEnds: number;
-  slurEndChord: JChord | null;
+  /** 从本和弦起的各条弧收在哪个和弦（同一个音起两条：外弧与内弧同起点 `((5 5) 6)`） */
+  slurEndChords: JChord[];
   fermata: boolean;
   harmony: string | null;
   /** 增时线上的和弦：下标 k 是第 k+1 条增时线（长音中途换和弦，MusicXML 的 `<harmony>` 带 `offset`）。缺省即没有 */
   sustainHarmonies?: (string | null)[];
   sectionWord: string | null;
   directions: JDirection[];
+  /** 奏法记号：`accent` / `staccato` / `tenuto` / `breath`（换气，印在音符右上） */
   articulations: string[];
+  /** 从本和弦起的渐强/渐弱，收在 `end`（同一行里画到 `end`，跨行画到行末/从行首起） */
+  wedges?: { type: "crescendo" | "diminuendo"; end: JChord }[];
   graceNotes: JGrace[];
 }
 

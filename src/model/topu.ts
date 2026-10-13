@@ -38,6 +38,7 @@ import { fillDegreesFromPitch, harmonyText, keySpelling, melodyLane, quarterTemp
 import { ownIds, ownMarks, partRanges, systemRanges, type SystemRange } from "./emitutil";
 import { relayoutDocBreaks } from "./relayout";
 import { decoKey } from "./deconames";
+import { directionMarks } from "./directionmarks";
 import { degreeOfKey, songFifths } from "./keyshift";
 
 // ───────────────────────── 头部 ─────────────────────────
@@ -159,10 +160,6 @@ const PU_COMMANDS = new Set([
   "yc", "ycy", "bc", "zy", "dy", "hx", "shy", "xhy", "sby", "xby", "cy", "tr",
   "fine", "dc", "ds", "ty", "hs", "sbf",
 ]);
-/** 文字术语 → 记号名（MusicXML 的 `<words>rit.</words>`）。 */
-const TERM_OF: Readonly<Record<string, string>> = Object.fromEntries(
-  Object.entries(TERMS).map(([name, text]) => [text, name]),
-);
 
 function commandText(o: SourceOrnament): string {
   return `&${o.name}${"+".repeat(Math.max(0, o.level))}`;
@@ -183,19 +180,14 @@ function ornamentsOf(el: { ornaments?: SourceOrnament[]; notations?: Chord["nota
   return out;
 }
 
-/** 小节里的 `<direction>`（MusicXML / `.jpwabc` 来的力度与术语）→ 挂在第几个元素上的记号。 */
+/** 小节里的 `<direction>`（MusicXML / `.jpwabc` 来的力度与术语）→ 挂在第几个元素上的记号。
+ *  拍位规则在 `directionmarks.ts`（与简谱排版视图同一份）；小节线上的 Fine/D.S. 写在本小节最后一个符号后面。 */
 function directionCommands(mea: Measure): Map<number, SourceOrnament[]> {
-  const out = new Map<number, SourceOrnament[]>();
-  for (const dir of mea.directions ?? []) {
-    let name: string | undefined;
-    if (dir.type === "dynamics" && dir.text && dir.text in DYNAMICS) name = dir.text;
-    else if (dir.type === "words" && dir.text) name = TERM_OF[dir.text.trim()] ?? decoKey(dir.text.trim());
-    else if (dir.type === "segno" || dir.type === "coda") name = decoKey(dir.type);
-    if (!name) continue;
-    const at = Math.min(dir.afterElements ?? 0, Math.max(0, mea.elements.length - 1));
-    const list = out.get(at) ?? [];
-    list.push({ name, level: 0 });
-    out.set(at, list);
+  const dm = directionMarks(mea);
+  const out = new Map(dm.byElement);
+  if (dm.barEnd.length && mea.elements.length) {
+    const last = mea.elements.length - 1;
+    out.set(last, [...(out.get(last) ?? []), ...dm.barEnd]);
   }
   return out;
 }

@@ -460,6 +460,8 @@ export class ChordLayout {
   /** 符杠逐层状态（照 `<beam>`，整声部没写时由自动符杠补） */
   beams: BeamVal[] = [];
   notations: NotationItem[] = [];
+  /** 换气记号（`breath-mark`）：画在符头右上、谱表之上（`render.ts` 的 notations 那段） */
+  breath = false;
 
   constructor(measure: PartMeasureLayout, src: DocChord, divisions: number) {
     this.measure = measure;
@@ -2053,6 +2055,8 @@ export class Wedge extends SpanObj {
   crescendo = false;
   staff = 0;
   ypos = 0;
+  /** 原文没给 default-y：自动铺排时由 `autoPlaceWedges` 定到谱表下方（歌词再让开它） */
+  autoY = false;
   dxLeft = 0;
   dxRight = 0;
 }

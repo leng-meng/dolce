@@ -82,6 +82,9 @@ export interface Ornament {
   name: string;
   level: number;
   source: SourceSpan;
+  /** **只管画**：从小节 `<direction>`（或 123 左线上的跳转目标）投到符号上的（`pu/slots.ts`，`model/directionmarks.ts`）。
+   *  演唱顺序不读（`phrasesong.ts` 收跳转时跳过）——跳转语义仍按各来源原来的口径，排版补上画出来这一半 */
+  projected?: boolean;
 }
 
 export interface NoteElement {
@@ -154,6 +157,9 @@ export interface BarlineElement {
   /** 小节线注释里的 `k:2` 曲中转调：新调主音在主调里的级数原写法（`2`、`#4`、`b7`），从本小节线之后生效，`k:1` 回主调 */
   temporaryKey?: string;
   annotation?: string;
+  /** **只管画**：下一小节的左线上起反复（MusicXML / 123 的 `|:` 记在下一小节左线上，行视图不出左线），
+   *  原样文档把这条线画成 `|:`（`:|` 画成 `:|:`）。演唱顺序不读它（反复已由模型的左线表达，`phrasesong.ts`） */
+  repeatForwardAfter?: boolean;
   code: string;
   source: SourceSpan;
 }

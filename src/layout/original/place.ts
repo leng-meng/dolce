@@ -20,12 +20,17 @@ import type {
   SustainElement,
   VoiceGroup,
 } from "../../pu/ast";
-import { contentWidth, jianpuGraceMetrics, jianpuGraceNotes, jianpuSlurRise, type JianpuGrid } from "./metrics";
+import { contentWidth, jianpuGraceMetrics, jianpuGraceNotes, jianpuSlurRise, noteMarkGap, type JianpuGrid } from "./metrics";
 import { graceAdvance, graceBottom, graceGeometry, type GraceGeom } from "../../engrave/grace";
 import { stackBottom, stackTop as stackTopOf } from "../../engrave/stack";
 import { ACCIDENTAL_CLEARANCE, accidentalLead, accidentalRise, type AccidentalKind } from "../../engrave/accidental";
 import { elementQuarters, takesLyric, tupletRatios } from "../../pu/ast";
 import { paginate, type SystemBlock } from "../../jianpu/vertical";
+import { DYNAMICS, TERMS } from "../../pu/glyph";
+import { latinWordBreak } from "../../engrave/syllable";
+
+/** 西文词间空格 ÷ 歌词字号（常见无衬线字体的空格宽约 0.28 em）。 */
+const LATIN_SPACE_EM = 0.28;
 
 /** 一个占位的谱面符号（音符 / 增时线 / 小节线）。 */
 export interface PlacedItem {
@@ -228,19 +233,20 @@ function placeColumns(
   lines.forEach((l, vi) => {
     const verses = lyrics[vi]?.length ?? 0;
     for (let v = 0; v < verses; v++) {
-      let prev: { col: number; right: number } | null = null;
+      let prev: { col: number; right: number; text: string } | null = null;
       for (const it of l.items) {
         const syl = it.syllables[v];
         if (!syl) continue;
         const e = measure(syl);
         const col = colOf(it.x);
         if (prev && col > prev.col) {
-          const d = prev.right + e.left + gap;
+          // 西文词与词之间补一个空格宽（判据同简谱引擎，engrave/syllable.ts::latinWordBreak）
+          const d = prev.right + e.left + gap + (latinWordBreak(prev.text, syl.text) ? m.size.lyric * LATIN_SPACE_EM : 0);
           const list = need.get(col) ?? [];
           list.push({ from: prev.col, d });
           need.set(col, list);
         }
-        prev = { col, right: e.right };
+        prev = { col, right: e.right, text: syl.text };
       }
     }
   });
@@ -605,10 +611,18 @@ export function graceTop(el: MusicElement, m: JianpuGrid): number | null {
  */
 export function chordLane(voice: ScoreLine, m: JianpuGrid): number {
   let lane = m.note.chordY;
+  // 力度记号按墨迹贴着音符那一摞往上一道空（compose.ts::paintOrnaments），术语走固定槽（`note.ornamentY`），
+  // 都在和弦那一槽底下：行里有和弦时，和弦整排抬到它们的墨迹顶之上（同倚音）
+  const hasChord = voice.elements.some((el) => (el.kind === "note" || el.kind === "sustain") && !!el.chord);
   for (const el of voice.elements) {
     const t = graceTop(el, m);
     // 净空按文字算（和弦是字，叠层那道空对字太紧，看着还是挨着）
     if (t !== null) lane = Math.min(lane, t - m.ink.noteHeight * 0.3);
+    if (hasChord && el.kind === "note" && el.ornaments.some((o) => DYNAMICS[o.name] || TERMS[o.name])) {
+      // 力度字形的墨迹约高一个数字墨迹高的 0.75（Bravura 力度字母的 x 高）
+      const base = Math.min(m.note.ornamentY, stackTop(el, m) - noteMarkGap(m));
+      lane = Math.min(lane, base - m.ink.noteHeight * 0.75 - m.ink.noteHeight * 0.15);
+    }
   }
   return lane;
 }
@@ -843,6 +857,40 @@ function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid): Place
       if (!nests(inner.mark, outer.mark)) continue;
       outer.y = Math.min(outer.y!, inner.y! - rise - m.note.slurLevelStep / 2);
     }
+  }
+  // **渐强渐弱**：`y` 记松叶的**底边**。贴着跨度里音符那一摞（含延长记号、弧、三连音）之上一道空；
+  // 跨度里有和弦/注释才抬到那一槽之上（从前一律抬到固定的 `hairpinY`，没和弦的行松叶悬在上一组歌词底下）
+  const lane = chordLane(voice, m);
+  for (const p of out) {
+    if (p.mark.type !== "crescendo" && p.mark.type !== "decrescendo") continue;
+    let top = Infinity;
+    for (const it of items) {
+      // 小节线上的 Fine / D.S.（画在记号槽 `ornamentY` 那条基线上，居中在线上，compose.ts::paintOrnaments）：
+      // 线离末音一个步距上下，字往左伸，按步距算进来
+      if (it.element.kind === "barline") {
+        if (it.element.ornaments.length && it.x >= p.x0 && it.x <= p.x1 + m.note.noteStep)
+          top = Math.min(top, m.note.ornamentY - m.size.chord * 0.9);
+        continue;
+      }
+      if (it.x < p.x0 - m.ink.noteHeight || it.x > p.x1 + m.ink.noteHeight) continue;
+      const el = it.element;
+      top = Math.min(top, stackTop(el, m));
+      if (el.kind === "note" && el.ornaments.some((o) => o.name === "yc" || o.name === "ycy"))
+        top = Math.min(top, stackTop(el, m) - noteMarkGap(m) - m.ink.noteHeight * 0.6);
+      const text = el.kind === "note" ? noteTextTop(el, m, lane) : el.kind === "sustain" && el.chord ? annotationTop(m, lane) : null;
+      if (text !== null) top = Math.min(top, text);
+
+    }
+    for (const q of out) {
+      if (q === p || q.y === undefined || !isArcMark(q.mark) || q.x1 < p.x0 || q.x0 > p.x1) continue;
+      top = Math.min(top, q.y - rise - m.stroke.slurThickness);
+    }
+    // 松叶与下面那一摞之间留得比弧宽：弧的那道空（`slurGap`）是让弧端贴着音符的，松叶照它放就压在数字顶上
+    const gap = Math.max(m.note.slurGap, m.ink.noteHeight * 0.3) + m.stroke.hairpinThickness / 2;
+    // 最高只到原先的固定槽位（`hairpinY`）：两组之间的空是按那个槽位预留的（`groupHeadroom`），
+    // 再往上就顶进上一组的歌词——密排多声部里弧顶比槽位还高时，退回槽位（与改动前一样贴着弧）
+    const ceiling = m.note.hairpinY + m.note.hairpinOpening / 2 - (p.level - 1) * m.note.levelStep;
+    if (Number.isFinite(top)) p.y = Math.max(ceiling, top - gap - (p.level - 1) * m.note.levelStep);
   }
   return out;
 }

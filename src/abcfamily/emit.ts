@@ -341,12 +341,14 @@ export abstract class AbcFamilyEmitter {
    *  后面的 `w:` 歌词行就成了孤儿。 */
   protected readonly trailingBreak: boolean = true;
 
-  /** 渐强渐弱的起止怎么写（Muse 的 `(<` … `<)`）。缺省 null = 这种方言写不出（123、ABC 照旧不写）。 */
+  /** 渐强渐弱的起止怎么写：缺省是 ABC 的装饰 `!crescendo(!` … `!crescendo)!`（123 同）；Muse 写 `(<` … `<)`。
+   *  null = 这种方言写不出。 */
   protected wedgeText(type: "crescendo" | "diminuendo", edge: "start" | "stop"): string | null {
-    void type;
-    void edge;
-    return null;
+    return `!${type}${edge === "start" ? "(" : ")"}!`;
   }
+
+  /** 收尾写在收尾那个音**前面**（ABC 装饰一律前置）；Muse 的 `<)` 写在后面。 */
+  protected readonly wedgeStopBefore: boolean = true;
 
   /** 段落词/注记（`Chord.sectionWord`）怎么写：ABC §4.19 的注记，`^` = 标在上方。 */
   protected annotationText(word: string): string {
@@ -540,6 +542,8 @@ export abstract class AbcFamilyEmitter {
   protected measureBody(mea: Measure, mi: MarkIndex, from = 0, to = Infinity): string {
     const pieces: string[] = [];
     let prevGroup: number | undefined;
+    /** 刚写出的那串倚音（并相邻倚音用） */
+    let prevGrace: { text: string } | undefined;
     // 小节**中间**的小节线（`[|]` 不可见线多是这种）：按它在元素流里的位置插回去。
     // 小节线是独立的条目，丢了就会把两个小节并成一个。
     const mid = (mea.barlines ?? []).filter((b) => b.location === "middle");
@@ -565,10 +569,22 @@ export abstract class AbcFamilyEmitter {
       prevVoice = voice;
       // 倚音单独成块、紧贴后一个音符
       if (ch?.grace) {
-        pieces.push(this.graceText(ch));
+        // 相邻的一串倚音（同为前/后倚音、同带不带斜线）并回一对花括号：`{2_3_}`
+        const prev = mea.elements[j - 1];
+        const g = this.graceText(ch);
+        if (prevGrace && prev?.kind === "chord" && prev.grace && pieces[pieces.length - 1] === prevGrace.text
+            && !!prev.grace.slash === !!ch.grace.slash && !!prev.grace.after === !!ch.grace.after) {
+          const merged = prevGrace.text.slice(0, -1) + g.slice(1 + this.graceSlashText(ch).length);
+          pieces[pieces.length - 1] = merged;
+          prevGrace = { text: merged };
+        } else {
+          pieces.push(g);
+          prevGrace = { text: g };
+        }
         prevGroup = undefined;
         continue;
       }
+      prevGrace = undefined;
       let s = "";
       // 和弦符号前置（规范 §8.1）
       // 从 MusicXML 读进来的和弦是结构化的（根音 + kind），没有原文就按结构拼出来
@@ -587,6 +603,7 @@ export abstract class AbcFamilyEmitter {
       // 同一个音上的开、收按嵌套排：包住多连音组的弧在外层（`((3: 1_ 2_ 3_) 4)`），其余在里层
       const tp = mi.tupletStart.get(el.id);
       const opens = mi.slurStart.get(el.id) ?? 0;
+      if (this.wedgeStopBefore) for (const w of mi.wedgeEnd?.get(el.id) ?? []) s += this.wedgeText(w, "stop") ?? "";
       for (const w of mi.wedgeStart?.get(el.id) ?? []) s += this.wedgeText(w, "start") ?? "";
       s += "(".repeat(tp?.outerArcs ?? 0);
       // ABC 按个数收尾、没有嵌套的写法，同起的几层只写最外层（以前就是这样）
@@ -598,7 +615,7 @@ export abstract class AbcFamilyEmitter {
       const closes = mi.slurEnd.get(el.id) ?? 0;
       s += ")".repeat(closes - (te?.outerArcs ?? 0));
       if (te) s += ")".repeat(te.count + te.outerArcs);
-      for (const w of mi.wedgeEnd?.get(el.id) ?? []) s += this.wedgeText(w, "stop") ?? "";
+      if (!this.wedgeStopBefore) for (const w of mi.wedgeEnd?.get(el.id) ?? []) s += this.wedgeText(w, "stop") ?? "";
 
       // 中间小节线按 `afterElements` 计数插入
       while (midIdx < mid.length && mid[midIdx]!.afterElements !== undefined

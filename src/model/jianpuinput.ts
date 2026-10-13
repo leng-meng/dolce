@@ -49,7 +49,7 @@ function newMeasure(index: number, key: JKey = { fifths: 0 }, time: JTime = { be
 function newChord(measure: JMeasure, id: ElementId | null): JChord {
   return {
     kind: "chord", id, measure, position: new Fraction(0), notes: [], dot: 0, beams: 0, beats: 0, rest: false,
-    slurStart: false, slurEnds: 0, slurEndChord: null, fermata: false, harmony: null, sectionWord: null,
+    slurStart: false, slurEnds: 0, slurEndChords: [], fermata: false, harmony: null, sectionWord: null,
     directions: [], articulations: [], graceNotes: [],
   };
 }
@@ -182,7 +182,8 @@ function xmlTitleOf(song: Song): string {
 }
 
 interface NoteMarks {
-  slurStart: boolean;
+  /** 这个音上起几条弧 */
+  slurStarts: number;
   slurStops: number;
   tupletBegin: boolean;
   tupletEnd: boolean;
@@ -221,9 +222,11 @@ function loadXmlPart(src: DocPart, song: Song): JMeasure[] {
   for (const c of pool.slurChords) {
     for (let k = 0; k < c.slurEnds; k++) {
       const s = stack.pop();
-      if (s) s.slurEndChord = c;
+      if (s) s.slurEndChords.push(c);
     }
-    if (c.slurStart) stack.push(c);
+    // 同一个音起几条弧（外弧与内弧同起点）就压几次
+    const starts = c.id === null ? 0 : Math.max(0, ...[...(marksAt.get(c.id)?.values() ?? [])].map((m) => m.slurStarts));
+    for (let k = c.slurStart ? Math.max(1, starts) : 0; k > 0; k--) stack.push(c);
   }
   // 延音线：起止各按拍位排序后逐个配
   const starts = pool.tieNotes.filter((n) => n.tieStart).sort((a, b) => absTick(a).compareTo(absTick(b)));
@@ -242,12 +245,12 @@ function marksByNote(song: Song): Map<number, Map<number, NoteMarks>> {
     let byNote = out.get(id);
     if (!byNote) out.set(id, (byNote = new Map()));
     let m = byNote.get(k);
-    if (!m) byNote.set(k, (m = { slurStart: false, slurStops: 0, tupletBegin: false, tupletEnd: false }));
+    if (!m) byNote.set(k, (m = { slurStarts: 0, slurStops: 0, tupletBegin: false, tupletEnd: false }));
     return m;
   };
   for (const mk of song.marks) {
     if (mk.type === "slur") {
-      at(mk.start, mk.startNote ?? 0).slurStart = true;
+      at(mk.start, mk.startNote ?? 0).slurStarts += 1;
       at(mk.end, mk.endNote ?? 0).slurStops += 1;
     } else if (mk.type === "tuplet") {
       at(mk.start, mk.startNote ?? 0).tupletBegin = true;
@@ -424,7 +427,7 @@ function xmlNote(
   if (chord) {
     if (k === 0 && el.notations?.fermata) chord.fermata = true;
     if (k === 0) for (const a of el.notations?.articulations ?? []) if (decoKey(a) === "zy") chord.articulations.push("accent");
-    if (mk?.slurStart) chord.slurStart = true;
+    if (mk?.slurStarts) chord.slurStart = true;
     if (mk && mk.slurStops > chord.slurEnds) chord.slurEnds = mk.slurStops;
   }
   return nt;
@@ -713,6 +716,8 @@ function rowsPart(
   let curKey = key;
   let curTime = time;
   const seen = new Set<DocMeasure>();
+  /** 开着的渐强渐弱：起点和弦与 Mark（跨行的续接端在下一行接着找收尾） */
+  const wedgeOpen: { from: JChord; type: "crescendo" | "diminuendo" }[] = [];
   const open = (src: DocMeasure | undefined): JMeasure => {
     const m = newMeasure(measures.length, curKey, curTime);
     if (src && !seen.has(src)) {
@@ -758,6 +763,12 @@ function rowsPart(
         if (lastChord) {
           lastChord.beats += 1;
           lastChord.duration = nominal(lastChord);
+          // 长音中途换的和弦印在对应那条增时线上（下标 = 第几条增时线 − 1）
+          if (decorate && el.chord) {
+            const list = (lastChord.sustainHarmonies ??= []);
+            while (list.length < lastChord.beats - 1) list.push(null);
+            list[lastChord.beats - 2] = el.chord;
+          }
         }
         if (el.lyricAnchor && lastChord) attachLyrics(lyrics, cursors, lastChord);
         return;
@@ -819,6 +830,18 @@ function rowsPart(
       ch.beams = Math.max(0, Math.round(Math.log2(el.duration / 4)));
       ch.dot = el.dots;
       if (el.hidden || el.sound === "rest" || el.sound === "rhythm" || nt.number === "0") ch.rest = true;
+      if (el.hidden) ch.hidden = true;
+      if (decorate) {
+        for (const m of marksAt(line.marks, index, "crescendo").concat(marksAt(line.marks, index, "decrescendo"))) {
+          const type = m.type === "crescendo" ? "crescendo" : "diminuendo";
+          if (m.end === index && !m.continuationToNext) {
+            const k = wedgeOpen.map((w) => w.type).lastIndexOf(type);
+            const open = k >= 0 ? wedgeOpen.splice(k, 1)[0] : undefined;
+            if (open) (open.from.wedges ??= []).push({ type, end: ch });
+          }
+          if (m.start === index && !m.continuationFromPrevious) wedgeOpen.push({ from: ch, type });
+        }
+      }
 
       const tup = marksEdgeAt(line.marks, index, "tuplet");
       if (tup.starts) nt.tupletBegin = true;
@@ -834,9 +857,11 @@ function rowsPart(
       for (let k = 0; k < slurEnds; k++) {
         ch.slurEnds++;
         const from = slurOpen.pop();
-        if (from) from.slurEndChord = ch;
+        if (from) from.slurEndChords.push(ch);
       }
-      if (slurHits.some((m) => m.start === index && !m.continuationFromPrevious)) {
+      // 同一个音可以起几条弧（`((5_ 5_) 6)`：外弧与内弧同起点），各压一次栈
+      for (const m of slurHits) {
+        if (m.start !== index || m.continuationFromPrevious) continue;
         ch.slurStart = true;
         slurOpen.push(ch);
       }
@@ -858,17 +883,25 @@ function rowsPart(
   return measures;
 }
 
+/** 文本谱 `&xx` 记号 → 引擎画的奏法记号名（`entry.ts::addNotations`）。 */
+const ARTIC_OF_ORNAMENT: Readonly<Record<string, string>> = { zy: "accent", dy: "staccato", bc: "tenuto", hx: "breath" };
+
 /**
  * 原样档（`decorate`）才要的那几样：和弦、段落词、重音、力度/术语、倚音。展开档不画它们（投影片只要旋律与词）。
- * 只收引擎画得出的：奏法记号引擎只有重音（`entry.ts::addNotations`），其余 `&xx` 暂不出现。
+ * 只收引擎画得出的：奏法记号是重音、顿音、保持音、换气（`entry.ts::addNotations`），其余 `&xx` 暂不出现。
  */
 function decorateChord(ch: JChord, el: NoteElement): void {
   if (el.chord) ch.harmony = el.chord;
   if (el.annotation) ch.sectionWord = el.annotation;
   for (const orn of el.ornaments) {
-    if (orn.name === "zy") ch.articulations.push("accent");
+    const art = ARTIC_OF_ORNAMENT[orn.name];
+    if (art) ch.articulations.push(art);
     else if (DYNAMICS[orn.name]) ch.directions.push({ text: DYNAMICS[orn.name]!, music: true, italic: false });
     else if (TERMS[orn.name]) ch.directions.push({ text: TERMS[orn.name]!, music: false, italic: true });
+    // 挂在音符上的跳转记号：segno / coda（左线上的跳转目标，`docView` 挂到小节头一个音上）印在音符上方；
+    // Fine / D.S. 落到音符上的（小节没有右线）照小节线上的口径贴着小节末
+    else if (BARLINE_MARKS[orn.name]?.glyph) ch.directions.push({ text: BARLINE_MARKS[orn.name]!.glyph!, music: true, italic: false });
+    else if (BARLINE_MARKS[orn.name]?.text) ch.directions.push({ text: BARLINE_MARKS[orn.name]!.text!, music: false, italic: false, atBarEnd: true });
   }
   ch.graceNotes = el.graceBefore.map((g) => ({ number: String(g.pitch), jpOctave: g.octave, jpAlter: jpAlterOf(g), duration: g.duration }));
 }
@@ -1006,7 +1039,10 @@ export function jianpuInputOfJpw(doc: ScoreDoc): JScore | null {
   });
   const last = measures[measures.length - 1];
   if (last && part.endBreak) breakAtMeasureEnd(last, part.endBreak === "page");
-  for (const { from, to } of slurEnds) from.slurEndChord = byId.get(to) ?? null;
+  for (const { from, to } of slurEnds) {
+    const end = byId.get(to);
+    if (end) from.slurEndChords.push(end);
+  }
   pairTuplets(tupletNotes);
   layoutTimes(measures, true);
 

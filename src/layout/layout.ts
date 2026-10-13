@@ -11,7 +11,9 @@ import { addEndingBracket, labelBaseline } from "../engrave/ending";
 import { TupletGlyph } from "../engrave/tuplet";
 import type { Font } from "./font";
 import { measureDuration, type JChord, type JMeasure, type JNote, type JScore } from "./input";
-import { getOrNull, PageItem, Group, TextFrame, SmuflText, JpNumber, Lyric, Tie, slurStyleOf, type SlurTieBase } from "./pageitem";
+import { getOrNull, PageItem, Group, GraphicPath, TextFrame, SmuflText, JpNumber, Lyric, Tie, slurStyleOf, type SlurTieBase } from "./pageitem";
+import { hairpinPath } from "../engrave/hairpin";
+import { latinWordBreak } from "../engrave/syllable";
 import type { SlurStyle } from "../engrave/arc";
 import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, BeamLine, EntryItemInfo, entryBounds, normalizeEntryX, placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "./entry";
 import { LayoutOptions } from "./options";
@@ -36,6 +38,10 @@ export class Line {
   beamGroups = new Map<JChord, BeamGroup>();
   /** Arcs drawn on this line, in line coordinates (see clipBarlinesUnderSlurs). */
   slurTies: SlurTieBase[] = [];
+  /** 渐强/渐弱（`addWedges` 画的），进上方带第 0 层 */
+  wedges: { item: GraphicPath; x0: number; x1: number; top: number; bottom: number }[] = [];
+  /** 上面各行起头、收在本行的渐强渐弱（`Layout.layout` 断行后填） */
+  carriedWedges: { start: JChord; end: JChord; type: "crescendo" | "diminuendo" }[] = [];
   /** 三连音括线的**墨迹盒**（绝对，相对 `Line.group`）。`addTuplet` 现画现记：
    *  括线是 GraphicPath + SMuFL 数字拼的（engrave/tuplet.ts），事后从 bound 反推不如画的时候顺手记准。
    *  上方带堆叠（`stackAbove`）与房号车道都读它。 */
@@ -290,6 +296,7 @@ export class Line {
     curX = 0;
     let offset = 0;
     let prevBlank = 0; // 上一条歌词末字右侧的留白（见下面的「标点挤压」）
+    let prevLatin: string[] = []; // 上一条歌词各段的文字（判西文词间要不要补空格）
     for (const e of this.entries) {
       // **各段歌词一起算**：叠排时一个音符底下摞着好几段，只按第一段留位置的话，
       // 字更多的那几段就会互相压上去（156《百只羊有九十九》第 2 段 `主说那只亦我所有,`
@@ -318,12 +325,17 @@ export class Line {
       const hang = Math.max(0, Math.min(Math.min(...lrcs.map((l) => l.leadWidth)), room, this.lyricGap));
       const leftMost = Math.min(...lrcs.map((l) => l.x)) + hang;
       const rightMost = Math.max(...lrcs.map((l) => l.x + l.width));
-      const xx = Math.max(curX - leftMost, e.group.x + offset);
+      // **西文的词与词之间要留一个空格**（`love, and joy?` 照中文挨排就成了 `love,andjoy?`）：字距之外补一个空格宽。
+      // 判据走公共那一份（engrave/syllable.ts::latinWordBreak）；各段里有一段要补就补
+      const wordGap = lrcs.some((l, k) => latinWordBreak(prevLatin[k] ?? prevLatin[0] ?? "", l.text))
+        ? lrcs[0]!.font.measureText(" ") : 0;
+      const xx = Math.max(curX + wordGap - leftMost, e.group.x + offset);
       offset = xx - e.group.x;
       e.group.x = xx;
       curX = xx + rightMost + this.lyricGap;
       // 各段里**留白最少**的那一段说了算（有一段挤不下就是挤不下）
       prevBlank = Math.min(...lrcs.map((l) => l.tailBlank));
+      prevLatin = lrcs.map((l) => l.text);
     }
   }
 
@@ -677,6 +689,9 @@ export class Line {
       };
       items.push({ key: s, x0, x1, top, bottom, layer: 0, rank: s.width, kind: "slur", topAt });
     }
+    // layer 0：渐强渐弱（跨度小的留在下面，同弧）
+    for (const w of this.wedges)
+      items.push({ key: w.item, x0: w.x0, x1: w.x1, top: w.top, bottom: w.bottom, layer: 0, rank: w.x1 - w.x0, kind: "wedge" });
     // layer 0：三连音括线（盒子是 addTuplet 现画现记的）
     for (const b of this.tupletBoxes) {
       // 只有数字那一小段是高的，横线那一截只有线宽（见 addTuplet 里记盒子那儿的注释）
@@ -782,7 +797,7 @@ export class Line {
       // 底下那一层（弧、三连音括线）也得算：470《出到营外》的 `mf` 就压在三连音括线上。
       const low = this.bandBoxes.filter((b) => b.layer === 0);
       const hits = (x0: number): boolean =>
-        chords.some((c) => c.base - size * 0.85 < bot && c.base + size * 0.25 > top
+        chords.some((c) => c.inkTop < bot && c.base + size * 0.25 > top
           && c.x1 > x0 - size * 0.35 && c.x0 < x0 + grp.width + size * 0.35)
         || low.some((b) => b.top < bot && b.bottom > top
           && b.x1 > x0 - size * 0.35 && b.x0 < x0 + grp.width + size * 0.35);
@@ -793,7 +808,7 @@ export class Line {
       // 差 0.3pt 挨着的和弦一个都选不中，`left` 成了 Infinity，于是明明往左让一让就行，
       // 却直接抬到了上面一层（344《万古磐石为我开》的 `Fine`）。
       const left = chords
-        .filter((c) => c.base - size * 0.85 < bot && c.base + size * 0.25 > top
+        .filter((c) => c.inkTop < bot && c.base + size * 0.25 > top
           && c.x1 > grp.x - size * 0.35 && c.x0 < grp.x + grp.width + size * 0.35)
         .reduce((m, c) => Math.min(m, c.x0), Infinity);
       // **让位不许越过左边那条小节线**：`D.S.` / `Fine` 标的是**这一小节**唱到哪儿为止，
@@ -817,9 +832,9 @@ export class Line {
       for (const c of chords) {
         if (c.x1 <= grp.x || c.x0 >= grp.x + grp.width) continue;
         // 和弦盒的顶是**字体 ascent**（纯文本那档 `inkBound` 是关的），比真墨迹高一截；
-        // 照它让位，记号就比和弦高出一大块（064《啊！圣善夜》的 Segno）。按墨迹顶算。
-        // 墨迹顶 = 基线 − 0.85 个字号（与 line-check 判压那把尺子同口径）
-        lowTop = Math.min(lowTop, c.base - size * 0.85);
+        // 照它让位，记号就比和弦高出一大块（064《啊！圣善夜》的 Segno）。按各段文字的墨迹顶算
+        //（上标 `Am⁷` 的 7 比字母高，照字号估的 0.85 会压上去）。
+        lowTop = Math.min(lowTop, c.inkTop);
       }
       grp.y = Number.isFinite(lowTop) ? lowTop - opt.jpStackGap - grp.height : grp.y - size * 1.2;
     }
@@ -1172,13 +1187,89 @@ export class Line {
       if (!(e instanceof NoteEntry)) continue;
       const nt = e.chord.notes[0];
       if (!e.chord.slurStart) continue;
-      const endCh = e.chord.slurEndChord;
-      const endEntry = endCh ? this.chordEntry.get(endCh) : undefined;
-      if (!endEntry) continue;
-      const ypos = Math.min(this.slurTop(e, opt, true), this.slurTop(endEntry, opt, false));
-      const nb = endCh!.notes[0];
-      this.addSlurTie(nt, nb, ypos);
+      for (const endCh of e.chord.slurEndChords) {
+        const endEntry = this.chordEntry.get(endCh);
+        if (!endEntry) continue;
+        // **弧套弧**：同一个端点上还起/收着更短的弧（`((5_ 5_) 6)` 外弧与内弧同起点、`(3 (4 3) 2)` 同终点），
+        // 外弧在那一头要叠在内弧之上——内弧有几层就抬几格，否则两条从同一点出发、起头叠成一条（同原样文档、混排）
+        const ypos = Math.min(this.slurTop(e, opt, true), this.slurTop(endEntry, opt, false))
+          - this.nestedArcsAt(e.chord, endCh) * opt.jpDotRung;
+        this.addSlurTie(nt, endCh.notes[0], ypos);
+      }
     }
+  }
+
+  /** 本行里起头、收尾不在本行的渐强渐弱。 */
+  openWedges(): { start: JChord; end: JChord; type: "crescendo" | "diminuendo" }[] {
+    const out: { start: JChord; end: JChord; type: "crescendo" | "diminuendo" }[] = [];
+    for (const e of new Set(this.chordEntry.values()))
+      for (const w of e.chord.wedges ?? []) if (!this.chordEntry.has(w.end)) out.push({ start: e.chord, end: w.end, type: w.type });
+    return out;
+  }
+
+  /**
+   * 渐强/渐弱：画在音符上方（同原样文档），底边落在这一段音符最高的那一摞（含弧端让位）之上，
+   * 与弧、三连音、奏法记号一起进上方带第 0 层堆叠（`collectBandItems`）。
+   * 跨行的照弧的口径：起头那行画到行末、开口只张到六成；收尾那行从行首接着张到全开。
+   * 尺寸按数字墨迹高 H：全开口 0.7 H（原样文档 7pt / 约 10pt 墨迹高），线宽 0.07 H。
+   */
+  private addWedges(opt: LayoutOptions): void {
+    const notes = this.entries.filter((e): e is NoteEntry => e instanceof NoteEntry);
+    if (!notes.length) return;
+    const H = opt.numberBound("1").height;
+    const half = H * 0.35, lw = H * 0.07, part = 0.6;
+    const cxOf = (e: NoteEntry): number => e.group.x + e.number!.x + e.number!.cx;
+    const draw = (x0: number, x1: number, type: "crescendo" | "diminuendo", f0: number, f1: number): void => {
+      if (x1 <= x0) return;
+      let bottom = Infinity;
+      for (const e of notes) {
+        const c = cxOf(e);
+        if (c < x0 - H || c > x1 + H) continue;
+        bottom = Math.min(bottom, this.slurTop(e, opt, true)); // 行坐标：数字基线在 0，同弧（`addSlurTie`）
+      }
+      if (!Number.isFinite(bottom)) return;
+      const y = bottom - half;
+      const [h0, h1] = type === "crescendo" ? [half * f0, half * f1] : [half * f1, half * f0];
+      const item = hairpinPath({ x0, x1, y, half0: h0, half1: h1, lineWidth: lw, color: opt.color });
+      item.classes.add("hairpin");
+      this.group.add(item);
+      this.wedges.push({ item, x0, x1, top: y - half - lw / 2, bottom: y + half + lw / 2 });
+    };
+    const last = notes[notes.length - 1]!;
+    const lineRight = last.group.x + last.number!.x + last.number!.width;
+    for (const e of new Set(this.chordEntry.values())) {
+      for (const w of e.chord.wedges ?? []) {
+        const end = this.chordEntry.get(w.end);
+        const x0 = cxOf(e) - H * 0.3;
+        if (end) draw(x0, cxOf(end) + H * 0.3, w.type, 0, 1);
+        else draw(x0, lineRight, w.type, 0, part);
+      }
+    }
+    for (const w of this.carriedWedges) {
+      const end = this.chordEntry.get(w.end);
+      if (!end) continue;
+      draw(Math.max(0, cxOf(notes[0]!) - H * 0.9), cxOf(end) + H * 0.3, w.type, part, 1);
+    }
+  }
+
+  /** 本行里与 `start`→`end` 这条弧共一个端点、又套在它里面的弧（圆滑线与延音线）有几条。 */
+  private nestedArcsAt(start: JChord, end: JChord): number {
+    const order = new Map<JChord, number>();
+    this.entries.forEach((e, i) => {
+      if (e instanceof NoteEntry && !order.has(e.chord)) order.set(e.chord, i);
+    });
+    const s0 = order.get(start), e0 = order.get(end);
+    if (s0 === undefined || e0 === undefined) return 0;
+    let n = 0;
+    for (const [c, i] of order) {
+      const ends = [...c.slurEndChords, ...(c.notes[0]?.tieStart && c.notes[0].tieNext ? [c.notes[0].tieNext.chord] : [])];
+      for (const d of ends) {
+        const j = order.get(d);
+        if (j === undefined || (c === start && d === end)) continue;
+        if ((i === s0 && j < e0) || (j === e0 && i > s0)) n++;
+      }
+    }
+    return n;
   }
 
   /** 上面各行起头、收在本行的弧（`Layout.layout` 断行后填）。 */
@@ -1191,8 +1282,9 @@ export class Line {
       const nt = e.chord.notes[0];
       const tieEnd = nt.tieStart ? nt.tieNext?.chord : undefined;
       if (tieEnd && !this.chordEntry.has(tieEnd)) out.push({ start: e.chord, end: tieEnd, tie: true });
-      const slurEnd = e.chord.slurStart ? e.chord.slurEndChord : null;
-      if (slurEnd && !this.chordEntry.has(slurEnd)) out.push({ start: e.chord, end: slurEnd, tie: false });
+      for (const slurEnd of e.chord.slurStart ? e.chord.slurEndChords : []) {
+        if (!this.chordEntry.has(slurEnd)) out.push({ start: e.chord, end: slurEnd, tie: false });
+      }
     }
     return out;
   }
@@ -1261,6 +1353,10 @@ export class Line {
         const to = lines.slice(i + 1).find((x) => x.chordEntry.has(arc.end));
         if (to && !to.carriedArcs.some((a) => a.start === arc.start && a.end === arc.end && a.tie === arc.tie)) to.carriedArcs.push(arc);
       }
+      for (const w of l.openWedges()) {
+        const to = lines.slice(i + 1).find((x) => x.chordEntry.has(w.end));
+        if (to && !to.carriedWedges.some((a) => a.start === w.start && a.end === w.end)) to.carriedWedges.push(w);
+      }
     });
     // 跨行的房：上一行结束时还开着的房号，下一行开头接着画（不重印房号、不画左脚）
     let openEnding: string | null = null;
@@ -1274,6 +1370,7 @@ export class Line {
       l.addTie(opt);
       l.addSlur(opt);
       l.addCarriedArcs(opt);
+      l.addWedges(opt);
       l.spreadChordsHorizontally(opt, width);
       l.addDirections(opt, width);
       // 上方带堆叠要排在 addSlur 之后（要弧的实际位置）、addEnding 之前
@@ -1623,16 +1720,18 @@ export class Line {
   /** 本行已经排好的和弦盒子——段落词的落位与让位都照它算。
    *  `y` 是盒顶（**字体 ascent**，不是墨迹顶），`base` 是那条基线：
    *  两者差着 ascent，按「盒顶 + 一个字号」估基线会差出一个点（Times 的 ascent 是 0.9 em）。 */
-  private chordBoxes(): { x0: number; x1: number; y: number; base: number }[] {
-    const out: { x0: number; x1: number; y: number; base: number }[] = [];
+  private chordBoxes(): { x0: number; x1: number; y: number; base: number; inkTop: number }[] {
+    const out: { x0: number; x1: number; y: number; base: number; inkTop: number }[] = [];
     for (const e of this.entries) {
       if (!(e instanceof NoteEntry)) continue;
       for (const it of this.chordGroups(e)) {
         const tf = it.children.find((c): c is TextFrame => c instanceof TextFrame);
+        const base = e.group.y + it.y + (tf ? tf.y : it.height);
         out.push({
           x0: e.group.x + it.x, x1: e.group.x + it.x + it.width,
           y: e.group.y + it.y,
-          base: e.group.y + it.y + (tf ? tf.y : it.height),
+          base,
+          inkTop: chordInkTop(it, e.group.y + it.y) ?? base,
         });
       }
     }
@@ -2070,4 +2169,22 @@ function beamGroupsOf(m: JMeasure): Map<JChord, BeamGroup> {
     curStart = start;
   }
   return res;
+}
+
+/** 和弦组（`layoutHarmonySegs` 产的）各段文字的墨迹顶，页面坐标；`y0` 是组原点的页面 y。没有文字返回 null。 */
+function chordInkTop(grp: Group, y0: number): number | null {
+  let top = Infinity;
+  const visit = (g: Group, oy: number, scale: number): void => {
+    for (const c of g.children) {
+      if (c instanceof TextFrame) {
+        top = Math.min(top, oy + scale * (c.y + c.font.charBound(c.text).top));
+      } else if (c instanceof Group) {
+        const m = c.matrix;
+        const sy = m ? Math.abs(m.scaleY) || 1 : 1;
+        visit(c, oy + scale * (c.y + (m ? m.translateY : 0)), scale * sy);
+      }
+    }
+  };
+  visit(grp, y0, 1);
+  return Number.isFinite(top) ? top : null;
 }

@@ -30,6 +30,7 @@ import { augDotCenter } from "../../engrave/augdot";
 import { AccidentalGlyph, type AccidentalKind } from "../../engrave/accidental";
 import { syllableRun } from "../../engrave/syllable";
 import { hairpinPath } from "../../engrave/hairpin";
+import { breathPath } from "../../engrave/breath";
 import { BarStyle } from "../../score/enums";
 import type { Metadata, NoteElement } from "../../pu/ast";
 import ORIGINAL_SS from "../../style/books/original.ss?raw";
@@ -104,8 +105,6 @@ interface OriginalCtx {
 }
 
 // 歌词联合括号：尺寸对照印刷原版量得（单位 = 歌词字号）
-// 换气记号 V 的**尖底**离基线多远（单位 = 数字墨迹高，照原版矢量量的）
-const BREATH_Y = 0.522;
 const BRACE_GAP = 0.09;        // 末字右缘（含右边距）到括号左缘
 const BRACE_TOP = 0.78;        // 首行基线往上
 const BRACE_BOTTOM_UP = 0.16;  // 末行基线往上（括号底不到基线）
@@ -377,10 +376,20 @@ function systemMetrics(c: OriginalCtx, group: PlacedGroup, page?: PlacedPage): {
   // 段号排在 [细竖线] ← 间隙 → [段号] ← 间隙 → [歌词首字] 之间
   const labelToLyric = m.size.verseNum * 0.2;
   const lineToLabel = m.size.verseNum * 0.55;
-  const firstCharHalf = m.size.lyric * 0.5;
+  // 首字前面挂出去的前置标点（`“高`，音节按主体居中、引号伸到左边，engrave/syllable.ts）也得让：
+  // 只按半个字宽留，段号就压在引号上、连谱号压到引号
+  const lyricFont = new Font(m.font.text, m.size.lyric);
+  let lead = 0;
+  for (const v of group.voices) {
+    for (const line of v.voice.lyrics) {
+      const syl = line.syllables.find((x) => x?.text);
+      if (syl) lead = Math.max(lead, syllableRun(syl.text, lyricFont, m.look.punctCompress).lead);
+    }
+  }
+  const firstCharHalf = m.size.lyric * 0.5 + lead;
   const labelSlot =
     slotWidth > 0 ? firstCharHalf + labelToLyric + slotWidth + lineToLabel : 0;
-  const thinX = notesLeft - Math.max(labelSlot, m.note.barlineSpace * 0.55);
+  const thinX = notesLeft - Math.max(labelSlot, m.note.barlineSpace * 0.55, lead > 0 ? firstCharHalf + labelToLyric : 0);
   const braceX = thinX - m.ink.noteHeight * 0.55;
   const labelLeft =
     labelWidth > 0 ? notesLeft - (firstCharHalf + labelToLyric + labelWidth) : notesLeft;
@@ -894,8 +903,10 @@ function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, ba
     }
     case "crescendo":
     case "decrescendo": {
-      const y = baseline + m.note.hairpinY - (mk.level - 1) * m.note.levelStep;
       const half = m.note.hairpinOpening / 2;
+      // `mk.y` 是松叶底边（`placeMarks` 按跨度里的音符与和弦定的）；没有才退回固定槽位
+      const y = mk.y !== undefined ? baseline + mk.y - half - m.stroke.hairpinThickness / 2
+        : baseline + m.note.hairpinY - (mk.level - 1) * m.note.levelStep;
       const open = mk.mark.type === "crescendo";
       // 画法走公共那一份（engrave/hairpin.ts，与五线谱同一笔）
       root.add(hairpinPath({
@@ -1148,8 +1159,9 @@ function paintOrnaments(c: OriginalCtx,
   x: number,
   baseline: number,
   /** 音符上方堆叠顶（相对基线，含高八度点，见 layout.ts::stackTop）；小节线/增时线上的记号不传 */
-  top = -c.metrics.ink.noteHeight / 2,
+  noteTop?: number,
 ): void {
+  const top = noteTop ?? -c.metrics.ink.noteHeight / 2;
   if (ornaments.length === 0) return;
   const m = c.metrics;
   let slot = 0;
@@ -1170,16 +1182,8 @@ function paintOrnaments(c: OriginalCtx,
     }
 
     if (orn.name === "hx") {
-      // 换气：原版是一个细笔画的 **V**，挂在音符的**右上角**——锚点在音符右 0.75、
-      // 尖底只在基线上方 0.52（都是墨迹高的倍数，照原版矢量量的），不是 SMuFL 的逗号。
-      const cx = x + m.ink.noteHeight * 0.75;
-      const w = m.ink.noteHeight * 0.383;
-      const vy = baseline - m.ink.noteHeight * BREATH_Y;
-      const p = stroke(c.ink, 1.1);
-      p.moveTo(cx - w / 2, vy - m.ink.noteHeight * 0.477);
-      p.lineTo(cx, vy);
-      p.lineTo(cx + w / 2, vy - m.ink.noteHeight * 0.477);
-      g.add(p);
+      // 换气：细笔画的 V 挂在音符右上角（形状与落点走公共那一份，engrave/breath.ts）
+      g.add(breathPath(x, baseline, m.ink.noteHeight, 1.1, c.ink));
       continue;
     }
 
@@ -1203,7 +1207,11 @@ function paintOrnaments(c: OriginalCtx,
     if (dyn) {
       const font = new Font("Bravura", c.digitFont.size * 0.95);
       const w = font.measureText(dyn);
-      g.add(text(dyn, x - w / 2, y, font, c.ink));
+      // 按**墨迹**贴着音符那一摞（含高八度点）往上一道空（同延长记号）——固定槽位 `ornamentY` 不随字号走，
+      // 数字一大力度就压到数字顶上；小节线、增时线上的（不传 top）照旧走槽位
+      const ab = font.charBound(dyn);
+      const dy = noteTop !== undefined && slot === 0 ? baseline + top - noteMarkGap(m) - ab.bottom : y;
+      g.add(text(dyn, x - w / 2, dy, font, c.ink));
       slot += 1;
       continue;
     }
@@ -1276,9 +1284,12 @@ function paintBarline(c: OriginalCtx,
   // 纵向范围仍是文本谱自己的（`barlineHeight` 居中于基线、再加 spanHeight），
   // 那是照原版量的，不是谱面那套 jpStaffTop/Bottom。
   const half = m.note.barlineHeight * 0.5;
-  const spec = PU_BARLINE_SPEC[el.type];
+  // 下一小节左线上起反复（`repeatForwardAfter`）：这条线画成 `|:` / `:|:`
+  const type = el.repeatForwardAfter && el.type === "normal" ? "repeat-start"
+    : el.repeatForwardAfter && el.type === "repeat-end" ? "repeat-both" : el.type;
+  const spec = PU_BARLINE_SPEC[type];
   if (!spec) return null;
-  const r = new BarlineGlyph(spec, el.type === "end", {
+  const r = new BarlineGlyph(spec, type === "end", {
     top: -half,
     bot: half + spanHeight,
     light: m.stroke.barline,

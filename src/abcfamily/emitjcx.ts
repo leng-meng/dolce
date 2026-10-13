@@ -158,6 +158,8 @@ export class EmitterJcx extends AbcFamilyEmitter {
 
   protected override readonly annotationBeforeChord = true;
 
+  protected override readonly wedgeStopBefore = false;
+
   /** 渐强 `(<` … `<)`、渐弱 `(>` … `>)` */
   protected override wedgeText(type: "crescendo" | "diminuendo", edge: "start" | "stop"): string {
     const c = type === "crescendo" ? "<" : ">";

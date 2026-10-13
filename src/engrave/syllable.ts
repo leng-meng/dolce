@@ -45,3 +45,14 @@ export function syllableRun(text: string, font: Font, compress: CompressMode): S
     tail: width - at(nl + nc),
   };
 }
+
+/**
+ * 相邻两个音节之间要不要补一个**西文词间空格**（三引擎共用的判据）。中文一字一格挨着排没问题，
+ * 西文照中文挨排就成了 `love,andjoy?`、`十love`。交界的任一侧是西文——后一个以西文字母开头，
+ * 或前一个以西文字母/数字收尾（后面可以跟半角标点；`主啊,` 这种中文带半角逗号的不算）——就补；
+ * 前一个以连字符 `-` 收尾的是词中断开的音节，不补。
+ */
+export function latinWordBreak(prev: string, next: string): boolean {
+  if (!prev || !next || prev.endsWith("-")) return false;
+  return /^[A-Za-zÀ-ɏ]/.test(next) || /[A-Za-zÀ-ɏ0-9][,.;:!?'")]*$/.test(prev);
+}

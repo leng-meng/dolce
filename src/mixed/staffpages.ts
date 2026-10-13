@@ -10,7 +10,7 @@ import { Matrix33 } from "../common/geom";
 import { Font } from "../layout/font";
 import { Group, TextFrame } from "../layout/pageitem";
 import type { StaffLeafData } from "./prims";
-import { harmonyBand, LCR, StaffLayout, Notation, ScoreCredit, Sys } from "./model";
+import { harmonyBand, LCR, StaffLayout, Notation, ScoreCredit, Sys, type TextBlock } from "./model";
 import { drawSystem } from "./render";
 
 // -----------------------------------------------------------------------
@@ -25,6 +25,18 @@ import { drawSystem } from "./render";
  */
 /** 混排简谱层顶（数字顶）到自动放置的文字记号基线的净空：留给简谱层上方的弧与高音点（tenths） */
 const MIXED_TEXT_CLEAR = 16;
+
+/** 文字块的高（避让用）：乐谱字体（力度、速度记号里的音符）**不能按字体度量算**——Bravura 的全局
+ *  ascent−descent 约 4 个字号，一个 `mp` 就把块撑成好几行高；按字号的 0.6 估它的墨迹，文字照字体盒。 */
+function textInkHeight(t: TextBlock): number {
+  let h = 0;
+  for (const it of t.data) {
+    if (it.text === "\n") continue;
+    const fm = it.font.metrics;
+    h = Math.max(h, it.music ? it.font.size * 0.6 : fm.descent - fm.ascent);
+  }
+  return h;
+}
 /** 五线谱档：谱表内容上沿到和弦符号墨迹底的净空（tenths） */
 const HARMONY_STAFF_GAP = 6;
 
@@ -76,9 +88,26 @@ export function placeAboveStaff(score: StaffLayout, mixed: boolean): void {
       // 自动铺排时和弦行也在它下面，再抬过和弦。带 default-y 的原文不动（照 musicpp）。
       let floor = mixed ? -st.minY + eng.mixStaffDist + eng.mixStaffHeight + MIXED_TEXT_CLEAR : -st.minY + MIXED_TEXT_CLEAR;
       if (score.autoLayout && st.hasHarmony) floor = Math.max(floor, st.harmonyY + 3 + harmTop + MIXED_TEXT_CLEAR / 2);
+      // 横向撞上的（曲首的速度记号与 `mp` 落在同一拍上）往上摞：y 是谱表之上的高度，大的在上
+      const placed: { x0: number; x1: number; y0: number; y1: number }[] = [];
       for (const m of sys.measures) {
         for (const t of p.measures[m.index]?.textBlocks ?? []) {
-          if (t.autoY && t.staff === 0 && t.y < floor) t.y = floor;
+          if (!t.autoY || t.staff !== 0) continue;
+          if (t.y < floor) t.y = floor;
+          const w = t.width();
+          const x0 = m.xpos() + t.x - (t.justify === LCR.Center ? w / 2 : t.justify === LCR.Right ? w : 0);
+          const x1 = x0 + w;
+          const h = textInkHeight(t);
+          for (let again = true; again; ) {
+            again = false;
+            for (const b of placed) {
+              if (b.x1 + MIXED_TEXT_CLEAR / 2 <= x0 || b.x0 >= x1 + MIXED_TEXT_CLEAR / 2) continue;
+              if (t.y + h <= b.y0 || t.y >= b.y1) continue;
+              t.y = b.y1 + MIXED_TEXT_CLEAR / 2;
+              again = true;
+            }
+          }
+          placed.push({ x0, x1, y0: t.y, y1: t.y + h });
         }
       }
     }

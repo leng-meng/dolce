@@ -12,6 +12,7 @@ import { GraphicPath, Group, Slur as SlurArc, TextFrame } from "../layout/pageit
 import { GlyphCodes } from "../smufl/smufl";
 import { BarStyle } from "../score/enums";
 import {
+  LegerLayout,
   BarGlyph,
   BeamVal,
   ClefSig,
@@ -49,6 +50,9 @@ import { hairpinPath } from "../engrave/hairpin";
 import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../engrave/chord";
 import { addLine, addSmufl, addSmuflScaled, chordGroup, STAFF_SYSTEM, translated, type StaffLeafData, type StaffSystemData } from "./prims";
 import { drawJianpuOverlay } from "./jianpuoverlay";
+
+/** SMuFL breathMarkComma（U+E4CE）。 */
+const BREATH_COMMA = String.fromCharCode(0xe4ce);
 
 function addFilledQuad(
   g: Group,
@@ -124,6 +128,16 @@ export function drawNotesNormal(
       } else {
         addSmufl(chordGrp(), code, x, y, fs);
       }
+      // 倚音不进 NoteEntry（不参与同拍对齐），加线在这里按它自己的小号符头补画——
+      // 否则 `{5,,}` 这种落到谱表外的倚音悬在半空
+      if (ch.grace && !ch.rest) {
+        const leg = new LegerLayout();
+        leg.addNote(n.line(), x, x + smuflWidth(meta, code) * scale);
+        for (const [ledgerLine, [lx1, lx2]] of leg.ranges) {
+          const ly = -ledgerLine * 5;
+          addLine(chordGrp(), lx1 - 3 * scale, ly, lx2 + 3 * scale, ly, eng.lineWidths.leger);
+        }
+      }
     }
 
     // stem and flag (skip rests, whole notes, half notes with beams)
@@ -170,9 +184,14 @@ export function drawNotesNormal(
 
   // ---- notations (fermata 等) —— render.cpp:328 drawChord 非简谱分支 ----
   for (const ch of md.chords) {
-    if (ch.notations.length === 0 || ch.notes.length === 0) continue;
+    if ((ch.notations.length === 0 && !ch.breath) || ch.notes.length === 0) continue;
     if (ch.notes[0].staff !== subStaff) continue;
     const stemX = ch.stemX();
+    // 换气：SMuFL 逗号（breathMarkComma），符头右边一格、谱表第一线之上半格
+    if (ch.breath) {
+      const left = ch.stemUp && ch.noteType.compareTo(new Fraction(4)) < 0 ? stemX - ch.noteheadWidth(meta) : stemX;
+      addSmufl(container, BREATH_COMMA, left + ch.noteheadWidth(meta) + 8, -5, fs);
+    }
     for (const nota of ch.notations) {
       let x = stemX + nota.dx;
       if (ch.stemUp && ch.noteType.compareTo(new Fraction(4)) < 0) {

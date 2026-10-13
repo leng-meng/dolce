@@ -201,7 +201,8 @@ export function buildMeasures(
       const noteJumps = (mea: MeasureOut, onBarline: boolean): void => {
         if (!("ornaments" in el)) return;
         for (const orn of el.ornaments) {
-          if (JUMP_NAMES.has(orn.name)) jumps.push({ name: orn.name, measure: measures.indexOf(mea), onBarline });
+          // 只供画的投影（MusicXML direction 投过来的 D.C. / Fine）不进演唱顺序，见 `Ornament.projected`
+          if (JUMP_NAMES.has(orn.name) && !orn.projected) jumps.push({ name: orn.name, measure: measures.indexOf(mea), onBarline });
         }
       };
       const attach = (ch: ChordOut): void => {

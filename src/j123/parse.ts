@@ -116,8 +116,10 @@ interface PartBuild {
   clef?: Clef;
   /** 123 的后置 `~` 还没配到下一个音：起点和弦与 `~` 的位置。存在声部级，`~` 可以跨 `$` 行 */
   arcNext: { from: ElementId; source: SourceSpan } | null;
-  /** 开着的渐强渐弱（Muse 的 `(<` … `<)`），起点同弧一样由 `attach` 回填 */
+  /** 开着的渐强渐弱（Muse 的 `(<` … `<)`、ABC 的 `!crescendo(!` … `!crescendo)!`），起点同弧一样由 `attach` 回填 */
   openWedges: OpenMark[];
+  /** ABC 装饰写的渐强渐弱收尾（`!crescendo)!`）：装饰写在**收尾那个音前面**，等下一个元素挂上才落成 Mark */
+  wedgeCloseNext: { type: "crescendo" | "diminuendo"; source: SourceSpan }[];
   /** 行内 `[L:…]` 改过的默认音长：**只管这个声部**（ABC §7：声部里的行内字段只作用于该声部），
    *  交错或分块写的别的声部仍用头部的 `L:` */
   len?: DefaultLen;
@@ -468,6 +470,16 @@ function buildMusicLine(
   let beamGroup = 0;
   let sawSpaceSinceLastNote = true;
 
+  /** 收一条渐强渐弱：配同类型最近开的那条，收在 `end` 上 */
+  const closeWedge = (type: "crescendo" | "diminuendo", end: ElementId | undefined, source: SourceSpan, abc = false): void => {
+    const k = pb.openWedges.map((o) => o.wedgeType).lastIndexOf(type);
+    const open = k >= 0 ? pb.openWedges.splice(k, 1)[0]! : undefined;
+    if (open?.start && end !== undefined) {
+      marks.push({ type: "wedge", start: open.start, end, wedgeType: type, ...(open.openSource ? { openSource: open.openSource } : {}), closeSource: source });
+    } else {
+      report(ctx, "unmatched-wedge", tr(abc ? "diag.abc.wedge" : "diag.jcx.wedge"), source);
+    }
+  };
   const attach = (el: Element): void => {
     if (pending.chord !== undefined) {
       el.harmony = { root: { step: "C", alter: 0 }, kind: "", text: pending.chord };
@@ -520,6 +532,10 @@ function buildMusicLine(
     for (const o of openSlurs) if (!o.start) o.start = el.id;
     for (const o of openTuplets) if (!o.start) o.start = el.id;
     for (const o of pb.openWedges) if (!o.start) o.start = el.id;
+    if (pb.wedgeCloseNext.length && !(el.kind === "chord" && el.grace)) {
+      for (const w of pb.wedgeCloseNext) closeWedge(w.type, el.id, w.source, true);
+      pb.wedgeCloseNext = [];
+    }
     // 123：组内**所有**占时值的元素（音符、`0`、`x`、`X`）都按比例折算；嵌套的比例相乘
     if (ctx.d.tupletClose === "paren" && el.kind === "chord" && !el.grace && openTuplets.length) {
       let actual = 1;
@@ -759,6 +775,15 @@ function buildMusicLine(
         // 跳转记号不是音符上的装饰，而是挂在小节线上的（`Barline.ornaments`）。
         // 写在线**之后**（小节还一个元素都没有）的是**左线**上的记号——segno/coda 这类跳转目标；
         // 写在线之前的攒着，等下面 `case "barline"` 把它挂到那条右线上。
+        // ABC 的渐强渐弱 `!crescendo(!` / `!<(!` … `!crescendo)!` / `!<)!`（渐弱 `diminuendo` / `>`）：
+        // 起点同弧一样由下一个元素回填；收尾的装饰写在收尾那个音**前面**，也等下一个元素
+        const wedge = /^(crescendo|<|diminuendo|decrescendo|>)([()])$/.exec(deco);
+        if (wedge) {
+          const type = wedge[1] === "crescendo" || wedge[1] === "<" ? "crescendo" : "diminuendo";
+          if (wedge[2] === "(") pb.openWedges.push({ type: "wedge", start: 0, level: 0, wedgeType: type, openSource: t.source });
+          else pb.wedgeCloseNext.push({ type, source: t.source });
+          break;
+        }
         const jump = jumpOrnamentName(deco);
         if (jump && pb.measure.elements.length === 0) {
           const bls = (pb.measure.barlines ??= []);
@@ -773,17 +798,21 @@ function buildMusicLine(
       }
 
       case "grace": {
-        const ch: Chord = {
-          kind: "chord",
-          id: ctx.ids.next(),
-          notes: (t.notes ?? []).map((g) => ctx.d.note(g)),
-          duration: { divisions: 0, dots: 0, type: graceType(t.notes?.[0]) },
-          grace: { ...(t.acciaccatura ? { slash: true } : {}), ...(t.graceAfter ? { after: true } : {}) },
-          voice: pb.voice,
-          staff: 1,
-          source: t.source,
-        };
-        pb.measure.elements.push(ch);
+        // 花括号里的几个音是**一串**倚音（ABC §4.12 `{gab}`），一个音一个 grace 元素——
+        // 与 MusicXML、文本谱的导入同一口径；从前塞进一个和弦，五线谱就把 `{2_ 3_}` 画成了两音同时的和弦倚音
+        for (const g of t.notes ?? []) {
+          const ch: Chord = {
+            kind: "chord",
+            id: ctx.ids.next(),
+            notes: [ctx.d.note(g)],
+            duration: { divisions: 0, dots: 0, type: graceType(g) },
+            grace: { ...(t.acciaccatura ? { slash: true } : {}), ...(t.graceAfter ? { after: true } : {}) },
+            voice: pb.voice,
+            staff: 1,
+            source: t.source,
+          };
+          pb.measure.elements.push(ch);
+        }
         break;
       }
 
@@ -879,13 +908,7 @@ function buildMusicLine(
           pb.openWedges.push({ type: "wedge", start: 0, level: 0, wedgeType: type, openSource: t.source });
           break;
         }
-        const k = pb.openWedges.map((o) => o.wedgeType).lastIndexOf(type);
-        const open = k >= 0 ? pb.openWedges.splice(k, 1)[0]! : undefined;
-        if (open?.start && cur.last) {
-          marks.push({ type: "wedge", start: open.start, end: cur.last.id, wedgeType: type, ...(open.openSource ? { openSource: open.openSource } : {}), closeSource: t.source });
-        } else {
-          report(ctx, "unmatched-wedge", tr("diag.jcx.wedge"), t.source);
-        }
+        closeWedge(type, cur.last?.id, t.source);
         break;
       }
 
@@ -1335,6 +1358,7 @@ export function parseAbcFamily(
     inlineBreak: null,
     arcNext: null,
     openWedges: [],
+    wedgeCloseNext: [],
   });
   /** `V:n` 切到声部 n：没有就新开，有就**续写**（不收尾它开着的小节）。四声部谱靠这个分开，否则会被拼成一串小节。 */
   const startPart = (voice: number): PartBuild => {

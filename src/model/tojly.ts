@@ -275,12 +275,16 @@ function planJly(measures: readonly JMeasure[], warnings: Set<string>): JlyPlan 
   }
   const has = (c: JChord, v: number): boolean => (at.get(c)?.get(v)?.length ?? 0) > 0;
 
-  // 圆滑线分组：引擎输入已经把配对算好（`slurStart` + `slurEndChord`），这里不用自己搭栈。
+  // 圆滑线分组：引擎输入已经把配对算好（`slurStart` + `slurEndChords`），这里不用自己搭栈。
   const groups: { start: number; end: number; melisma: boolean }[] = [];
   const tieAfter = new Set<JChord>();
   order.forEach((c, i) => {
     if (!c.slurStart) return;
-    const j = c.slurEndChord ? index.get(c.slurEndChord) : undefined;
+    // LilyPond 一个音上只起得了一条 `(`：同起点的几条弧只写最内那条（最先收的），外弧略过
+    addGroup(c, i, c.slurEndChords[0] ?? null);
+  });
+  function addGroup(c: JChord, i: number, end: JChord | null): void {
+    const j = end ? index.get(end) : undefined;
     // 配不上对的弧线**不写**：写了 LilyPond 会拿到一个没有收尾的 `(`。
     if (j === undefined || j < i) { warnings.add("有配不上对的圆滑线（少了收尾），已略过"); return; }
     // 一字多音：每一段在这组里至多一个音节，且落在组首——才敢用会吞音节的 `(`。
@@ -292,7 +296,7 @@ function planJly(measures: readonly JMeasure[], warnings: Set<string>): JlyPlan 
     //   —— 写成 `(` `)` 上游会排成圆滑线、MIDI 也会重新起音。
     if (melisma && j === i + 1 && samePitch(c, order[j]!)) { tieAfter.add(c); return; }
     groups.push({ start: i, end: j, melisma });
-  });
+  }
   const slurOpen = new Map<JChord, string>();
   const slurClose = new Map<JChord, string>();
   const closing = new Map<number, { start: number; melisma: boolean }[]>();

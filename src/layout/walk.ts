@@ -16,6 +16,9 @@
 
 import { GraphicLine, GraphicPath, PageItem, TextFrame } from "./pageitem";
 
+/** 只占位、不印的图元的类名（`walkPageItem` 跳过）。 */
+export const INVISIBLE = "invisible";
+
 export interface ItemVisitor<M> {
   /**
    * 进入 `item` 之后，它的**自身绘制与子级**该用哪个坐标载体。
@@ -44,6 +47,8 @@ export interface ItemVisitor<M> {
  * 的派生，`instanceof` 的先后决定谁接住它们，visitor 内部自己再细分。
  */
 export function walkPageItem<M>(item: PageItem, parent: M, v: ItemVisitor<M>): void {
+  // 只占位、不印的图元（不可见休止 `x` 的那个 0）：排版照常量它，四个出口一律不画
+  if (item.classes.has(INVISIBLE)) return;
   const m = v.descend(item, parent);
   if (item instanceof GraphicPath) v.path?.(item, m);
   else if (item instanceof GraphicLine) v.line?.(item, m);

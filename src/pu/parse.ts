@@ -39,11 +39,12 @@ import { puToScoreDoc } from "../model/frompu";
 import type { ScoreDoc } from "../model/doc";
 import { PU_LYRIC_PUNCTUATION, PU_LYRIC_QUOTES } from "../common/cjkpunct";
 import { t as tr } from "../i18n";
+import { DYNAMICS } from "./glyph";
 
 /** 音符后可跟的记号名（`&xx`）。不在表里的会报 unknown-command 但仍保留。 */
 const NOTE_COMMANDS = new Set([
   "zkh", "ykh", // 伴奏括弧
-  "ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sf", "fp", "sfp", "sfz", // 力度
+  ...Object.keys(DYNAMICS), // 力度（名表在 pu/glyph.ts，与画法同一份）
   "cresc", "dim", "rit", "tempo", "atempo", // 术语
   "yc", "ycy", "bc", "zy", "dy", "hx", // 延长/保持/重音/顿音/呼吸
   "shy", "xhy", "sby", "xby", "cy", "tr", // 滑音/波音/颤音

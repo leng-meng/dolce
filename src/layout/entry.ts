@@ -6,6 +6,8 @@ import { KeyLabel, keyNameOfFifths } from "../engrave/keysig";
 import { beamY, highDotY, lowDotY, stackBottom, stackTop } from "../engrave/stack";
 import { augDotCenter } from "../engrave/augdot";
 import { articGlyph } from "../engrave/articulation";
+import { INVISIBLE } from "./walk";
+import { breathPath } from "../engrave/breath";
 import { ACCIDENTAL_CLEARANCE, AccidentalGlyph, accidentalKindOf } from "../engrave/accidental";
 import { Point, Rect } from "../common/geom";
 import type { CompressMode } from "../common/cjkpunct";
@@ -523,13 +525,21 @@ export class NoteEntry extends Entry {
       ent.group.add(t);
       ent.notations.push(t);
     }
-    // 重音（原书 34 处，全是 `<accent>`）。与 fermata 同一带，堆叠时一起算（layer 0）。
+    // 奏法记号（重音、顿音、保持音…）。与 fermata 同一带，堆叠时一起算（layer 0）：同一个音上
+    // 几个记号先都落在同一条线上，撞上的由上方带逐个往上抬（`Line.stackAbove`）。
+    // 换气不进这一带：它是挂在音符右上角的 V（engrave/breath.ts），不压在数字正上方。
     for (const a of ch.articulations) {
-      if (a !== "accent") continue;
+      if (a === "breath") {
+        const H = options.numberBound("1").height;
+        ent.group.add(breathPath(ent.number!.x + ent.number!.cx, 0, H, H * 0.07, options.color));
+        continue;
+      }
+      const glyph = articGlyph(a, true);
+      if (!glyph) continue;
       const t = new SmuflText(options);
       t.color = options.color;
       t.classes.add("artic");
-      t.text = articGlyph("accent", true);
+      t.text = glyph;
       t.y = NoteEntry.notationTop(options, ent);
       t.x += ent.number!.x + ent.number!.cx;
       t.x -= t.bound.width / 2;
@@ -575,6 +585,7 @@ export class NoteEntry extends Entry {
     it.color = options.color;
     it.text = ch.notes[0].number;
     it.font = options.noteFont;
+    if (ch.hidden) it.classes.add(INVISIBLE); // 不可见休止 `x`：照 0 占位，不印
     ent.add(it);
     NoteEntry.addAccidental(it, options, ch, ent);
     if (ch.beats <= 1 && ch.dot > 0) NoteEntry.addAugDots(it, options, ch.dot, ent);
@@ -594,6 +605,7 @@ export class NoteEntry extends Entry {
       it.text = num;
       it.color = options.color;
       it.font = options.noteFont;
+      if (ch.hidden) it.classes.add(INVISIBLE);
       ent.add(it);
       // 长音中途换的和弦印在对应那条增时线上
       NoteEntry.addHarmony(ch, options, ent, it, ch.sustainHarmonies?.[i - 1] ?? null);

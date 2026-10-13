@@ -41,7 +41,7 @@ export const ORNAMENTS: Readonly<Record<string, OrnamentGlyph>> = {
 
 /** 文本谱认的力度名（语法表）；字形走公共那一份（engrave/dynamics.ts），与五线谱、简谱引擎同一套。 */
 export const DYNAMICS: Readonly<Record<string, string>> = Object.fromEntries(
-  ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sf", "fp", "sfp", "sfz"].map((n) => [n, dynamicGlyphs(n)]),
+  ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sf", "fp", "sfp", "sfz", "sffz", "fz", "rf", "rfz"].map((n) => [n, dynamicGlyphs(n)]),
 );
 
 /** 术语类记号：直接排文字。 */
