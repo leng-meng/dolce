@@ -115,6 +115,9 @@ export function placeLayers(
         : items[hostAt]!.x - m.ink.noteHeight * 1.07 - SPLIT_BRACE_W;
     }
     if (tailHasNote) {
+      // 上行段末自带的小节线（`{dsb 1 - - - | }`）不画：块后那条线只在主行画一条正常高度的（原版 `}|`），
+      // 两条都画就在上行与主行之间连成一根长线
+      for (let k = laid.items.length - 1; k >= 0 && laid.items[k]!.element.kind === "barline"; k--) laid.items[k]!.noBarline = true;
       // 右花括号收在并排段最后一个音符之后、那条小节线**之前**。间距与左括号对称：
       // 离相邻音符 1.07、离小节线 0.48 个墨迹高（《太阳出来喜洋洋》里多处一致）
       placed.braceRightX = items[noteEnd]!.x + m.ink.noteHeight * 1.07;
