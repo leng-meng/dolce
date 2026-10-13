@@ -116,7 +116,7 @@ export function paintNote(c: OriginalCtx,
 
   // `&xx` 记号
   const before = g.children.length;
-  paintOrnaments(c, g, note.ornaments, x, baseline, stackTop(note, c.metrics), undefined, noteTextTop(note, m, c.chordLane) ?? undefined, it.fermataTop);
+  paintOrnaments(c, g, note.ornaments, x, baseline, stackTop(note, c.metrics), undefined, noteTextTop(note, m, c.chordLane) ?? undefined, it.arcTop);
   for (const it of g.children.slice(before)) it.ident = { kind: "deco" };
 
   root.add(g);
@@ -188,8 +188,8 @@ export function paintOrnaments(c: OriginalCtx,
   bar?: { right: number; top: number },
   /** 音符头顶和弦/注释那行字的墨迹顶（相对基线）：有的话力度、术语摞到它之上，不压在和弦底下 */
   textTop?: number,
-  /** 压在音上的弧那一截的墨迹顶（相对基线，`PlacedItem.fermataTop`）：延长记号摞到它之上 */
-  fermataTop?: number,
+  /** 压在音上的弧那一截的墨迹顶（相对基线，`PlacedItem.arcTop`）：延长记号、力度摞到它之上 */
+  arcTop?: number,
 ): void {
   const top = noteTop ?? -c.metrics.ink.noteHeight / 2;
   if (ornaments.length === 0) return;
@@ -230,7 +230,7 @@ export function paintOrnaments(c: OriginalCtx,
         // 延长记号按**墨迹**贴着音符堆叠顶（含高八度点）放，净距与减时线、八度点同一个值
         // （metrics.ts::alignNoteMarks）；走 laneOrnament 固定槽位离音符太远（用户口径）。
         const ab = font.charBound(glyph.glyph);
-        const under = fermataTop !== undefined ? Math.min(top, fermataTop) : top;
+        const under = arcTop !== undefined ? Math.min(top, arcTop) : top;
         add(text(glyph.glyph, x - w / 2, baseline + under - noteMarkGap(m) - ab.bottom, font, c.ink), "artic");
       } else {
         add(text(glyph.glyph, x - w / 2, y, font, c.ink), "artic");
@@ -246,8 +246,9 @@ export function paintOrnaments(c: OriginalCtx,
       // 按**墨迹**贴着音符那一摞（含高八度点）往上一道空（同延长记号）——固定槽位 `ornamentY` 不随字号走，
       // 数字一大力度就压到数字顶上；小节线、增时线上的（不传 top）照旧走槽位
       const ab = font.charBound(dyn);
-      const dy = textTop !== undefined ? baseline + textTop - noteMarkGap(m) - slot * m.ink.noteHeight - ab.bottom
-        : noteTop !== undefined && slot === 0 ? baseline + top - noteMarkGap(m) - ab.bottom : y;
+      const under = arcTop !== undefined ? Math.min(top, arcTop) : top;
+      const dy = textTop !== undefined ? baseline + Math.min(textTop, under) - noteMarkGap(m) - slot * m.ink.noteHeight - ab.bottom
+        : noteTop !== undefined && slot === 0 ? baseline + under - noteMarkGap(m) - ab.bottom : y;
       add(text(dyn, x - w / 2, dy, font, c.ink), "direction");
       slot += 1;
       continue;

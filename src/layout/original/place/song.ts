@@ -7,6 +7,7 @@ import { placeColumns } from "./spacing";
 import { type BeatCtx, assignLyrics, computeUnderlines, layoutVoiceLine, lineEndsWithForwardRepeat } from "./voice";
 import { GROUP_CLEAR, braceReach, splitRise, wordsLead, chordLane, groupHeadroom, lineInkBottom, stackTop, voiceHeadroom } from "./vertical";
 import { isArcMark, placeMarks } from "./marks";
+import { DYNAMICS } from "../../../pu/glyph";
 import { arcHeight } from "../../../engrave/arc";
 import { placeLayers } from "./layers";
 
@@ -31,16 +32,16 @@ function braceStartX(voices: readonly PlacedVoice[]): number | null {
 }
 
 /**
- * 延长记号让弧（同简谱引擎上方带「点状标记让弧，不是弧让它」）：弧端或弧身压在带延长记号的音上时，
- * 记下那一段弧的墨迹顶（`PlacedItem.fermataTop`），延长记号摞到它之上（compose/note.ts::paintOrnaments）。
+ * 延长记号、力度让弧（同简谱引擎上方带「点状标记让弧，不是弧让它」）：弧端或弧身压在带这些记号的音上时，
+ * 记下那一段弧的墨迹顶（`PlacedItem.arcTop`），记号摞到它之上（compose/note.ts::paintOrnaments）。
  * 弧身按抛物线近似（端点贴音、中点最高），量延长记号那一截宽。
  */
-function fermataOverArcs(items: readonly PlacedItem[], marks: readonly PlacedMark[], m: JianpuGrid): void {
+function marksOverArcs(items: readonly PlacedItem[], marks: readonly PlacedMark[], m: JianpuGrid): void {
   const style = jianpuSlurStyle(m, 0);
   const half = m.ink.noteHeight * 0.5;
   for (const it of items) {
     const el = it.element;
-    if (el.kind !== "note" || !el.ornaments.some((o) => o.name === "yc" || o.name === "ycy")) continue;
+    if (el.kind !== "note" || !el.ornaments.some((o) => o.name === "yc" || o.name === "ycy" || DYNAMICS[o.name])) continue;
     let top = Infinity;
     for (const mk of marks) {
       if (mk.y === undefined || !isArcMark(mk.mark) || (mk.dy ?? 0) !== (it.dy ?? 0)) continue;
@@ -53,7 +54,7 @@ function fermataOverArcs(items: readonly PlacedItem[], marks: readonly PlacedMar
       };
       top = Math.min(top, at(it.x - half), at(it.x), at(it.x + half)) - m.style.stroke.slur;
     }
-    if (Number.isFinite(top)) it.fermataTop = top;
+    if (Number.isFinite(top)) it.arcTop = top;
   }
 }
 
@@ -183,7 +184,7 @@ export function layoutSong(
           (_, li) => y + lyricY0 + splitDrop + li * m.style.vertical.lyricStack,
         );
         const marks = placeMarks(voice, l.items, m);
-        fermataOverArcs(l.items, marks, m);
+        marksOverArcs(l.items, marks, m);
         // 并排块的上行会顶到跳房子/记号的高度，跨过它的记号要整体抬到上行之上。
         // 跳房子还得**整行一起抬**——原版里一房二房的横线是同一条高度。
         let voltaLift = 0;

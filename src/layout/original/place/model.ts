@@ -24,8 +24,8 @@ export interface PlacedItem {
   dy?: number;
   /** 小节线不画（分声部前的空声部，见 song.ts::hideEmptyBarlines）；占位照旧 */
   noBarline?: true;
-  /** 压在这个音上的弧那一截的墨迹顶（相对基线）：延长记号摞到它之上（song.ts::fermataOverArcs） */
-  fermataTop?: number;
+  /** 压在这个音上的弧那一截的墨迹顶（相对基线）：延长记号、力度摞到它之上（song.ts::marksOverArcs） */
+  arcTop?: number;
 }
 
 /** 一条跨若干符号的记号（弧线 / 多连音 / 跳房子 / 渐强渐弱），已换算成行内坐标。 */

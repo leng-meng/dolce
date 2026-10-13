@@ -42,15 +42,21 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
       break;
     }
     case "tuplet": {
-      // 多连音：弧线在正中**被连音数字断开**（原版如此）。画法走公共那一份（engrave/tuplet.ts）：
-      // 与同页 slur 同一条月牙挖掉数字那一截，数字是 SMuFL 的 tuplet 字形、按墨迹坐在弧顶。
+      // 多连音：括线或两段弧（样式键 `tuplet-style`，出厂括线同 500 首；番茄、诗歌本风格是弧），在正中**被连音数字断开**。
+      // 画法走公共那一份（engrave/tuplet.ts，与简谱引擎同一套）：弧与同页 slur 同一条月牙挖掉数字那一截；
+      // 括线的脚落在弧端那条线上（`mk.y`），横线在它之上一个脚长。数字是 SMuFL 的 tuplet 字形、按墨迹坐在线上。
       const y = baseline + (mk.y ?? m.note.slurY - (mk.level - 1) * m.note.slurLevelStep);
       // 连音数取模型里的实际数（`caption` = tupletActual），没有才按跨了几个符号数
       const n = Number(mk.mark.caption) || mk.mark.end - mk.mark.start + 1;
-      const tg = new TupletGlyph(new Point(x0, y), new Point(x1, y), n, {
-        kind: "arc",
+      const bracket = m.style.look.tupletStyle === "bracket";
+      const foot = m.style.vertical.bracketFoot > 0 ? m.style.vertical.bracketFoot * 0.55 : m.style.size.note * 0.25;
+      const ly = bracket ? y - foot : y;
+      const tg = new TupletGlyph(new Point(x0, ly), new Point(x1, ly), n, {
+        kind: bracket ? "bracket" : "arc",
         color: c.ink,
         music: new Font("Bravura", c.digitFont.size),
+        lineWidth: m.style.stroke.bracket > 0 ? m.style.stroke.bracket : 1,
+        foot,
         arc: jianpuSlurStyle(m, c.ink),
       });
       for (const it of tg.items) root.add(it);
@@ -64,18 +70,25 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
         : baseline + m.note.hairpinY - (mk.level - 1) * m.note.levelStep;
       const open = mk.mark.type === "crescendo";
       // 起点音上有力度（`9>&mf`）：松叶从力度字右边起（同原版 `mf>`），不从音符左边压过去
+      // 收尾音上有力度（`9)!&pp`）同理：松叶收在力度字左边
       let hx0 = x0;
-      const st = mk.startEl;
-      const dyn = !mk.openLeft && st?.kind === "note" ? st.ornaments.find((o) => DYNAMICS[o.name]) : undefined;
-      if (dyn) {
-        const w = new Font("Bravura", c.digitFont.size * DYNAMIC_SIZE).measureText(DYNAMICS[dyn.name]!);
-        const noteX = x0 + m.ink.noteHeight * 0.55; // placeMarks 给松叶往外扩的那半个字宽
-        const after = noteX + w / 2 + m.ink.noteHeight * 0.25;
-        if (after < x1 - m.ink.noteHeight) hx0 = after;
+      let hx1 = x1;
+      const dynFont = new Font("Bravura", c.digitFont.size * DYNAMIC_SIZE);
+      const dynOf = (el: PlacedMark["startEl"]) => el?.kind === "note" ? el.ornaments.find((o) => DYNAMICS[o.name]) : undefined;
+      const spread = m.ink.noteHeight * 0.55; // placeMarks 给松叶往外扩的那半个字宽
+      const d0 = mk.openLeft ? undefined : dynOf(mk.startEl);
+      if (d0) {
+        const after = x0 + spread + dynFont.measureText(DYNAMICS[d0.name]!) / 2 + m.ink.noteHeight * 0.25;
+        if (after < hx1 - m.ink.noteHeight) hx0 = after;
+      }
+      const d1 = mk.openRight ? undefined : dynOf(mk.endEl);
+      if (d1) {
+        const before = x1 - spread - dynFont.measureText(DYNAMICS[d1.name]!) / 2 - m.ink.noteHeight * 0.25;
+        if (before > hx0 + m.ink.noteHeight) hx1 = before;
       }
       // 画法走公共那一份（engrave/hairpin.ts，与五线谱同一笔）
       root.add(hairpinPath({
-        x0: hx0, x1, y, half0: open ? 0 : half, half1: open ? half : 0, lineWidth: m.style.stroke.hairpin, color: c.ink,
+        x0: hx0, x1: hx1, y, half0: open ? 0 : half, half1: open ? half : 0, lineWidth: m.style.stroke.hairpin, color: c.ink,
       }));
       break;
     }

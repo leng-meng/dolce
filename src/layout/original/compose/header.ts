@@ -67,10 +67,17 @@ function keyLineInk(c: OriginalCtx, meta: Metadata): { top: number; bottom: numb
  */
 function keyLineY(c: OriginalCtx, meta: Metadata): number {
   const m = c.metrics;
-  const leftLines = Math.max(meta.topLeft.length, rightColumnLines(meta));
+  const leftLines = Math.max(topLines(meta.topLeft).length, rightColumnLines(meta));
   if (leftLines > 0) return m.head.creditBaseline + leftLines * m.head.creditLineHeight + m.style.size.keyMeter * 0.6;
   if (meta.titles.length === 0) return m.head.keyMeterBaseline;
   return titleInkBottom(c, meta) + m.style.size.lyric - keyLineInk(c, meta).top;
+}
+
+/** `TL:` / `TR:` 去掉开头的空行：左右两块顶部对齐（用户定；《圣哉三一歌》TR 前两行留空是为了底对齐，不照它） */
+function topLines(lines: readonly string[]): readonly string[] {
+  let i = 0;
+  while (i < lines.length && !lines[i]!.trim()) i++;
+  return lines.slice(i);
 }
 
 /** 词曲署名逐行：一条署名里换了行（MusicXML `<creator>` 常把「作词：…\n作曲：…」写成一条）照原样分行，不并成一行 */
@@ -80,13 +87,13 @@ function authorLines(meta: Metadata): string[] {
 
 /** 右侧那一列的行数：`TR:` 在上、`Z:` 词曲接在它下面（同落右侧，各排各的就叠在一起） */
 function rightColumnLines(meta: Metadata): number {
-  return meta.topRight.length + authorLines(meta).length;
+  return topLines(meta.topRight).length + authorLines(meta).length;
 }
 
 /** 头部（标题/副标题/词曲/TL/TR/调号拍号）占到哪个 y——正文首行据此避让。 */
 export function headerBottom(c: OriginalCtx, meta: Metadata): number {
   const m = c.metrics;
-  const leftLines = Math.max(meta.topLeft.length, rightColumnLines(meta));
+  const leftLines = Math.max(topLines(meta.topLeft).length, rightColumnLines(meta));
   const rightLines = rightColumnLines(meta);
   // 只有真有左右文字块时才算它的底；没有时不能拿 authorY 一行兜底，否则调号贴上标题也白贴
   const lines = Math.max(leftLines, rightLines);
@@ -127,15 +134,15 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
   // 与 `TR:` 同在右侧：排成一列，TR 在上、词曲接在下面（rightColumnLines）
   authorLines(meta).forEach((a, i) => {
     const w = authorFont.measureText(a);
-    root.add(text(a, right - w, m.head.creditBaseline + (meta.topRight.length + i) * m.head.creditLineHeight, authorFont, c.ink));
+    root.add(text(a, right - w, m.head.creditBaseline + (topLines(meta.topRight).length + i) * m.head.creditLineHeight, authorFont, c.ink));
   });
   const topFont = new Font(m.style.font.text.family, m.style.size.header);
-  meta.topLeft.forEach((t, i) => {
+  topLines(meta.topLeft).forEach((t, i) => {
     if (!t) return;
     // `TL:` 与 system 左缘对齐（它不是跟着音符走的）
     root.add(text(t, systemLeft, m.head.creditBaseline + i * m.head.creditLineHeight, topFont, c.ink));
   });
-  meta.topRight.forEach((t, i) => {
+  topLines(meta.topRight).forEach((t, i) => {
     if (!t) return;
     const w = topFont.measureText(t);
     root.add(text(t, right - w, m.head.creditBaseline + i * m.head.creditLineHeight, topFont, c.ink));

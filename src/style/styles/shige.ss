@@ -11,6 +11,8 @@ verseNum { size: 1.1em; }
 chord { size: 0.75em; }
 
 @jianpu {
+  /* 多连音画两段弧（底本如此；出厂 500 首是括线） */
+  tuplet-style: arc;
   barline-height: 4em / 3;
   double-barline-gap: 0.14em;
   beam-width: 0.06em;
