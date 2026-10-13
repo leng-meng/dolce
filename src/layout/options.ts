@@ -178,6 +178,9 @@ export class LayoutOptions {
    *  展开档要回到本项目原来的 −23/28 em 与 +5/28 em。 */
   jpStaffTopOverride = 0;
   jpStaffBottomOverride = 0;
+  /** 小节线高（`barline-height`）：上缘在数字基线上 3/4、下缘在下 1/4（缺省 4/3 字号即 −1 em / +1/3 em）。
+   *  0 = 按字号推。原样文档引擎同一口径（`layout/original/metrics.ts::barlineSpan`）。 */
+  barlineHeight = 0;
 
   /** 叠层的取尺（已乘好数字墨迹高）。 */
   get stack(): StackStyle {
@@ -265,6 +268,7 @@ export class LayoutOptions {
     this.jpBeamWidth = st.stroke.beam;
     this.jpStaffTopOverride = st.vertical.staffTop;
     this.jpStaffBottomOverride = st.vertical.staffBottom;
+    this.barlineHeight = st.vertical.barlineHeight;
     if (flags) {
       this.continuousPage = flags.continuous;
       this.bookHead = flags.bookHead;
@@ -330,12 +334,16 @@ export class LayoutOptions {
    * This project used 23/28 and 5/28, a third shorter, whose lower edge did
    * not even reach the first low octave dot.
    */
+  /** 小节线高给了且不是缺省的 4/3 字号（缺省时直接取 −1 em / +1/3 em，免得 ×3/4 的浮点尾差破几何基线）。 */
+  private get customBarline(): boolean {
+    return this.barlineHeight > 0 && Math.abs(this.barlineHeight - (this.numberSize * 4) / 3) > 1e-9;
+  }
   get jpStaffTop(): number {
     if (this.jpStaffTopOverride !== 0) return this.jpStaffTopOverride;
-    return -this.numberSize;
+    return this.customBarline ? -this.barlineHeight * 0.75 : -this.numberSize;
   }
   get jpStaffBottom(): number {
     if (this.jpStaffBottomOverride !== 0) return this.jpStaffBottomOverride;
-    return this.numberSize / 3;
+    return this.customBarline ? this.barlineHeight * 0.25 : this.numberSize / 3;
   }
 }

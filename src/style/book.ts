@@ -29,6 +29,7 @@ export function bookJianpuStyle(s: BookStyle): JianpuStyle {
   st.font.smufl = face("smufl");
   st.size.lyric = lyric;
   st.size.note = note;
+  st.vertical.barlineHeight = (note * 4) / 3; // 成书小节线照字号推（−1 em / +1/3 em），不跟构造字号（歌词）
   // 成书是逐像素复刻印刷底本，字重由 BookStyle 的 roles.note 说了算，不跟编辑器那档加粗
   st.look.noteBold = false;
   st.header.title.size = s.roles.title.size;

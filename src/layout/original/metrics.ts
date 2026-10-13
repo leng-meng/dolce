@@ -159,6 +159,14 @@ export function gridOf(src: JianpuStyle, page: GridPage): JianpuGrid {
   };
 }
 
+/** 小节线上下缘（相对数字墨迹中线，即本引擎的 baseline）：与简谱引擎同一口径——上缘在数字**基线**上 3/4 小节线高、
+ *  下缘在下 1/4（缺省 4/3 字号即 −1 em / +1/3 em，见 `LayoutOptions.jpStaffTop`）。行内拍号竖向居中于它。 */
+export function barlineSpan(m: JianpuGrid): { top: number; bottom: number } {
+  const base = m.ink.noteHeight / 2;
+  const h = m.style.vertical.barlineHeight;
+  return { top: base - h * 0.75, bottom: base + h * 0.25 };
+}
+
 /** 音符堆叠与挂在它上面的记号（延长记号等）之间让的空：就是叠层那道空。 */
 export function noteMarkGap(m: JianpuGrid): number {
   return m.ink.stack.gap;

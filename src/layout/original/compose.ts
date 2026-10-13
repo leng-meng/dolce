@@ -62,7 +62,7 @@ import {
 } from "./place";
 import { BRACE_GLYPHS } from "./brace";
 import { addBarlineOwner } from "../identity";
-import { applyDocOptions, gridOf, noteMarkGap, jianpuSlurStyle, type GridPage, type JianpuGrid } from "./metrics";
+import { applyDocOptions, barlineSpan, gridOf, noteMarkGap, jianpuSlurStyle, type GridPage, type JianpuGrid } from "./metrics";
 import { ACCOMP_BRACKET, ACCIDENTAL_GLYPH, BARLINE_MARKS, BRACKET, DYNAMICS, ORNAMENTS, TERMS } from "../../pu/glyph";
 
 /** 一次原样文档排版的上下文（原 PuPainter 的实例状态）。墨色也在这里：
@@ -667,7 +667,7 @@ function paintMeter(c: OriginalCtx,
   // 与谱面、混排三处口径各不相同。
   const r = new TimeSigGlyph(meter.numerator, meter.denominator, {
     height: c.metrics.style.vertical.barlineHeight,
-    centerY: 0,
+    centerY: (barlineSpan(c.metrics).top + barlineSpan(c.metrics).bottom) / 2,
     ruleWidth: timeSigRule(c.metrics),
     color: c.ink,
     font,
@@ -1201,9 +1201,8 @@ function paintBarline(c: OriginalCtx,
   // 粗细组合、反复点、线间距**全部走谱面那一路的画法**（engrave/barline.ts::BarlineGlyph）。
   // 原先这里是自成一套：填充 rect 而不是 GraphicLine、粗线 ×2.6、线距 barlineDoubleGap、
   // 反复点在 ±0.18H 且离线 6px——同一件事两种写法，改一处忘一处。
-  // 纵向范围仍是文本谱自己的（`barlineHeight` 居中于基线、再加 spanHeight），
-  // 那是照原版量的，不是谱面那套 jpStaffTop/Bottom。
-  const half = m.style.vertical.barlineHeight * 0.5;
+  // 纵向范围与简谱引擎同一口径（`barlineSpan`），连谱号跨声部时下缘再加 spanHeight。
+  const span = barlineSpan(m);
   // 下一小节左线上起反复（`repeatForwardAfter`）：这条线画成 `|:` / `:|:`
   const type = el.repeatForwardAfter && el.type === "normal" ? "repeat-start"
     : el.repeatForwardAfter && el.type === "repeat-end" ? "repeat-both" : el.type;
@@ -1217,8 +1216,8 @@ function paintBarline(c: OriginalCtx,
     return null;
   }
   const r = new BarlineGlyph(spec, type === "end", {
-    top: -half,
-    bot: half + spanHeight,
+    top: span.top,
+    bot: span.bottom + spanHeight,
     light: m.style.stroke.barline,
     heavy: m.style.stroke.finalBarline,
     dotRadius: m.style.dot.repeat,
@@ -1228,7 +1227,7 @@ function paintBarline(c: OriginalCtx,
   const ox = x - r.width / 2;
   if (el.ornaments.length > 0) {
     const og = new Group();
-    paintOrnaments(c, og, el.ornaments, x, baseline, undefined, { right: ox + r.width, top: baseline - half });
+    paintOrnaments(c, og, el.ornaments, x, baseline, undefined, { right: ox + r.width, top: baseline + span.top });
     root.add(og);
   }
   const g = new Group();

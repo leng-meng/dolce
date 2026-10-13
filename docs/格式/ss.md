@@ -84,8 +84,10 @@
   （基准是音符字号；`lyric-gap` `slur-thickness` `barline` `final-barline` 按歌词字号），线宽类（`bracket-width`、
   `repeat-dot-diameter`）写裸数 pt。例：`@jianpu { system-spread: 0.8575em; slur-gap: 0.154em; verse-numbers: auto; }`。
   数值原样存进字段、不在读样式表时乘字号，所以重排结果逐位不变。
-- 简谱两个排版引擎读**同一份** `@jianpu`（同一把尺子 `JianpuStyle`）。多声部才有的 `voice-gap`、`barline-height`、`double-barline-gap`
-  现在只有原样文档引擎（文本谱、MusicXML、多声部 123/ABC 的原样档）用到。以前的 `@pu` 块已删。
+- 简谱两个排版引擎读**同一份** `@jianpu`（同一把尺子 `JianpuStyle`）。多声部才有的 `voice-gap`、`double-barline-gap`
+  现在只有原样文档引擎（文本谱、MusicXML、多声部 123/ABC 的原样档）用到。`barline-height`（小节线高，缺省 4/3 em）两个引擎都读，
+  口径同一：上缘在数字基线上 3/4、下缘在下 1/4（缺省即 −1 em / +1/3 em），行内拍号竖向居中于它。
+  两个引擎实际生效的值由 `../dev/scripts/ruler-compare.mjs` 逐项比（同一测试谱各格式、原样分页与长图）。以前的 `@pu` 块已删。
 - `accidental-side`（`before` / `after`）：调号、转调、和弦根音与低音的升降号写在字母前还是后；**不写 = 照原文**（`Eb` 排 `Eb`、`bE` 排 `bE`），
   纯文本和弦（`chord-plain`）也一样。500 首成书照原书写 `before`。
 
