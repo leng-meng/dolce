@@ -1093,11 +1093,10 @@ class DocPartLoader {
     for (const nt of this.stemNotes) {
       const ch = nt.chord;
       const sy = this.stemYMap.get(nt);
-      if (sy !== undefined) {
-        ch.stemLen = Math.abs(-ch.tailNote().cy() - sy);
-      } else {
-        ch.stemLen = ch.grace ? 35 * cueSize : 35;
-      }
+      const len = sy !== undefined ? Math.abs(-ch.tailNote().cy() - sy) : NaN;
+      // 量不出数（转来的谱音高位置这会儿还没定、或 default-y 不是数）按没写处理：否则符干长成 NaN，
+      // 挂在符干上的延长记号、混排简谱层的上沿跟着全是 NaN（264《陶我成器》、081 的 `.jpwabc` 混排）
+      ch.stemLen = Number.isFinite(len) ? len : ch.grace ? 35 * cueSize : 35;
     }
   }
 

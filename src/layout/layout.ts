@@ -11,7 +11,8 @@ import { addEndingBracket, labelBaseline } from "../engrave/ending";
 import { TupletGlyph } from "../engrave/tuplet";
 import type { Font } from "./font";
 import { measureDuration, type JChord, type JMeasure, type JNote, type JScore } from "./input";
-import { getOrNull, PageItem, Group, TextFrame, SmuflText, JpNumber, Lyric, Tie, slurStyleOf, type SlurStyle, type SlurTieBase } from "./pageitem";
+import { getOrNull, PageItem, Group, TextFrame, SmuflText, JpNumber, Lyric, Tie, slurStyleOf, type SlurTieBase } from "./pageitem";
+import type { SlurStyle } from "../engrave/arc";
 import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, BeamLine, EntryItemInfo, entryBounds, normalizeEntryX, placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "./entry";
 import { LayoutOptions } from "./options";
 

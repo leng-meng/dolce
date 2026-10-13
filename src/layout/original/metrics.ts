@@ -12,7 +12,7 @@
 // 行内算完自然宽度后再整体拉伸/压缩到版心宽度（两端对齐）。
 
 import type { HeaderFonts } from "../../style/header";
-import { SlurTieBase, type SlurStyle } from "../pageitem";
+import { arcHeight, type SlurStyle } from "../../engrave/arc";
 import type { GraceMetrics, GraceNote } from "../../engrave/grace";
 import type { AccidentalSide, AccidentalStyleKind } from "../../engrave/spacing";
 import type { CompressMode } from "../../common/cjkpunct";
@@ -382,6 +382,8 @@ export interface JianpuUserOptions {
   margins?: [number, number, number, number];
   /** 页眉四项的字体（pt）。字号盖过整体缩放后的值——那是用户直接给的 pt。 */
   header?: HeaderFonts;
+  /** 页眉字号（印刷 pt）→ 本页单位的倍数。连续长图的单位不是 pt（页宽 1000），见 compose.ts::headerPtScale。 */
+  headerScale?: number;
 }
 
 /** 把面板上的手动设置叠到量好的度量上。整体缩放动 `note`、`size`、`lyricSpacing`、`spacing` 四组。 */
@@ -409,10 +411,13 @@ export function applyUserOptions(base: JianpuMetrics, o: JianpuUserOptions | nul
   if (h.subtitle?.family) m.font.subtitle = h.subtitle.family;
   if (h.credit?.family) m.font.credit = h.credit.family;
   if (h.scripture?.family) m.font.scripture = h.scripture.family;
-  if (h.title?.size) m.size.title = h.title.size;
-  if (h.subtitle?.size) m.size.subtitle = h.subtitle.size;
-  if (h.credit?.size) m.size.credit = h.credit.size;
-  if (h.scripture?.size) m.size.scripture = h.scripture.size;
+  const hk = o.headerScale ?? 1;
+  if (h.title?.size) m.size.title = h.title.size * hk;
+  if (h.subtitle?.size) m.size.subtitle = h.subtitle.size * hk;
+  if (h.credit?.size) m.size.credit = h.credit.size * hk;
+  if (h.scripture?.size) m.size.scripture = h.scripture.size * hk;
+  // 署名行距跟着署名字号走（出厂 21 对 16 号字）：谱里给的署名字号大了，行与行就叠在一起
+  m.head.creditLineHeight = Math.max(m.head.creditLineHeight, m.size.credit * (21 / 16));
   return m;
 }
 
@@ -436,7 +441,7 @@ export function jianpuSlurStyle(m: JianpuMetrics, color: number): SlurStyle {
 
 /** 弧线实际占的头顶高度（纵向预留用），与 jianpuSlurStyle 同源。 */
 export function jianpuSlurRise(m: JianpuMetrics): number {
-  return SlurTieBase.arcHeight(Infinity, jianpuSlurStyle(m, 0)) * 0.75;
+  return arcHeight(Infinity, jianpuSlurStyle(m, 0)) * 0.75;
 }
 
 /** 原样文档布局折算给公共倚音几何的度量（见 `engrave/grace.ts`）。

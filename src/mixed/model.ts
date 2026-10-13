@@ -9,13 +9,13 @@
 import { Fraction } from "../common/fraction";
 import { Point } from "../common/geom";
 import { Font } from "../layout/font";
-import { SlurTieBase, type SlurStyle } from "../layout/pageitem";
+import { calcSlurPoints, type SlurStyle } from "../engrave/arc";
 import type { CompressMode } from "../common/cjkpunct";
 import { syllableRun } from "../engrave/syllable";
 import type { HarmonySeg } from "../engrave/chord";
 import type { AccidentalSide, AccidentalStyleKind } from "../engrave/spacing";
-import { STACK_GAP_DEFAULT } from "../engrave/stack";
-import { graceBlockTop } from "./jprow";
+import { STACK_GAP_DEFAULT, stackTop } from "../engrave/stack";
+import { graceBlockTop, mainRow } from "./jprow";
 import { MetaData, GlyphCodes } from "../smufl/smufl";
 import type { Chord as DocChord, Direction as DocDirection, Harmony as DocHarmony, Lyric as DocLyric, Mark as DocMark, Note as DocNote, Song } from "../model/doc";
 import { beamCount } from "../model/jianpu";
@@ -117,7 +117,9 @@ export enum Notation {
 
 export class ClefSig {
   sign = GlyphCodes.gClef;
-  line = 0;
+  /** 谱号落在第几线（下起）。缺省是高音谱号的第二线——没写谱号的谱（`.jpwabc`、文本谱转来的）
+   *  落到 `getClef` 的缺省值上，原先给 0，谱号整个往下掉两格（061《坚固保障》混排）。 */
+  line = 2;
 
   /** 顶线（第五线）的 writtenPitch（octave*7+step 序数）。G 谱号顶线 F5=38。 */
   topPitch(): number {
@@ -1516,6 +1518,9 @@ export class BeamGroup {
       pts.push({ x: ch.stemX(), y });
     }
     let slope = BeamGroup.leastSquare(pts);
+    // 横向位置还没排（自动铺排的谱这会儿各符干 x 都一样）时最小二乘是 0/0：按平的算，别让符干长成 NaN
+    //（264《陶我成器》等 `.jpwabc` 混排：挂在符干上的延长记号、简谱层上沿跟着全是 NaN）
+    if (!Number.isFinite(slope)) slope = 0;
     const thres = 0.3;
     if (slope > thres) slope = thres;
     else if (slope < -thres) slope = -thres;
@@ -2509,6 +2514,13 @@ export class SysStaff {
           if (ch.notations.length) y -= 20;
           if (y < miny) miny = y;
         }
+        // 谱表上方的记号（延长记号、重音…）按**画出来的**字形墨迹顶算：混排时简谱层摞在这个上沿之上，
+        // 只按符干估会让延长记号压到简谱数字上（044《真神妙爱》末音）
+        for (const nota of ch.notations) {
+          if (!nota.above || !Number.isFinite(nota.y)) continue;
+          const bb = eng.meta.getBBox(nota.symbol);
+          if (bb) miny = Math.min(miny, nota.y - bb.bBoxNE[1] * (eng.musicFont.size / 4) - 5);
+        }
       }
     }
     for (const sl of pt.slurs) {
@@ -2516,7 +2528,7 @@ export class SysStaff {
       if (!sl.above) continue;
       if (sys.contains(sl.startTick) && sys.contains(sl.endTick)) {
         const [pl, pr] = slurTiedPos(eng, sl.startChord(), sl.endChord(), true);
-        const [pt0, pt1] = SlurTieBase.calcSlurPoints(
+        const [pt0, pt1] = calcSlurPoints(
           new Point(pl.x, pl.y), new Point(pr.x, pr.y), mixedSlurStyle(true));
         // 曲线紧包围盒上沿（照 CGPathGetPathBoundingBox；控制点不在曲线上，取控制点最小值会偏高）
         const top = cubicMinY(pl.y, pt0.y, pt1.y, pr.y);
@@ -3178,7 +3190,7 @@ export interface Pt2 {
  *     裸对数公式（那几条上下限与扁平长连音线是本项目为简谱加的，五线谱不要）。
  *   - `side` 跟着符干走；简谱层恒为 `above = true`。
  *
- * 唯一与旧副本不同的地方：`SlurTieBase.arcHeight` 有一条 1.2 的下限，而裸公式在
+ * 唯一与旧副本不同的地方：`engrave/arc.ts::arcHeight` 有一条 1.2 的下限，而裸公式在
  * `dist < 10.2` 时算出的弧高比它还小（再短就变负、弧会翻过来开口朝上）。
  * 那是旧副本的缺陷，不是特性。
  */
@@ -3283,8 +3295,12 @@ export function slurTiedPosForJp(
       if (dd > dot) dot = dd;
     }
   }
-  pl.y = 4 - dot * 6;
-  pr.y = 4 - dot * 6;
+  // 端点落在这一摞的顶之上一道空（engrave/stack.ts，与简谱引擎 `slurRung`、原样文档 `stackTop` 同一条：
+  // 数字墨迹顶 → 高音点 → 弧）。空取混排原先没有高音点时的那一截（render.cpp 的 y = 4，数字墨迹顶在 6.4）
+  const row = mainRow(eng);
+  const y = stackTop(row.inkTop, dot, row.st) - JP_ARC_GAP * (row.inkBottom - row.inkTop);
+  pl.y = y;
+  pr.y = y;
   if (hasTied) {
     pl.y -= 5;
     pr.y -= 5;
@@ -3293,6 +3309,9 @@ export function slurTiedPosForJp(
   pr.y -= eng.jpTopDy;
   return [pl, pr];
 }
+
+/** 简谱层弧端点离那一摞顶的空 ÷ 数字墨迹高（混排出厂 2.4 tenths / 墨迹高 16.07）。 */
+const JP_ARC_GAP = 2.4 / 16.065;
 
 /** 简谱层里 slur 罩着延音线时，两条弧之间（延音线弧顶 → slur 端点）留的空（tenths）。 */
 const JP_ARC_NEST_GAP = 2.5;
@@ -3464,7 +3483,7 @@ export function arcExtent(e: ArcEnds): [number, number] {
   const style = mixedSlurStyle(e.above);
   const pl = new Point(e.plx, e.ply);
   const pr = new Point(e.prx, e.pry);
-  const [p0, p1, cos] = SlurTieBase.calcSlurPoints(pl, pr, style);
+  const [p0, p1, cos] = calcSlurPoints(pl, pr, style);
   const lw = style.thickness / cos / 2; // 回程两个控制点下压的量
   const top = Math.min(cubicMinY(pl.y, p0.y, p1.y, pr.y), cubicMinY(pl.y, p0.y + lw, p1.y + lw, pr.y));
   const bot = Math.max(cubicMaxY(pl.y, p0.y, p1.y, pr.y), cubicMaxY(pl.y, p0.y + lw, p1.y + lw, pr.y));

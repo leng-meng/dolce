@@ -76,8 +76,6 @@ export function drawNotesNormal(
   container: Group,
   md: PartMeasureLayout,
   subStaff: number,
-  /** 混排（谱表上方叠着简谱层）。 */
-  mixed = false,
 ): void {
   const fs = eng.musicFont.size;
   const meta = eng.meta;
@@ -176,8 +174,6 @@ export function drawNotesNormal(
     if (ch.notes[0].staff !== subStaff) continue;
     const stemX = ch.stemX();
     for (const nota of ch.notations) {
-      // 混排的谱表上方是简谱层：朝上的延长记号会正落在简谱数字上（简谱层本身不画延长记号，用户口径），不画
-      if (mixed && nota.above && nota.isFermata()) continue;
       let x = stemX + nota.dx;
       if (ch.stemUp && ch.noteType.compareTo(new Fraction(4)) < 0) {
         x -= ch.noteheadWidth(meta);
@@ -1279,7 +1275,7 @@ function drawSysStaff(container: Group, sys: Sys, st: SysStaff, ypos: number): v
     if (!isJp) {
       const md = ps.part.measures[m.index];
       if (md) {
-        drawNotesNormal(eng, grp, md, ps.subIndex, nota === Notation.Mixed);
+        drawNotesNormal(eng, grp, md, ps.subIndex);
         drawBeams(grp, md, ps.subIndex);
         drawLrc(eng, grp, md, ps.subIndex);
         drawHarmony(eng, grp, md, ps.subIndex, scr.scaling, nota === Notation.Mixed);

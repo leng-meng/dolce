@@ -44,6 +44,7 @@ import { emptyMetadata } from "../../pu/ast";
 import type { ElementId, ScoreDoc } from "../../model/doc";
 import type { DocView } from "../../pu/slots";
 import { originalInputOf } from "./input";
+import { pageOfDefaults } from "../../model/pagemeta";
 import {
   chordLane,
   graceLayout,
@@ -313,6 +314,22 @@ function docMetricsOf(view: DocView): JianpuMetrics {
 
 /** 面板给的是**字号（pt）**，metrics 那层认的是缩放——在这里换算：
  *  拿「这套版式（含谱面自带的 FontSize 指令）原本多少 pt」当分母。 */
+/**
+ * 页眉字号（谱里 `<credit-words>` 的、面板上设的，都是**印刷 pt**）换成本页单位的倍数。
+ * 选了纸时页宽就是 pt，倍数 1；连续长图的页宽是 1000（不是 pt），要按「印刷页宽 → 1000」等比换算——
+ * 印刷页宽取谱里自己的纸（`<page-layout>`），没有按 A4。不换的话 148mm 宽的谱上 12pt 的标题
+ * 在长图上只有数字的一半大（001《圣哉，圣哉，圣哉》）。
+ */
+function headerPtScale(source: ScoreDoc, docMetrics: JianpuMetrics, o: JianpuUserOptions): number {
+  const continuous = o.continuous ?? docMetrics.page.longImage;
+  if (!continuous) return 1;
+  const song = source.songs[0];
+  const srcW = (song && pageOfDefaults(song)?.w) || A4_WIDTH_PT;
+  return docMetrics.page.width / srcW;
+}
+
+const A4_WIDTH_PT = 595.28;
+
 function resolveScale(o: JianpuUserOptions | null, docMetrics: JianpuMetrics): JianpuUserOptions | null {
   if (!o?.digitFontSize) return o;
   const base = docMetrics.size.note;
@@ -1401,7 +1418,8 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   // 谱面自带的 `FontSize:` / `Margin:` 也要生效（真实语料里 `all=` 用得最多）；
   // 谱面自带的指令先生效，面板上的手动设置叠在最外层（用户说了算）
   const docMetrics = docMetricsOf(doc);
-  const m = resolveDigitInk(applyUserOptions(docMetrics, resolveScale(cfg.user, docMetrics)));
+  const user = cfg.user ? { ...cfg.user, headerScale: headerPtScale(source, docMetrics, cfg.user) } : null;
+  const m = resolveDigitInk(applyUserOptions(docMetrics, resolveScale(user, docMetrics)));
   const c: OriginalCtx = {
     metrics: m,
     doc,
