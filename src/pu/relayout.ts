@@ -21,7 +21,7 @@ import { takesLyric, voiceNumbers } from "./ast";
 import type { LyricLine, PuSong, ScoreLine, SourceSpan } from "./ast";
 import type { ScoreDoc } from "../model/doc";
 import { docView, type RowView } from "./slots";
-import { dialectSpec } from "./dialect";
+import { dialectSpec, type Dialect } from "./dialect";
 import { BODY_PREFIX } from "./parse";
 import { puLinesEdited, puPhraseLines, voiceStream, type FitMeasure, type PuNewLine, type VoiceStream } from "./phrase";
 
@@ -150,7 +150,7 @@ export function relayoutPuText(
 ): string {
   const raws = text.split(/\r?\n/);
   const doc = docView(sdoc);
-  const skip = dialectSpec(doc.dialect).lyricSkip[0] ?? "@";
+  const skip = dialectSpec((sdoc.puDialect ?? "tomato") as Dialect).lyricSkip[0] ?? "@";
   // 各首各排各的，但都写回同一份文本：先收集「哪一段换成什么」，最后统一拼。
   const patches: Array<{ from: number; to: number; lines: string[] }> = [];
 
@@ -187,7 +187,7 @@ export function relayoutPuBreak(
 ): string | null {
   const raws = text.split(/\r?\n/);
   const doc = docView(sdoc);
-  const skip = dialectSpec(doc.dialect).lyricSkip[0] ?? "@";
+  const skip = dialectSpec((sdoc.puDialect ?? "tomato") as Dialect).lyricSkip[0] ?? "@";
   for (let songIdx = 0; songIdx < doc.songs.length; songIdx++) {
     const song = doc.songs[songIdx]!;
     const plan = puLinesEdited(sdoc, songIdx, edit);

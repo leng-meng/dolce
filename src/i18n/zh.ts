@@ -203,7 +203,6 @@ export const zh = {
   "settings.staffSize": "谱表大小（mm）",
   "settings.lyricSize": "歌词字号（pt）",
   "settings.hideBarNumbers": "隐藏小节号",
-  "settings.puNote": "改字号会整块等比缩放版式量好的尺寸（纸与页边距不跟着缩），与谱面自带的 FontSize 指令同一语义；展开档与 .jpwabc 共用同一套设置。",
   "settings.staffNote": "谱表大小是五条线的总高度，字号随之按比例看起来变小/变大；留空跟随文件。换了纸或谱表大小，就按新版面重新铺排，谱里原来的分行坐标不再用。",
   "settings.noteSound": "改音时发声",
   "settings.bookSheet.manual": "手动",

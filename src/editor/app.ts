@@ -12,7 +12,7 @@ import { clearBreaks } from "../layout/input";
 import { JpwFile, LayoutSection } from "../jpword/jpwfile";
 import { measureJianpu, PaintResources, ScorePainter, type JianpuPaintRequest } from "../layout/painter";
 import { toPt } from "../layout/result";
-import { computeStyle, sanitizeLayer, upsertRule, type StyleEngine, type StyleRule } from "../style/cascade";
+import { computeStyle, sanitizeLayer, upsertRule, type StyleRule } from "../style/cascade";
 import { docPageLayer, pageMargins, resolvePaper, songPageDecl } from "../style/paper";
 import { songHeaderFonts, songLyricSize, songStaffSize } from "../model/pagemeta";
 import { headerFontsOf, headerLayerOfSong, type HeaderFonts, type HeaderRole } from "../style/header";
@@ -65,7 +65,7 @@ import {
 export type { OmrFormat } from "../omr";
 
 /** 有纸张设置的三把尺子：简谱原样档、原样文档布局（文本谱等的原样档）、五线谱/混排。 */
-export type PaperEngine = "jianpu" | "original" | "staff";
+export type PaperEngine = "jianpu" | "staff";
 /** 纸张栏的一次选择：纸名 + 方向 + 边距（`[上, 右, 下, 左]` pt，null = 自动），或跟随文件。 */
 export type PaperChoice = "follow" | { paper: string; orientation: "portrait" | "landscape"; margin: number[] | null };
 
@@ -169,19 +169,18 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   private _readOnlyCompartment = new Compartment();
   // ---- 渲染设置（应用级，不属于文档）：一律经样式层（src/style/）----
   /** 用户层：每个主题一层规则，**两档各记一套**（用户口径：「区分 展开/原样的字号设置」）。
-   *  展开档（主题 projection）的字号、比例、配色两种格式共用，规则不带限定；
-   *  原样档（主题 print）的纸与字号简谱引擎与原样文档布局各记各的（`engine: jianpu` / `original` 限定），配色共用。 */
+   *  同一档里各格式共用一套（字号、纸、配色），规则不带限定。 */
   private _userLayers: Record<"projection" | "print" | "staff" | "header", StyleRule[]> = { projection: [], print: [], staff: [], header: [] };
   // `header`：页眉四项（标题/副标题/经文/词曲作者）的字体字号，**各档共用一份**，叠在各档用户层之上（`style/header.ts`）
 
   /** 某一档、某把尺子看到的 computed 样式表（内置主题 → 曲内层 → 用户层）。
    *  曲内层（谱里自带的纸，`style/paper.ts`）只垫在原样档下面：展开档是投影片，不认纸。 */
-  styleOf(mode: JianpuLayoutMode, engine: StyleEngine = "jianpu"): StyleSheet {
+  styleOf(mode: JianpuLayoutMode): StyleSheet {
     const theme = themeOfMode(mode);
-    const page = theme === "print" && !(engine === "jianpu" || engine === "original" ? this._userSetsPaper(engine) : false) ? this._docLayer() : [];
+    const page = theme === "print" && !this._userSetsPaper("jianpu") ? this._docLayer() : [];
     return computeStyleForPaper(
       [THEMES[theme], this._bookLayer, page, this._docHeaderLayer(theme === "print"), this._userLayers[theme], this._userLayers.header],
-      { mode, engine },
+      { mode, engine: "jianpu" },
     );
   }
 
@@ -396,7 +395,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   paperState(engine: PaperEngine): { doc: PageDecl | null; userSet: boolean; page: PageDecl } {
     const song = this.adapter.toScoreDoc ? this.currentScoreDoc()?.songs[0] : undefined;
     const doc = song ? songPageDecl(song) : null;
-    const page = engine === "staff" ? this.staffStyle().page : this.styleOf("original", engine).page;
+    const page = engine === "staff" ? this.staffStyle().page : this.styleOf("original").page;
     return { doc, userSet: this._userSetsPaper(engine), page };
   }
 
@@ -410,10 +409,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   /** 设纸：`follow` = 跟随文件（清掉用户层里的纸、方向、边距；谱里没写纸就回到出厂那张）。 */
   private _setPaper(engine: PaperEngine, choice: PaperChoice): void {
     const key = engine === "staff" ? "staff" : "print";
-    const when = engine === "staff" ? undefined : { engine };
     if (choice === "follow") {
       this._userLayers[key] = this._userLayers[key].map((r) => {
-        if ((r.when?.engine ?? undefined) !== when?.engine || !r.set.page) return r;
+        if (!r.set.page) return r;
         const { paper: _p, orientation: _o, margin: _m, ...rest } = r.set.page;
         return { ...r, set: { ...r.set, page: rest } };
       });
@@ -421,9 +419,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     }
     if (!isPaper(choice.paper)) return;
     const page: DeepPartial<PageDecl> = { paper: choice.paper, orientation: choice.orientation };
-    this._userLayers[key] = upsertRule(this._userLayers[key], when, { page });
+    this._userLayers[key] = upsertRule(this._userLayers[key], undefined, { page });
     // 边距整组替换（深合并会把数组整体换掉）；null = 清掉，回到各排版器自己的缺省
-    const hit = this._userLayers[key].find((r) => (r.when?.engine ?? undefined) === when?.engine);
+    const hit = this._userLayers[key].find((r) => !r.when);
     if (hit?.set.page) {
       if (choice.margin) hit.set.page.margin = [...choice.margin];
       else delete hit.set.page.margin;
@@ -431,9 +429,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   }
 
   /** 往某一档的用户层写一条规则（限定相同的就地合并）。 */
-  private _setStyle(mode: JianpuLayoutMode, engine: StyleEngine | undefined, set: DeepPartial<StyleSheet>): void {
+  private _setStyle(mode: JianpuLayoutMode, set: DeepPartial<StyleSheet>): void {
     const theme = themeOfMode(mode);
-    this._userLayers[theme] = upsertRule(this._userLayers[theme], engine ? { engine } : undefined, set);
+    this._userLayers[theme] = upsertRule(this._userLayers[theme], undefined, set);
   }
 
   /** 展开档的投影片尺寸（`PAGE_RATIOS` 那几张）。 */
@@ -460,7 +458,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
    *  按 B 张纸排。 */
   get layoutPage(): { w: number; h: number } {
     if (this.layoutMode === "expanded") return { w: this.pageW, h: this.pageH };
-    const paper = resolvePaper(this.styleOf("original", "jianpu").page);
+    const paper = resolvePaper(this.styleOf("original").page);
     // 长图：宽固定，高度由内容说了算（传进去的只是个不参与分页的占位）
     if (!paper) return { w: LONG_IMAGE_WIDTH, h: LONG_IMAGE_WIDTH };
     return paper;
@@ -468,7 +466,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
   /** 原样档当前是不是长图那一档。 */
   get jpLongImage(): boolean {
-    return isLongImage(this.styleOf("original", "jianpu"));
+    return isLongImage(this.styleOf("original"));
   }
 
   /** 原样档换纸（「长图」也是其中一档）。 */
@@ -492,16 +490,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   }
   /** 原样档的纸（键取自 `PAPER_SIZES`，「长图」是其中一档）。 */
   get jpPaper(): string {
-    return this.styleOf("original", "jianpu").page.paper ?? "长图";
-  }
-  /** 文本谱「原样」档的纸。 */
-  get puPaper(): string {
-    return this.styleOf("original", "original").page.paper ?? "长图";
-  }
-  /** 文本谱原样档音符数字的字号（pt）。0 = 跟随版式量到的原尺寸。 */
-  get puFontSize(): number {
-    const v = this.styleOf("original", "original").roles.note?.size;
-    return typeof v === "number" ? v : 0;
+    return this.styleOf("original").page.paper ?? "长图";
   }
   mixedHideBarNumber = false; // 混排：隐藏小节号
   /** 用户打开单声部 MusicXML 时怎么办：`ask` 每次问；`musicxml` 保持原文进五线谱；其余是转成哪种源格式编辑。 */
@@ -536,7 +525,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
    *  展开档取展开档样式里的投影片尺寸，原样档取 `layoutPage` 那张纸。 */
   private _jianpuRequest(score: JScore, breakDesc: string | null): JianpuPaintRequest {
     if (this.layoutMode === "expanded") return { view: "expanded", score, breakDesc, style: this.styleOf("expanded") };
-    return { view: "original", score, breakDesc, style: this.styleOf("original", "jianpu"), page: this.layoutPage };
+    return { view: "original", score, breakDesc, style: this.styleOf("original"), page: this.layoutPage };
   }
 
   /** 把一份引擎输入交给排版器排版（资源在构造时已就绪，同步提交）。 */
@@ -560,8 +549,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   /** 面板那几项设置落进**样式层的用户层**并重排。签名沿用（回归脚本也走它）。
    *  纸与字号按档、按格式分开记；配色按档记；投影片比例只归展开档。 */
   applyRenderSettings(opts: {
-    pageW?: number; pageH?: number; jpPaper?: string;
-    puPaper?: string; puFontSize?: number; staffPaper?: string;
+    pageW?: number; pageH?: number; jpPaper?: string; staffPaper?: string;
     /** 纸张栏（纸 + 方向 + 边距，或跟随文件）。给了就盖过上面三个只换纸名的。 */
     paper?: Partial<Record<PaperEngine, PaperChoice>>;
     /** 五线谱/混排的谱表大小（mm）与歌词字号（pt）；null = 跟随文件 / 出厂。 */
@@ -570,19 +558,15 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   }): void {
     const mode = this.layoutMode;
     if (opts.pageW || opts.pageH) {
-      this._setStyle("expanded", undefined, { page: { size: [opts.pageW || this.pageW, opts.pageH || this.pageH] } });
+      this._setStyle("expanded", { page: { size: [opts.pageW || this.pageW, opts.pageH || this.pageH] } });
     }
     // 原样档的纸要在重排之前定好——排版时按长图灌 continuousPage
-    if (opts.jpPaper && isPaper(opts.jpPaper)) this._setStyle("original", "jianpu", { page: { paper: opts.jpPaper } });
-    if (opts.puPaper && isPaper(opts.puPaper)) this._setStyle("original", "original", { page: { paper: opts.puPaper } });
+    if (opts.jpPaper && isPaper(opts.jpPaper)) this._setStyle("original", { page: { paper: opts.jpPaper } });
     if (opts.staffPaper && isPaper(opts.staffPaper)) this._userLayers.staff = upsertRule(this._userLayers.staff, undefined, { page: { paper: opts.staffPaper } });
     for (const [engine, choice] of Object.entries(opts.paper ?? {}) as [PaperEngine, PaperChoice][]) this._setPaper(engine, choice);
     if (opts.staffSize) this._setStaffSize(opts.staffSize);
-    if (opts.puFontSize !== undefined) {
-      this._setStyle("original", "original", { roles: { note: { size: Math.min(200, Math.max(0, opts.puFontSize)) } } });
-    }
-    if (opts.color !== undefined) this._setStyle(mode, undefined, { page: { ink: opts.color } });
-    if (opts.bgColor !== undefined) this._setStyle(mode, undefined, { page: { background: opts.bgColor } });
+    if (opts.color !== undefined) this._setStyle(mode, { page: { ink: opts.color } });
+    if (opts.bgColor !== undefined) this._setStyle(mode, { page: { background: opts.bgColor } });
     this._applySizes(mode, opts);
     this._applyPageBg();
     this.saveSettings();
@@ -595,14 +579,14 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
    *  面板上根本不显示（见 editor/dialogs.ts），收了也只会被下一次派生覆盖掉。 */
   private _applySizes(mode: JianpuLayoutMode, opts: { fontSize?: number; titleSize?: number; creditSize?: number }): void {
     if (mode === "original") {
-      if (opts.fontSize) this._setStyle("original", "jianpu", { roles: { note: { size: opts.fontSize } } });
+      if (opts.fontSize) this._setStyle("original", { roles: { note: { size: opts.fontSize } } });
       return;
     }
     const roles: DeepPartial<StyleSheet["roles"]> = {};
     if (opts.fontSize) roles.note = { size: opts.fontSize };
     if (opts.titleSize !== undefined) roles.title = { size: opts.titleSize };
     if (opts.creditSize !== undefined) roles.credit = { size: opts.creditSize };
-    if (Object.keys(roles).length) this._setStyle("expanded", undefined, { roles });
+    if (Object.keys(roles).length) this._setStyle("expanded", { roles });
   }
 
   /** 恢复当前档的主题默认（清掉那一档的用户层）。 */
@@ -955,7 +939,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
         }
         this._layoutScore(score, null);
       } else {
-        this.painter.loadSync({ view: "original", doc, style: this.styleOf("original", "original") });
+        this.painter.loadSync({ view: "original", doc, style: this.styleOf("original") });
       }
     } catch (e) {
       console.error(`${what}排版失败`, e);
@@ -2157,11 +2141,10 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     this.formats.sync();
     if (!ok) return;
     const now = targetSpec(target).docFormat;
-    const engine: PaperEngine | null = now === "jpwabc" ? "jianpu" : now === "pu" ? "original" : null;
-    if (!engine) return;
+    if (now !== "jpwabc" && now !== "pu") return;
     if (page && isPaper(page.paper)) {
       const choice: PaperChoice = { paper: page.paper!, orientation: page.orientation ?? "portrait", margin: pageMargins(page) ?? null };
-      this._setPaper(engine, choice);
+      this._setPaper("jianpu", choice);
       this._setPaper("staff", choice);
     }
     // 谱表大小与歌词字号也装不下，同样记进五线谱那一档（否则转完五线谱/混排按出厂 7mm，字相对音符小一圈）

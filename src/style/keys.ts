@@ -1,4 +1,4 @@
-// 样式表对外的名字 → 各把尺子的内部字段（`jianpu` 简谱尺子 `JianpuStyle`、`mixed` 混排、`book` 成书、`original` 原样文档布局的栅格）。
+// 样式表对外的名字 → 各把尺子的内部字段（`jianpu` 简谱尺子 `JianpuStyle`、`mixed` 混排、`book` 成书）。
 //
 // `.ss` 里只见**逻辑键**（kebab-case，按谱面内容分），`JianpuStyle` / `MixedOptions`
 // 的字段名（`vertical.slurGap`、`lineWidths.stem`、`musicppJpTimeSig`…）不外露：
@@ -27,9 +27,6 @@ export interface KeyDef {
   book?: string;
   /** 解析出的长度再乘这个数才落进 `jianpu` 那一列（样式表与尺子口径不同的：弧高写弧顶、尺子存控制点；反复点写直径、尺子存半径）。 */
   jianpuScale?: number;
-  /** 原样文档布局 `JianpuMetrics` 上的路径（`note.beamWidth`…）；缺 = 那一路不读。只给内置方言表
-   *  （`style/books/original-*.ss`）用到的键配了这一列，由 `style/original.ts::jianpuMetricsOf` 读。 */
-  original?: string;
   /** 不支持的那一侧的说法，进报错信息。 */
   note?: string;
 }
@@ -47,29 +44,29 @@ export const ROLE_FONTS: Partial<Record<StyleRole, { jianpu?: "note" | "lyric" |
  *  `final-barline` 按歌词字号——`style/book.ts::bookJianpuStyle` 原来就是这么乘的。 */
 export const JIANPU_KEYS: Record<string, KeyDef> = {
   "note-bold": { kind: "bool", jianpu: "look.noteBold", note: "混排的简谱数字不单独加粗" },
-  "beam-width": { kind: "len", jianpu: "stroke.beam", mixed: "lineWidths.jpBeam", original: "note.beamWidth" },
+  "beam-width": { kind: "len", jianpu: "stroke.beam", mixed: "lineWidths.jpBeam" },
   // 数字上下那一摞（八度点、减时线、低音点）墨迹到墨迹的空 ÷ 数字墨迹高（engrave/stack.ts）
-  "stack-gap": { kind: "num", jianpu: "vertical.stackGap", mixed: "stackGap", book: "metrics.stackGap", original: "look.stackGap" },
+  "stack-gap": { kind: "num", jianpu: "vertical.stackGap", mixed: "stackGap", book: "metrics.stackGap" },
   "slur-gap": { kind: "len", jianpu: "vertical.slurGap", book: "metrics.stackGapEm", note: "弧离叠层顶的空，混排与原样文档各按自己的弧算" },
   // 谱行之间：`system-gap` 是末行歌词基线到下一组音符基线（原样文档）；`system-spread` 是页内均分各行时行距的上限
   //（简谱引擎；成书拿原书量到的行间净距当它）
-  "system-gap": { kind: "len", jianpu: "vertical.systemGap", original: "spacing.systemGap", note: "简谱引擎按纸均分谱行，不读这个（见 system-spread）" },
+  "system-gap": { kind: "len", jianpu: "vertical.systemGap" },
   "system-spread": { kind: "len", jianpu: "vertical.systemSpread", book: "metrics.systemGapEm" },
   "note-step": { kind: "len", book: "metrics.noteStepEm", note: "音符步距只有成书断句用" },
   // 歌词：`lyric-gap` 是相邻两个字之间的最小横向间隙；`lyric-baseline` 是音符基线到第一行歌词基线
   "lyric-gap": { kind: "len", jianpu: "spacing.lyricGap", book: "metrics.lyricGapEm" },
-  "lyric-baseline": { kind: "len", jianpu: "vertical.lyricBaseline", original: "lyricSpacing.lyricGap" },
-  "lyric-stack": { kind: "len", jianpu: "vertical.lyricStack", book: "metrics.lyricToLyricEm", original: "lyricSpacing.lyricStack" },
+  "lyric-baseline": { kind: "len", jianpu: "vertical.lyricBaseline" },
+  "lyric-stack": { kind: "len", jianpu: "vertical.lyricStack", book: "metrics.lyricToLyricEm" },
   "chord-gap": { kind: "len", jianpu: "vertical.chordGap", book: "metrics.chordToNoteEm" },
   // 歌词标点挤压：halfwidth（半身式）/ clreq（全身式 + 上下文挤压）/ none
-  "lrc-punct-compress": { kind: "word", jianpu: "look.punctCompress", mixed: "punctCompress", original: "look.punctCompress" },
-  "chord-plain": { kind: "bool", jianpu: "look.chordPlain", mixed: "chordPlain", book: "metrics.chordPlain", original: "look.chordPlain" },
+  "lrc-punct-compress": { kind: "word", jianpu: "look.punctCompress", mixed: "punctCompress" },
+  "chord-plain": { kind: "bool", jianpu: "look.chordPlain", mixed: "chordPlain", book: "metrics.chordPlain" },
   // 调号、转调、和弦根音/低音的升降号写在字母前（before）还是后（after）；不写 = 各自原来的写法
-  "accidental-side": { kind: "word", jianpu: "look.accidentalSide", mixed: "accidentalSide", book: "metrics.accidentalSide", original: "look.accidentalSide" },
+  "accidental-side": { kind: "word", jianpu: "look.accidentalSide", mixed: "accidentalSide", book: "metrics.accidentalSide" },
   // 临时记号的样子：csym（照混排）/ classic（原先简谱引擎的，成书缺省）
-  "accidental-style": { kind: "word", jianpu: "look.accidentalStyle", mixed: "accidentalStyle", book: "metrics.accidentalStyle", original: "look.accidentalStyle" },
+  "accidental-style": { kind: "word", jianpu: "look.accidentalStyle", mixed: "accidentalStyle", book: "metrics.accidentalStyle" },
   // csym 临时记号的大小倍数（1 = 照混排）
-  "accidental-scale": { kind: "num", jianpu: "look.accidentalScale", mixed: "accidentalScale", original: "look.accidentalScale", note: "成书照原书用 classic，不读这个" },
+  "accidental-scale": { kind: "num", jianpu: "look.accidentalScale", mixed: "accidentalScale", note: "成书照原书用 classic，不读这个" },
   "bracket-width": { kind: "len", jianpu: "stroke.bracket", book: "metrics.bracketWidth" },
   "bracket-foot": { kind: "len", jianpu: "vertical.bracketFoot", book: "metrics.bracketFootEm" },
   "tuplet-style": { kind: "word", jianpu: "look.tupletStyle", note: "取 bracket（括线）/ arc（两段弧）；成书与混排不支持" },
@@ -100,10 +97,10 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "legacy-time-sig": { kind: "bool", mixed: "musicppJpTimeSig", note: "旧版拍号笔位只在混排有" },
   "legacy-hwid-glyphs": { kind: "bool", mixed: "musicppHwidGlyphs", note: "同上" },
   "chinese-hyphen": { kind: "bool", mixed: "chineseHyphen", note: "纯简谱不画中文连字符" },
-  // 以下只有原样文档布局（`layout/original/`）有：多声部、按实测落值的小节线与增时线
-  "voice-gap": { kind: "len", jianpu: "vertical.voiceGap", original: "spacing.voiceGap", note: "简谱引擎只排一个声部" },
-  "barline-height": { kind: "len", original: "note.barlineHeight", note: "只有原样文档布局单给小节线高" },
-  "double-barline-gap": { kind: "len", original: "stroke.doubleBarlineGap", note: "同上" },
+  // 多声部：同组相邻声部之间（歌词块末行 → 下一声部音符基线）
+  "voice-gap": { kind: "len", jianpu: "vertical.voiceGap" },
+  "barline-height": { kind: "len", jianpu: "vertical.barlineHeight" },
+  "double-barline-gap": { kind: "len", jianpu: "stroke.doubleBarlineGap" },
 };
 
 /** `@staff`：五线谱内容。纯简谱那几档整块不适用（简谱的小节线宽写在 `@jianpu` 的 `barline`）。 */

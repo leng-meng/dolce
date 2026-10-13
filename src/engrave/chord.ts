@@ -110,7 +110,7 @@ const QUALITY_SYMBOL: ReadonlyArray<[RegExp, string]> = [
  * 把和弦**文字**（`Cm`、`B♭7`、`C♯m`、`Fm/A♭`、`Cadd9`）解析成分段。
  *
  * `plain` 为真时排成简单文本（见函数体开头的注释）。
- * `side`：根音/低音的升降号写在字母前还是后（样式键 `accidental-side`）；不给 = 富文本照原文、简单文本写在前。
+ * `side`：根音/低音的升降号写在字母前还是后（样式键 `accidental-side`）；不给 = 照原文（`Eb` 排 `Eb`、`bE` 排 `bE`）。
  *
  * 文本谱里和弦本来就是写死的字符串（`"hx:C♯m"` 或不带引号的 `Dm`），没有 MusicXML
  * 那样的 kind/degree 结构，所以按写法拆：根音 → 质量后缀 → `/低音`。
@@ -123,15 +123,15 @@ export function chordTextSegs(text: string, plain = false, side?: AccidentalSide
     // **纯文本风格**，三条都照原书那本来：
     //   - 升降号写成 ASCII 的 `#` / `b`。`♯`/`♭` 那两个字符在成书用的方正字体里没有字形，
     //     排出来会回退到乐谱字体——绕个圈子又用上了 SMuFL，而纯文本要的正是不用它。
-    //   - 升降号排在**根音字母之前**（原书与谱面都写作 `#Fm`、`♭B`，中文简谱的习惯；
-    //     musicxml 那侧给的是 `B♭` 那种字母在前的写法，这里翻过来）。
+    //   - 升降号在字母前还是后按 `side`（原书写作 `#Fm`、`bB`，中文简谱的习惯，歌本样式表写 `accidental-side: before`），
+    //     不给就照原文。
     //   - 就地缩到 `PLAIN_ACCIDENTAL_SCALE`：字母与后缀数字同字号同基线，
     //     只有升降号印得小一号（字形库量的 `♭` 是 2.62×4.21、`B` 是 6.33×7.01）。
     const segs: HarmonySeg[] = [];
     const emit = (text: string, acc = false): void => {
       segs.push({ text, music: false, superscript: 0, dy: 0, ...(acc ? { scale: PLAIN_ACCIDENTAL_SCALE } : {}) });
     };
-    /** 排一个「字母 + 升降号」，升降号提到字母前面。返回剩下的部分。 */
+    /** 排一个「字母 + 升降号」，升降号按 `side` 放在字母前或后。返回剩下的部分。 */
     const emitRoot = (str: string): string => {
       const m = chordStepAlter(str);
       if (!m) {
@@ -139,9 +139,10 @@ export function chordTextSegs(text: string, plain = false, side?: AccidentalSide
         return "";
       }
       const acc = m.acc ? (SHARP_CHARS.includes(m.acc) ? "#" : "b") : "";
-      if (acc && side !== "after") emit(acc, true);
+      const before = side ? side === "before" : m.left;
+      if (acc && before) emit(acc, true);
       emit(m.step);
-      if (acc && side === "after") emit(acc, true);
+      if (acc && !before) emit(acc, true);
       return str.slice(m.len);
     };
     let rest = emitRoot(src);

@@ -28,7 +28,6 @@
 | `hymn500-measured.ss` + `hymn500.ss`（不在本仓库） | 诗歌 500 首成书（`engine: book`）：前者是统计生成的实测部分（§10），后者是模板与手调常量，按序叠 | 现有 `rebuild.mjs` 输出逐字节不变 |
 | `kl2020.ss`（不在本仓库） | 声合为一 KL2020（`engine: mixed`） | 单曲版 PDF |
 | `kl2020-flow.ss`（不在本仓库） | 同上的**接排版叠加表**（只含与单曲版的差异，清单 `styleByFlow.continue` 指过来） | 1219 接排版 PDF |
-| `src/style/books/original.ss` + `original-shige.ss` | 原样文档布局（`engine: original`；文本谱、MusicXML、多声部 123/ABC 的原样档）：前者是公共底表（页脚区域，页头仍是 `paintHeader`），后者叠诗歌本方言与出厂（番茄）的差异 | 原样档指纹与 page-check 不变 |
 
 ## 1. 词法
 
@@ -85,16 +84,17 @@
   （基准是音符字号；`lyric-gap` `slur-thickness` `barline` `final-barline` 按歌词字号），线宽类（`bracket-width`、
   `repeat-dot-diameter`）写裸数 pt。例：`@jianpu { system-spread: 0.8575em; slur-gap: 0.154em; verse-numbers: auto; }`。
   数值原样存进字段、不在读样式表时乘字号，所以重排结果逐位不变。
-- **原样文档布局**（文本谱、MusicXML、多声部 123/ABC 的原样档）也读 `@jianpu`：`keys.ts` 的 `original` 一列，只给内置方言表用到的键配了
-  （`beam-width` `lyric-baseline` `lyric-stack` `system-gap`，及只有这一路有的 `voice-gap` `barline-height` `double-barline-gap`）。
-  裸数 pt，`em` = 音符字号。字号字体照常写在角色上（`note { size; family }`、`lyric` `verseNum` `chord { size }`…）。以前的 `@pu` 块已删。
+- 简谱两个排版引擎读**同一份** `@jianpu`（同一把尺子 `JianpuStyle`）。多声部才有的 `voice-gap`、`barline-height`、`double-barline-gap`
+  现在只有原样文档引擎（文本谱、MusicXML、多声部 123/ABC 的原样档）用到。以前的 `@pu` 块已删。
+- `accidental-side`（`before` / `after`）：调号、转调、和弦根音与低音的升降号写在字母前还是后；**不写 = 照原文**（`Eb` 排 `Eb`、`bE` 排 `bE`），
+  纯文本和弦（`chord-plain`）也一样。500 首成书照原书写 `before`。
 
 ### 2.2 `@media` 维度
 
 | 维度 | 取值 | 说明 |
 |---|---|---|
 | `mode` | `expanded` `original` `staff` `mixed` | 排版档位 |
-| `engine` | `jianpu` `original` `book` `staff` | 哪个排版器在吃样式：简谱引擎、原样文档布局（文本谱、MusicXML、多声部 123/ABC 的原样档）、成书、五线谱/混排。`original` 与 `mode` 的同名值是两个维度，互不相干 |
+| `engine` | `jianpu` `book` `staff` | 哪个排版器在吃样式：简谱（编辑器里两个简谱引擎同取一份）、成书、五线谱/混排 |
 | `paged` | `true` `false` | 分页（有实际纸张）还是长图。由算出来的 `@page` 纸反推（级联两趟，见 `themes.ts::computeStyleForPaper`） |
 | `page` / `verse` | `left` `right` `first` / 段号 | 只实现了匹配，还没有消费者 |
 
@@ -315,12 +315,11 @@ block 用 `line-height`（倍数）那两套已经合并——同一件事分两
 
 ## 9. 示例
 
-本仓库只内置原样文档布局那两份；三份歌本样式在本地私有仓库（都能被 `../dev/scripts/ss-roundtrip.mjs` 解析、写出、再解析）：
+本仓库只内置 `original-shige.ss`（诗歌本方言的旧值，下一步折成可选风格）；原样档页脚区域写在 `style/themes.ts` 的 print 主题里。三份歌本样式在本地私有仓库（都能被 `../dev/scripts/ss-roundtrip.mjs` 解析、写出、再解析）：
 
 - `hymn500-measured.ss`：统计生成的实测部分（纸、字体、角色、`@jianpu` / `@break` / `@flow`、`@toc` 目录几何）。
 - `hymn500.ss`：fixed 区域（基线写实测数）+ `key-meter()` 组件（避让首行和弦）。
 - `kl2020.ss`：block 区域（标题块、页脚块按原排版程序与成品实测）、`@font-face` 字体文件、目录区域（`repeat: toc` 行 + `leader()`）。
-- `src/style/books/original.ss`：原样文档布局的页脚（BL/BC/BR，`dash-empty` 去 `-` 占位）；`original-shige.ss`：诗歌本方言的度量差异。
 
 ## 10. 成书：样式表就是全部，没有 json
 

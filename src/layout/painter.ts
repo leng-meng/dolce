@@ -17,7 +17,9 @@ import { MetaData } from "../smufl/smufl";
 import { jianpuFlagsOf, jianpuFontSize, jianpuStyleOf } from "../style/jianpu";
 import type { StyleSheet } from "../style/sheet";
 import { applyStaffStyle } from "../style/staff";
-import { computeStyleForPaper, THEMES } from "../style/themes";
+import { computeStyleForPaper, LONG_IMAGE_WIDTH, THEMES } from "../style/themes";
+import { pageMargins, resolvePaper } from "../style/paper";
+import type { Region } from "../style/ss";
 import { MixedOptions, type StaffLayout, type Sys } from "../mixed/model";
 import { layoutStaff } from "../mixed/layout";
 import { layoutStaffPages, PAGE_HEIGHT_FALLBACK } from "../mixed/staffpages";
@@ -25,7 +27,6 @@ import { isStaffLeaf, STAFF_CHORD, STAFF_SYSTEM, staffLeafKey, type StaffChordDa
 import { layoutOriginalDocument, type OriginalDocumentLayout } from "./original/compose";
 import type { PlacedPage } from "./original/place";
 import type { JianpuGrid } from "./original/metrics";
-import { jianpuUserOptionsOf } from "../style/original";
 import { cellOf, ScoreIndex, type Hit } from "./scoreindex";
 import { Playhead, spanIn, svgBox } from "./playhead";
 import type { IdentityKind } from "./identity";
@@ -73,7 +74,7 @@ export interface StaffPaintRequest {
 export interface DocumentPaintRequest {
   readonly view: "original";
   readonly doc: ScoreDoc;
-  /** computed 样式表（`engine: "original"` 那份）：面板字号、纸 / 长图、前景色。null = 版式原样。 */
+  /** computed 样式表（原样档那份，与简谱引擎同一份）。null = print 主题出厂。 */
   readonly style: StyleSheet | null;
 }
 
@@ -306,9 +307,14 @@ export class ScorePainter {
   /** 原样文档这一路：整份文档排好（不等资源，`Font` 同步量字），返回提交动作。
    *  简谱引擎的 `layout` / `score` 保留不动（标题等取用）；`jianpuView` 记成原样档，PPTX 因此不会拿旧引擎页复用。 */
   private _documentCommit(req: DocumentPaintRequest): () => void {
+    const sheet = req.style ?? computeStyleForPaper([THEMES.print], { mode: "original", engine: "jianpu" });
+    const paper = resolvePaper(sheet.page);
     const r = layoutOriginalDocument(req.doc, {
-      user: req.style ? jianpuUserOptionsOf(req.style) : null,
-      ink: req.style?.page.ink ?? null,
+      style: jianpuStyleOf(sheet),
+      // 长图：宽与简谱引擎的长图同一张（500 首那张纸的宽），高由内容定
+      page: paper ? { width: paper.w, height: paper.h, continuous: false } : { width: LONG_IMAGE_WIDTH, height: LONG_IMAGE_WIDTH, continuous: true },
+      userMargins: pageMargins(sheet.page) !== undefined,
+      foot: (sheet.template?.regions?.["song-foot"] as Region | undefined) ?? null,
     });
     const result: LayoutResult = {
       title: r.view.songs[0]?.metadata.titles[0] ?? "",
@@ -402,11 +408,7 @@ export class ScorePainter {
   }
 
   /** 原样文档这一路音符数字的字号（pt），面板「基础字号」显示它；别的路为 null。 */
-  get documentDigitFontSize(): number | null {
-    return this.original?.digitFontSize ?? null;
-  }
-
-  /** 原样文档这一路定稿的度量（方言版式 + 谱内指令 + 面板那层；样式快照脚本核对用）；别的路为 null。 */
+  /** 原样文档这一路定稿的栅格与尺子（样式快照脚本核对用）；别的路为 null。 */
   get documentMetrics(): JianpuGrid | null {
     return this.original?.metrics ?? null;
   }

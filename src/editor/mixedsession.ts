@@ -23,7 +23,6 @@ export interface MixedHost {
   readonly docFormat: DocFormatId;
   readonly layoutMode: App["layoutMode"];
   readonly jpPaper: App["jpPaper"];
-  readonly puPaper: App["puPaper"];
   readonly fontSize: App["fontSize"];
   readonly layoutPage: App["layoutPage"];
   readonly phraseOn: boolean;
@@ -93,7 +92,7 @@ export class MixedSession {
     const pg = this.host.layoutPage;
     // 乐句档五线谱自己量宽断句，五线谱的纸与样式也进键
     const staff = this.host.phraseOn ? ["phrase", this.host.staffPaper, JSON.stringify(this.host.staffStyle())] : [];
-    return [this.host.getText(), this.host.layoutMode, this.host.jpPaper, this.host.puPaper, this.host.fontSize, pg.w, pg.h, ...staff].join("\u0000");
+    return [this.host.getText(), this.host.layoutMode, this.host.jpPaper, this.host.fontSize, pg.w, pg.h, ...staff].join("\u0000");
   }
 
   /** 五线谱/混排档的模型备好了没有。`.musicxml` 就是打开时读的那份；文本格式把**当前源文**经

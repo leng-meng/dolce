@@ -204,7 +204,6 @@ export const en: Record<MsgKey, string> = {
   "settings.staffSize": "Staff size (mm)",
   "settings.lyricSize": "Lyric size (pt)",
   "settings.hideBarNumbers": "Hide measure numbers",
-  "settings.puNote": "Changing the font size scales the whole measured layout proportionally (paper and margins stay), same as the score's own FontSize directive; the Expanded view and .jpwabc share one set of settings.",
   "settings.staffNote": "Staff size is the height of the five lines; text scales with it. Empty = follow the file. Changing the paper or staff size re-lays out the score and drops the file's original line positions.",
   "settings.noteSound": "Sound when editing notes",
   "settings.bookSheet.manual": "manual",

@@ -447,11 +447,8 @@ export function showOptionsDialog(app: App): void {
   const isMixed = app.mode === "mixed"; // 五线谱 / 混排
   /** 展开档：两种格式同一条展开档排版，摆同一组设置。 */
   const isPpt = !isMixed && view === "expanded";
-  /** 原样文档那一路的**原样档**（文本谱、多声部的 123/ABC、MusicXML）：版面由量好的 metrics 定。
-   *  单声部 123/ABC 的原样档走简谱引擎（`App._originalOnJianpu`），与 `.jpwabc` 原样档摆同一组设置。 */
-  const isPu = !isMixed && !isPpt && app.painter.isDocumentLayout;
-  /** 简谱排版器那条路（展开档，或 `.jpwabc` / 单声部 123、ABC 的原样档）——下面绝大多数项只有它吃。 */
-  const isJp = !isMixed && !isPu;
+  /** 简谱（展开档或原样档，各格式同一组设置） */
+  const isJp = !isMixed;
   const isJianpu = isJp && view === "original";
   /** 「每页行数」写进 `.jpwabc` 的 `.Layout` 段，文本谱与 123 没有这个段
    *  （123 是 `I:linesperpage`，尚未接）。 */
@@ -503,9 +500,9 @@ export function showOptionsDialog(app: App): void {
     (k) => PAGE_RATIOS[k][0] === app.pageW && PAGE_RATIOS[k][1] === app.pageH,
     false,
   );
-  // 纸张栏（纸 + 方向 + 边距）：简谱原样、文本谱原样、五线谱/混排三档各记各的；
-  // 五线谱/混排自己一张纸（出厂 A4），不借原样档那张长图
-  const paperEngine: PaperEngine | null = isMixed ? "staff" : isPu ? "original" : isJianpu ? "jianpu" : null;
+  // 纸张栏（纸 + 方向 + 边距）：简谱原样档、五线谱/混排两档各记各的；
+  // 五线谱/混排自己一张纸（出厂 155×240mm），不借原样档那张长图
+  const paperEngine: PaperEngine | null = isMixed ? "staff" : isJianpu ? "jianpu" : null;
   const paperUi = paperEngine ? paperGroup(app, paperEngine) : null;
 
   // ---- 每页行数（写进文档 .Layout 段，只有 jpwabc 有这个段）----
@@ -523,12 +520,6 @@ export function showOptionsDialog(app: App): void {
   const color = colorInput(app.color);
   const bgColor = colorInput(app.bgColor);
 
-  // ---- 文本谱原样档：纸张 / 长图 / 字号缩放 ----
-  // 文本谱的尺寸是从原书逐项量出来的一整套（layout/original/metrics.ts），不由一个基础字号派生，
-  // 所以这里给的是**整体缩放**而不是字号——与谱面自带的 `FontSize: all=` 同一语义。
-  // 字号留空/0 = 跟随版式量到的原尺寸；有排好的谱就把当前实际字号填进去当起点
-  const puFont = num(app.puFontSize || Math.round(app.painter.documentDigitFontSize ?? 0), 6, 200);
-
   if (paperUi) {
     pLayout.append(...paperUi.rows);
   } else if (isPpt) {
@@ -540,9 +531,6 @@ export function showOptionsDialog(app: App): void {
     // 原样档只调基础字号：那一档的标题与词曲字号是按比例派生的（`style/jianpu.ts::jianpuSizes`），
     // 摆出来只会让人以为能单独调。展开档三个都是独立设置，照旧全给。
     pLayout.append(labeled(t("settings.color"), color));
-  }
-  if (isPu) {
-    pLayout.append(labeled(t("settings.fontSize"), puFont), labeled(t("settings.color"), color));
   }
   pLayout.append(labeled(t("settings.bgColor"), bgColor));
 
@@ -565,9 +553,7 @@ export function showOptionsDialog(app: App): void {
     pLayout.append(labeled(t("settings.staffSize"), staffMm), labeled(t("settings.lyricSize"), lyricPt), labeled(t("settings.hideBarNumbers"), hideBarNum));
   }
 
-  if (isPu) {
-    pLayout.append(note(t("settings.puNote")));
-  } else if (isMixed) {
+  if (isMixed) {
     pLayout.append(note(t("settings.staffNote")));
   }
 
@@ -653,7 +639,7 @@ export function showOptionsDialog(app: App): void {
     const [w, h] = isPpt ? PAGE_RATIOS[ratio.value] ?? [app.pageW, app.pageH] : [undefined, undefined];
     const fontSize = isJp ? parseInt(fs.value, 10) || app.fontSize : undefined;
     header.apply(); // 先落用户层，下面 applyRenderSettings 统一存盘并重排
-    const argb = isJp || isPu ? colorValue(color, app.color) : undefined;
+    const argb = isJp ? colorValue(color, app.color) : undefined;
     if (hasLayoutSection) {
       const linesVal = lines.value.trim();
       if (linesVal !== app.getLinesPerPage()) app.setLinesPerPage(linesVal);
@@ -664,7 +650,6 @@ export function showOptionsDialog(app: App): void {
         const c = paperUi?.read();
         return paperEngine && c ? { [paperEngine]: c } : undefined;
       })(),
-      puFontSize: isPu ? parseInt(puFont.value, 10) || 0 : undefined,
       staffSize: isMixed && JSON.stringify([staffMm.value, lyricPt.value]) !== staffInit
         ? { mm: parseFloat(staffMm.value) || null, lyricPt: parseFloat(lyricPt.value) || null }
         : undefined,

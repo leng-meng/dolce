@@ -3,7 +3,7 @@
 // | 主题        | 谁在用                                  |
 // |-------------|-----------------------------------------|
 // | projection  | 编辑器「展开」档（两种格式）与导出 PPTX |
-// | print       | 编辑器「原样」档（`.jpwabc` 与文本谱）  |
+// | print       | 编辑器「原样」档（各格式）              |
 // | book        | 成书重排（scripts/rebuild.mjs）         |
 // | staff       | 五线谱 / 混排                           |
 //
@@ -15,6 +15,7 @@ import { computeStyle, type StyleContext, type StyleLayer } from "./cascade";
 import type { StyleSheet } from "./sheet";
 import type { Length } from "./units";
 import { STANDARD_PAPERS } from "../model/pagemeta";
+import { parseSs } from "./ss";
 
 /** 老版展开档的「出厂默认」（投影片 960×540，字号 28/48/36）。 */
 export const PPTX_PAGE = { w: 960, h: 540, fontSize: 28, titleSize: 48, creditSize: 36 } as const;
@@ -35,8 +36,7 @@ export const PAPER_SIZES: Record<string, readonly [number, number] | null> = { .
 export const ORIGINAL_PAPERS = ["A4", "A5", "B5", "Letter", "150×216mm", "155×240mm", "长图"] as const;
 
 /** 「长图」那一档的纸宽：与 500 首那张纸（`150×216mm`）同宽（用户定）——长图只是不分页，版心与字号照分页纸。
- *  从前取文本谱「原版」的 1000 宽、配 PPT 的 28pt，比 500 首宽出一倍多。文本谱原样档自己的长图宽仍是
- *  `layout/original/metrics.ts::JIANPU_DEFAULTS.page.width`（那一路是照原版整体缩放的一套实测）。 */
+ *  从前取文本谱「原版」的 1000 宽、配 PPT 的 28pt，比 500 首宽出一倍多。 */
 export const LONG_IMAGE_WIDTH = STANDARD_PAPERS["150×216mm"]![0];
 
 /** 简谱原样档的出厂音符字号：照 500 首（实测 12.08pt），不借展开档投影片的 28。 */
@@ -87,9 +87,25 @@ const PRINT_JIANPU: Record<string, Length | boolean> = {
   // 和弦基线离音符墨迹顶留一道空（0 = 贴着数字）
   "chord-gap": "0.25em",
   "chord-plain": true,
+  // 末行歌词基线 → 下一组音符基线：歌词墨迹底到下一组数字墨迹顶只空一行字（诗歌本口径）；同组相邻声部之间
+  "system-gap": "1.6em",
+  "voice-gap": "1.5em",
   "lrc-punct-compress": "halfwidth" as Length,
   "grace-scale": 0.6,
 };
+
+/** 每首末页底下的页脚（文本谱的 BL / BC / BR；语料里 BL 常写 `-` 占位，视为空）：区域顶在本曲末页最低一行之下
+ *  一个歌词字高处，字号按 `as 角色` 取（`header` 与 TL/TR 同档）。现在只有原样文档引擎印。语法见 docs/格式/ss.md。 */
+const PRINT_FOOT = parseSs(`
+@template song-foot {
+  flow: block;
+  align-x: content;
+  line-height: 1.35em;
+  row { left: "{pageText.bottomLeft | dash-empty | lines-trim}" as header; }
+  row(gap-before: 4) { center: "{pageText.bottomCenter | dash-empty | lines-trim}" as header; }
+  row(gap-before: 4) { right: "{pageText.bottomRight | dash-empty | lines-trim}" as header; }
+}
+`).rules;
 
 const INK = 0xff000000;
 const PAPER_WHITE = 0xffffffff;
@@ -107,9 +123,14 @@ export const THEMES: Record<ThemeId, StyleLayer> = {
     },
   ],
   print: [
-    { set: { page: { paper: PAPER_DEFAULT, ink: INK, background: PAPER_WHITE }, roles: PRINT_ROLES, jianpu: { preset: "original", overrides: PRINT_JIANPU } } },
-    // 文本谱不给字号：那一路的尺寸是实测来的一整套，缺省 = 跟随版式量到的原尺寸
-    { when: { engine: "jianpu" }, set: { roles: { note: { size: ORIGINAL_NOTE_SIZE } } } },
+    {
+      set: {
+        page: { paper: PAPER_DEFAULT, ink: INK, background: PAPER_WHITE },
+        roles: { note: { size: ORIGINAL_NOTE_SIZE }, ...PRINT_ROLES },
+        jianpu: { preset: "original", overrides: PRINT_JIANPU },
+      },
+    },
+    ...PRINT_FOOT,
   ],
   // 成书的其余一切在 `book` 块（由歌本样式表算出的 BookStyle，见 style/bookss.ts），由调用方作为第二层叠上
   book: [{ set: { jianpu: { preset: "book" } } }],

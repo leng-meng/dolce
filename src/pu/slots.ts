@@ -36,7 +36,6 @@ import type {
   VoiceGroup,
 } from "./ast";
 import { getMeta } from "../model/metakeys";
-import type { Dialect } from "./dialect";
 import { projectForJianpu } from "../model/jianpuproject";
 import { decoKey } from "../model/deconames";
 import { directionMarks } from "../model/directionmarks";
@@ -718,7 +717,6 @@ export interface SongView extends PuSong {
 }
 
 export interface DocView {
-  dialect: Dialect;
   doc: ScoreDoc;
   songs: SongView[];
   /** 行里的符号 → 它的 id（高亮、定位用） */
@@ -860,7 +858,6 @@ export function docView(doc: ScoreDoc): DocView {
   // 行的 `raw`：文本谱来源按 `Print.source` 的行号取原文（乐句重排改写原文要它）
   const rawLines = doc.source && doc.sourceFormat === "pu" ? doc.source.split(/\r?\n/) : [];
   const view: DocView = {
-    dialect: (doc.puDialect ?? "shige") as Dialect,
     doc,
     // MusicXML 读进来的先投成简谱形状（长音拆增时线、减时线按 `<type>` 算、和弦补原文）
     songs: doc.songs.map((s, i) => toPuSong(projectForJianpu(s), i, rawLines)),

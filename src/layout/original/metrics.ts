@@ -1,32 +1,27 @@
-// 原样文档布局（文本谱、MusicXML、多声部 123/ABC 的原样档）的简谱度量：出厂值、方言修正、谱内指令与面板两层叠放。
+// 原样文档引擎（文本谱、MusicXML、多声部 123/ABC 的原样档）的栅格与谱面自带的版面指令。
 //
-// 这里的数字全部来自对原版渲染输出的实测（headless 浏览器 getBBox / 逐元素坐标差分），
-// 与本项目 .jpwabc 谱面那套 `jpStackGap` 栅格**不是同一把尺子**——文本谱要的是「原版」
-// 观感，两种预览各用各的规则，混用只会两头不像。
-//
-// 横向步进（实测在未拉伸的行上逐点吻合）：
-//   同一拍内、前后都带减时线      → 25
-//   其余音符之间                  → 37.5
-//   音符与小节线之间（两侧）      → 35
-//   每个附点额外                  → +12.5
-// 行内算完自然宽度后再整体拉伸/压缩到版心宽度（两端对齐）。
+// 样式值只有一把尺子 `JianpuStyle`（`style/jianpu.ts::jianpuStyleOf` 折算，与简谱引擎同一份）；
+// 这里只剩原版（番茄）量来的那套栅格，按音符字号等比缩放：
+//   横向步进（实测在未拉伸的行上逐点吻合，数字字号 25 时）：
+//     同一拍内、前后都带减时线      → 25
+//     其余音符之间                  → 37.5
+//     音符与小节线之间（两侧）      → 35
+//     每个附点额外                  → +12.5
+//   行内算完自然宽度后再整体拉伸/压缩到版心宽度（两端对齐）。
+// 子计划 3 改成按拍位归列、列宽按内容定之后，步进退役。
 
-import type { HeaderFonts } from "../../style/header";
+import { Font } from "../font";
 import { arcHeight, type SlurStyle } from "../../engrave/arc";
 import type { GraceMetrics, GraceNote } from "../../engrave/grace";
-import type { AccidentalSide, AccidentalStyleKind } from "../../engrave/spacing";
-import type { CompressMode } from "../../common/cjkpunct";
-import { STACK_GAP_DEFAULT, highDotY, lowDotY, type StackStyle } from "../../engrave/stack";
+import { highDotY, lowDotY, type StackStyle } from "../../engrave/stack";
 import type { NoteElement } from "../../pu/ast";
 import type { JianpuStyle } from "../../engrave/jianpustyle";
 
 /**
- * 原样文档布局（文本谱、MusicXML、多声部 123/ABC 的原样档）的简谱度量，单位 pt。
- * 与简谱引擎的 `LayoutOptions`（`style/jianpu.ts`）是两把尺子；类型按谱面内容取名，适配器在 `style/original.ts`。
- *
- * **组就是缩放规则**：谱内 `FontSize: q=` 只缩 `note` 组与 `size.note`，面板字号缩 `note`、`size`、
- * `lyricSpacing`、`spacing` 四组，其余各组不缩。加字段时放进对的组，缩放就跟着对。
- * 字段名与 `.ss` 一致：`@jianpu` 已有的键沿用其名（`beamWidth` = `beam-width`），字号与字体两组以角色名为键。
+ * 原样文档引擎的**栅格**：贴着音符排的步进、记号槽位、页头基线，与版面。单位 pt。
+ * 样式值（字号、字体、笔画、点、竖向间距、写法）**不在这里**，一律从 `style`（尺子 `JianpuStyle`）取；
+ * 栅格是照番茄原版量的一套（数字字号 25 时的值，`GRID_NOTE_SIZE`），按 `style.size.note` 等比缩放（`gridOf`）。
+ * 子计划 4 换成上方带堆叠后，槽位与页头基线退役。
  */
 export interface JianpuMetrics {
   page: {
@@ -35,42 +30,20 @@ export interface JianpuMetrics {
     margin: { top: number; right: number; bottom: number; left: number };
     /** 连续长图：不按纸张分页，整份谱排成一张，页高随内容增长 */
     longImage: boolean;
-    /** 长图左右两侧留白（比打印边距小得多——它是给屏幕看的） */
-    longImageMargin: number;
     /** 版心第一行音符基线相对上边距的偏移 */
     firstSystemTop: number;
     /** 版心左边距之后再让出的一点内边距（实测原版首音锚点 = 左边距 + 3） */
     systemIndent: number;
   };
-  justify: {
-    /** 是否两端对齐（把每个 system 拉伸到版心宽） */
-    enable: boolean;
-    /** 拉伸倍数上限，防止极短的行被拉散 */
-    maxHorizontalScale: number;
-    /** 末行自然宽度不足版心的这个比例时就不拉伸（留它短着） */
-    lastLineMinFill: number;
-  };
-  /** 音符栅格：贴着音符画的尺寸，随音符字号等比。 */
+  /** 音符栅格：随音符字号等比。 */
   note: {
     /** 横向步进：其余音符之间 / 同一拍内前后都带减时线 / 音符与小节线之间（两侧）/ 每个附点额外 */
     noteStep: number;
     beamedNoteStep: number;
     barlineSpace: number;
     augDotStep: number;
-    /** 附点与八度点**同样大小** */
-    dotRadius: number;
-    /** 减时线线宽，及左右各伸出锚点多少（上下间距走叠层 `look.stackGap`） */
-    beamWidth: number;
+    /** 减时线左右各伸出锚点多少 */
     beamHalfSpan: number;
-    barlineHeight: number;
-    /** 弧线弧高（**弧顶**离端点多高）。既是纵向预留的高度，也反算成绘制时的弧高上限
-     *  ——见 jianpuSlurStyle / jianpuSlurRise，两处同一个数。 */
-    slurArc: number;
-    /** 跨度超过它改画扁平长连音线（见 layout.ts 的 SlurTieBase.initFlat）。
-     *  约 8.6 个数字字号，与 .jpwabc 谱面那边的 `numberSize * 8` 同一量级。 */
-    slurFlatSpan: number;
-    /** 音符堆叠顶端 → 弧线的间隙。对应 .jpwabc 的 jpStackGap（= 字号/6） */
-    slurGap: number;
     /** 音符上方的记号槽位（相对音符基线，负为上；同槽内按 level 继续上移）：
      *  `&xx` 装饰与力度 / 弧线与多连音的兜底（有音符可依据时坐在堆叠顶端再上一个 slurGap）/ 渐强渐弱 / 跳房子 */
     ornamentY: number;
@@ -89,53 +62,7 @@ export interface JianpuMetrics {
     /** 说明性文字行（`W:`）相对该组首行音符基线的 y */
     wordsY: number;
   };
-  /** 线宽类：不随字号缩。 */
-  stroke: {
-    barline: number;
-    /** 双线/反复线里两根竖线的间距 */
-    doubleBarlineGap: number;
-    repeatDotRadius: number;
-    /** 与 .jpwabc 谱面同值（layout.ts 的 slurTieThickness = 6） */
-    slurThickness: number;
-    hairpinThickness: number;
-  };
-  ratio: {
-    /** 倚音相对主音符字号的缩放 */
-    graceScale: number;
-    /** 内联层（临时伴奏）相对主旋律的缩放 */
-    cueScale: number;
-  };
-  /** 字号（pt），键是角色名。`note` 只收字号——原版量到的数字墨迹高 17.9，按量版时的字体折成字号落值。 */
-  size: {
-    note: number;
-    title: number;
-    subtitle: number;
-    credit: number;
-    /** 调号拍号行与速度文字 */
-    keyMeter: number;
-    /** 页眉 `TL:`/`TR:` 与页脚 */
-    header: number;
-    chord: number;
-    /** 歌词前的段号/说明（`<1.>`） */
-    verseNum: number;
-    /** 说明性文字行 `W:` */
-    words: number;
-    lyric: number;
-    /** 题下经文；不给 = `subtitle`。 */
-    scripture?: number;
-  };
-  /** 跟歌词字号走的两个行距：曲行基线 → 其下第一行歌词基线 / 相邻两行歌词基线之间。 */
-  lyricSpacing: {
-    lyricGap: number;
-    lyricStack: number;
-  };
-  spacing: {
-    /** 一组（含歌词）之后到下一组曲行基线 */
-    systemGap: number;
-    /** 同组内相邻声部之间（歌词块末行 → 下一声部同值） */
-    voiceGap: number;
-  };
-  /** 页头逐项落位（基线 y），不缩。 */
+  /** 页头逐项落位（基线 y）。 */
   head: {
     titleBaseline: number;
     /** 首个署名行基线，其后每行下移 creditLineHeight */
@@ -143,37 +70,9 @@ export interface JianpuMetrics {
     creditLineHeight: number;
     keyMeterBaseline: number;
   };
-  /** 写法上的开关（不是长度，不随字号缩放）。 */
-  look: {
-    /** 和弦排成简单文本（一行普通文字，不用 SMuFL 字形、不上标）。样式键 `chord-plain`。 */
-    chordPlain: boolean;
-    /** 调号、转调、和弦的升降号写在字母前还是后；不给 = 各自原来的写法。样式键 `accidental-side`。 */
-    accidentalSide?: AccidentalSide;
-    /** 临时记号的样子。样式键 `accidental-style`。 */
-    accidentalStyle: AccidentalStyleKind;
-    /** `csym` 临时记号的大小倍数。样式键 `accidental-scale`。 */
-    accidentalScale: number;
-    /** 数字上下叠层（八度点、减时线）的空 ÷ 数字墨迹高（engrave/stack.ts）。样式键 `stack-gap`。 */
-    stackGap: number;
-    /** 歌词标点挤压档（engrave/syllable.ts）。样式键 `lrc-punct-compress`。 */
-    punctCompress: CompressMode;
-  };
-  /** 字体族，键是角色名；`text` 是各类文字的底。页眉各项（设置面板「页眉」一组）不给 = `text`。 */
-  font: {
-    text: string;
-    note: string;
-    /** 数字比歌词粗，两支要分开配 */
-    noteBold: boolean;
-    title?: string;
-    subtitle?: string;
-    credit?: string;
-    scripture?: string;
-  };
 }
 
-/** 定稿度量：`withDigitInk` 按数字字体实测补上的派生量。**不是样式值**。
- *  样式值（字号、字体、笔画、点、竖向间距、写法）一律从 `style` 取——引擎不读本类型里的同名组，
- *  那几组只是折成 `style` 之前的来源（谱面指令与面板缩放叠在它们上面）。 */
+/** 定稿栅格：挂上尺子 `style`（点半径已按字形量好），再补按数字字体实测的派生量。 */
 export interface JianpuGrid extends JianpuMetrics {
   style: JianpuStyle;
   ink: {
@@ -184,31 +83,19 @@ export interface JianpuGrid extends JianpuMetrics {
   };
 }
 
-export const JIANPU_DEFAULTS: JianpuMetrics = {
-  page: {
-    width: 1000,
-    height: 1415,
-    margin: { top: 80, right: 80, bottom: 80, left: 80 },
-    longImage: true, // 「原版」是一张连续长图，不是 A4 分页
-    longImageMargin: 96,
-    firstSystemTop: 156, // 首行音符基线 y = 236（= 上边距 80 + 156）
-    systemIndent: 3,
-  },
-  // 两端对齐：番茄**原版**其实短行就是短的，这里刻意背离——短行留一大截白比排得散更难看，
-  // 且本应用的 OMR 识别结果常出短行。末行仍按 lastLineMinFill 保护（太短就不拉）。
-  justify: { enable: true, maxHorizontalScale: 3, lastLineMinFill: 0.7 },
+/** 栅格量版时的数字字号：原版量到数字墨迹高 17.9，苹方粗体「1」墨迹占字号 0.714，折成字号 25.07，落整数。 */
+const GRID_NOTE_SIZE = 25;
+
+/** 原版（番茄）那套栅格，数字字号 `GRID_NOTE_SIZE` 时的值。 */
+const GRID = {
+  firstSystemTop: 156,
+  systemIndent: 3,
   note: {
     noteStep: 37.5,
     beamedNoteStep: 25,
     barlineSpace: 35,
     augDotStep: 12.5,
-    dotRadius: 2.2,
-    beamWidth: 2,
     beamHalfSpan: 6,
-    barlineHeight: 29,
-    slurArc: 7,
-    slurFlatSpan: 215, // ≈ 数字字号 25 × 8.6
-    slurGap: 4.3, // ≈ 数字字号 25 / 6
     ornamentY: -17,
     slurY: -25,
     slurLevelStep: 5,
@@ -220,148 +107,55 @@ export const JIANPU_DEFAULTS: JianpuMetrics = {
     chordY: -26,
     wordsY: -34,
   },
-  stroke: {
-    barline: 1.5,
-    doubleBarlineGap: 5,
-    repeatDotRadius: 2,
-    slurThickness: 6,
-    hairpinThickness: 1.3,
-  },
-  ratio: { graceScale: 0.5, cueScale: 0.72 },
-  look: { chordPlain: false, accidentalStyle: "csym", accidentalScale: 1, stackGap: STACK_GAP_DEFAULT, punctCompress: "clreq" },
-  size: {
-    // 原版量到数字墨迹高 17.9；苹方粗体「1」墨迹占字号 0.714，折成字号 25.07，落整数
-    note: 25,
-    title: 36,
-    subtitle: 20,
-    credit: 16,
-    keyMeter: 16,
-    header: 16,
-    chord: 14,
-    verseNum: 17,
-    words: 16,
-    lyric: 17,
-  },
-  lyricSpacing: { lyricGap: 38, lyricStack: 27 },
-  spacing: {
-    systemGap: 67, // 末行歌词基线 → 下一组音符基线（105 = 38 + 67）
-    voiceGap: 46,
-  },
   head: { titleBaseline: 110, creditBaseline: 175, creditLineHeight: 21, keyMeterBaseline: 176 },
-  font: {
-    text: "PingFang SC, Microsoft YaHei, sans-serif",
-    note: "PingFang SC, Microsoft YaHei, sans-serif",
-    noteBold: true,
-  },
-};
+} as const;
 
-/** 逐组浅拷贝（各组都是纯数据），供各叠放步骤产出新对象、不改入参。 */
-export function cloneMetrics<T extends JianpuMetrics>(m: T): T {
-  const out = { ...m } as Record<string, unknown>;
-  for (const [k, v] of Object.entries(m)) if (v && typeof v === "object") out[k] = { ...v };
-  out.page = { ...m.page, margin: { ...m.page.margin } };
-  return out as T;
+/** 纸：宽高（pt；长图的高只是占位）与是不是长图。 */
+export interface GridPage {
+  width: number;
+  height: number;
+  continuous: boolean;
 }
 
-/** 把一组里的数都乘上 k（没给的可选项跳过）。 */
-function scaleGroup(g: Record<string, number | undefined>, k: number): void {
-  for (const key of Object.keys(g)) if (g[key] !== undefined) g[key] = g[key]! * k;
-}
-
-/** 定稿：按数字字体实测的「墨迹高 ÷ 字号」算出数字墨迹高，再定数字上下那一摞的取尺。
- *  放在所有缩放（谱面 `FontSize:`、面板字号）之后做——那些只动字号，墨迹高跟着字号走。
- *  数字按墨迹竖直居中于基线画（墨迹顶 −noteHeight/2、底 +noteHeight/2），八度点与减时线的落点
- *  走公共那一份（engrave/stack.ts：墨迹到墨迹等距，空 = `look.stackGap` × 墨迹高）。 */
-export function withDigitInk(m: JianpuMetrics, inkPerPt: number): JianpuGrid {
-  const style = styleOfMetrics(m);
-  const noteHeight = style.size.note * inkPerPt;
+/**
+ * 尺子 + 纸 → 定稿栅格。栅格按 `style.size.note / GRID_NOTE_SIZE` 等比缩放；
+ * 点半径为 0 的按数字字体里 `.` 的墨迹高折半（附点、反复点为 0 = 同八度点，与简谱引擎同一口径）；
+ * 数字按墨迹竖直居中于基线画（墨迹顶 −noteHeight/2、底 +noteHeight/2），八度点与减时线的落点
+ * 走公共那一份（engrave/stack.ts：墨迹到墨迹等距，空 = `vertical.stackGap` × 墨迹高）。
+ */
+export function gridOf(src: JianpuStyle, page: GridPage): JianpuGrid {
+  const style: JianpuStyle = { ...src, dot: { ...src.dot } };
+  const noteFont = new Font(style.font.note.family, style.size.note, style.look.noteBold);
+  if (!(style.dot.octave > 0)) {
+    const b = noteFont.charBound(".");
+    style.dot.octave = (b.bottom - b.top) / 2;
+  }
+  if (!(style.dot.aug > 0)) style.dot.aug = style.dot.octave;
+  if (!(style.dot.repeat > 0)) style.dot.repeat = style.dot.octave;
+  const k = style.size.note / GRID_NOTE_SIZE;
+  const scaled = <T extends Record<string, number>>(g: T): { -readonly [K in keyof T]: number } =>
+    Object.fromEntries(Object.entries(g).map(([key, v]) => [key, v * k])) as { -readonly [K in keyof T]: number };
+  const head = scaled(GRID.head);
+  // 署名行距跟着署名字号走（出厂 21 对 16 号字）：谱里给的署名字号大了，行与行就叠在一起
+  head.creditLineHeight = Math.max(head.creditLineHeight, style.header.credit.size * (21 / 16));
+  const one = new Font(style.font.note.family, 100, style.look.noteBold).charBound("1");
+  const noteHeight = style.size.note * ((Math.abs(one.bottom - one.top) || 71) / 100);
   return {
-    ...cloneMetrics(m),
+    page: {
+      width: page.width,
+      height: page.height,
+      margin: { ...style.page.margin },
+      longImage: page.continuous,
+      firstSystemTop: GRID.firstSystemTop * k,
+      systemIndent: GRID.systemIndent,
+    },
+    note: scaled(GRID.note),
+    head,
     style,
     ink: {
       noteHeight,
       stack: { gap: style.vertical.stackGap * noteHeight, dotRadius: style.dot.octave, beamWidth: style.stroke.beam },
     },
-  };
-}
-
-/**
- * 叠好的度量 → 尺子 `JianpuStyle`（只取样式那几组；栅格——步进、槽位、页头基线——仍在度量里）。
- * 弧：原样文档的弧高是**恒定**的（`slurArc` = 弧顶，控制点 = 它 / 0.75），上下限同值，见 `jianpuSlurStyle`。
- */
-export function styleOfMetrics(m: JianpuMetrics): JianpuStyle {
-  const face = (family: string, bold = false) => ({ family, bold, italic: false });
-  const control = m.note.slurArc / 0.75;
-  return {
-    font: { note: face(m.font.note), lyric: face(m.font.text), text: face(m.font.text), smufl: face("Bravura") },
-    header: {
-      title: { size: m.size.title, ...(m.font.title ? { family: m.font.title } : {}) },
-      subtitle: { size: m.size.subtitle, ...(m.font.subtitle ? { family: m.font.subtitle } : {}) },
-      credit: { size: m.size.credit, ...(m.font.credit ? { family: m.font.credit } : {}) },
-      scripture: { size: m.size.scripture ?? m.size.subtitle, ...(m.font.scripture ? { family: m.font.scripture } : {}) },
-    },
-    size: {
-      note: m.size.note,
-      lyric: m.size.lyric,
-      chord: m.size.chord,
-      keyMeter: m.size.keyMeter,
-      verseNum: m.size.verseNum,
-      ending: m.size.keyMeter,
-      sectionWord: m.size.chord,
-      words: m.size.words,
-      header: m.size.header,
-      grace: m.ratio.graceScale,
-      cue: m.ratio.cueScale,
-    },
-    stroke: {
-      barline: m.stroke.barline,
-      finalBarline: m.stroke.barline,
-      beam: m.note.beamWidth,
-      slur: m.stroke.slurThickness,
-      slurOutline: 0,
-      slurFlat: 0,
-      hairpin: m.stroke.hairpinThickness,
-      timeSigRule: m.note.beamWidth,
-      bracket: 0,
-      doubleBarlineGap: m.stroke.doubleBarlineGap,
-    },
-    dot: { octave: m.note.dotRadius, aug: m.note.dotRadius, repeat: m.stroke.repeatDotRadius },
-    vertical: {
-      stackGap: m.look.stackGap,
-      slurGap: m.note.slurGap,
-      lyricBaseline: m.lyricSpacing.lyricGap,
-      lyricStack: m.lyricSpacing.lyricStack,
-      systemGap: m.spacing.systemGap,
-      systemSpread: 0,
-      staffDist: 0,
-      voiceGap: m.spacing.voiceGap,
-      chordGap: 0,
-      bracketFoot: 0,
-      staffTop: 0,
-      staffBottom: 0,
-      barlineHeight: m.note.barlineHeight,
-    },
-    arc: { heightScale: 1, maxHeight: control, minHeight: control, flatSpan: m.note.slurFlatSpan, flatNotes: 0, flatRatio: 0 },
-    spacing: {
-      lyricGap: 0,
-      maxHorizontalScale: m.justify.maxHorizontalScale,
-      justify: m.justify.enable,
-      lastLineMinFill: m.justify.lastLineMinFill,
-    },
-    look: {
-      noteBold: m.font.noteBold,
-      chordPlain: m.look.chordPlain,
-      ...(m.look.accidentalSide ? { accidentalSide: m.look.accidentalSide } : {}),
-      accidentalStyle: m.look.accidentalStyle,
-      accidentalScale: m.look.accidentalScale,
-      punctCompress: m.look.punctCompress,
-      tupletStyle: "arc",
-      verseNumbers: "always",
-      verseNumberAutoMin: 0,
-      timeSigDigitRatio: 0,
-      timeSigRuleLenRatio: 0,
-    },
-    page: { color: 0xff1b1b1b, margin: { ...m.page.margin } },
   };
 }
 
@@ -394,7 +188,7 @@ export function parseFontSizes(lines: readonly string[]): Record<string, number>
   return out;
 }
 
-/** `Margin: left=100;top=30;right=100` —— 与页面同一套单位。 */
+/** `Margin: left=100;top=30;right=100` —— pt。 */
 export function parseMargins(lines: readonly string[]): Partial<Record<"left" | "right" | "top" | "bottom", number>> {
   const out: Partial<Record<"left" | "right" | "top" | "bottom", number>> = {};
   for (const line of lines) {
@@ -409,127 +203,68 @@ export function parseMargins(lines: readonly string[]): Partial<Record<"left" | 
 }
 
 /**
- * 把谱面自带的 `FontSize:` / `Margin:` 应用到度量上。
+ * 谱面自带的 `FontSize:` / `Margin:`：叠在尺子上的**乘法层**（百分比），返回新的一份、不改入参。
  *
- * `all` 是全局系数（真实语料里用得最多）。歌词字号变了，曲词/词词间距要跟着变，
- * 否则放大后会互相压住——所以按同一系数缩放相关间距，而不是只改字号。
+ * `all` 乘全部文字字号（真实语料里用得最多）；`c` 乘歌词，歌词的两个行距跟着乘——字大了行距不跟，
+ * 放大后就互相压住；`q` 乘音符数字与贴着它画的那几样（点、减时线、小节线高、弧高），栅格随音符字号走（`gridOf`）。
+ * 边距 `keepMargins`（面板上给了边距，用户说了算）时不动。
  */
 export function applyDocOptions(
-  base: JianpuMetrics,
+  base: JianpuStyle,
   fontSizes: readonly string[],
   margins: readonly string[],
-): JianpuMetrics {
+  keepMargins: boolean,
+): JianpuStyle {
   const fs = parseFontSizes(fontSizes);
-  const mg = parseMargins(margins);
+  const mg = keepMargins ? {} : parseMargins(margins);
   if (Object.keys(fs).length === 0 && Object.keys(mg).length === 0) return base;
-  const m = cloneMetrics(base);
+  const st = structuredClone(base);
   const all = fs.all ?? 1;
   const k = (key: string): number => (fs[key] ?? 1) * all;
 
-  m.size.title = base.size.title * k("t");
-  m.size.subtitle = base.size.subtitle * k("t2");
-  m.size.credit = base.size.credit * k("z");
-  m.size.header = base.size.header * (fs.tl ?? fs.tr ?? 1) * all;
-  m.size.keyMeter = base.size.keyMeter * all;
-  m.size.chord = base.size.chord * all;
-  m.size.verseNum = base.size.verseNum * k("zs");
-
+  st.header.title.size *= k("t");
+  st.header.subtitle.size *= k("t2");
+  st.header.scripture.size *= k("t2");
+  st.header.credit.size *= k("z");
+  st.size.header *= (fs.tl ?? fs.tr ?? 1) * all;
+  for (const f of ["keyMeter", "chord", "ending", "sectionWord", "words"] as const) st.size[f] *= all;
+  st.size.verseNum *= k("zs");
   const lyricK = k("c");
-  m.size.lyric = base.size.lyric * lyricK;
-  scaleGroup(m.lyricSpacing, lyricK);
+  st.size.lyric *= lyricK;
+  st.vertical.lyricBaseline *= lyricK;
+  st.vertical.lyricStack *= lyricK;
 
-  // `q` 改的是音符数字，整个音符栅格（步进、八度点、减时线、头顶槽位）都得等比跟随
   const noteK = fs.q ?? 1;
   if (noteK !== 1) {
-    m.size.note = base.size.note * noteK;
-    scaleGroup(m.note, noteK);
+    st.size.note *= noteK;
+    for (const f of ["octave", "aug", "repeat"] as const) st.dot[f] *= noteK;
+    st.stroke.beam *= noteK;
+    st.vertical.barlineHeight *= noteK;
+    st.vertical.slurGap *= noteK;
+    st.arc.maxHeight *= noteK;
+    st.arc.minHeight *= noteK;
+    if (st.arc.flatSpan > 0) st.arc.flatSpan *= noteK;
   }
 
-  if (mg.left !== undefined) m.page.margin.left = mg.left;
-  if (mg.right !== undefined) m.page.margin.right = mg.right;
-  if (mg.top !== undefined) m.page.margin.top = mg.top;
-  if (mg.bottom !== undefined) m.page.margin.bottom = mg.bottom;
-  return m;
-}
-
-/** 编辑器面板上能手动改的那几项。谱面自带的 `FontSize:`/`Margin:` 先生效，再叠这一层。 */
-export interface JianpuUserOptions {
-  /** 整体字号缩放（1 = 原尺寸）。纸与边距不跟着缩——版心不变，字大了每行就放得少。
-   *  面板不直接给它：那边给的是**字号 pt**（`digitFontSize`），由 `compose.ts::resolveScale` 换算过来。 */
-  scale?: number;
-  /** 音符数字的字号（pt）。0/缺省 = 跟随版式的 `size.note`。 */
-  digitFontSize?: number;
-  /** 换纸：实际纸张尺寸（pt）。两个一起给才算数——只给一个等于把纸拉长/压扁。 */
-  pageWidth?: number;
-  pageHeight?: number;
-  /** 长图（一张连续长纸）还是按纸分页。覆盖档位自带的 `page.longImage`。 */
-  continuous?: boolean;
-  /** 页边距 `[上, 右, 下, 左]`（pt）。盖过谱面自带的 `Margin:`（面板那层在最上面）。 */
-  margins?: [number, number, number, number];
-  /** 页眉四项的字体（pt）。字号盖过整体缩放后的值——那是用户直接给的 pt。 */
-  header?: HeaderFonts;
-  /** 页眉字号（印刷 pt）→ 本页单位的倍数。连续长图的单位不是 pt（页宽 1000），见 compose.ts::headerPtScale。 */
-  headerScale?: number;
-}
-
-/** 把面板上的手动设置叠到量好的度量上。整体缩放动 `note`、`size`、`lyricSpacing`、`spacing`、`stroke`、`head` 六组与首行起点。 */
-export function applyUserOptions(base: JianpuMetrics, o: JianpuUserOptions | null): JianpuMetrics {
-  if (!o) return base;
-  const m = cloneMetrics(base);
-  const k = o.scale ?? 1;
-  if (k !== 1) {
-    scaleGroup(m.note, k);
-    scaleGroup(m.size, k);
-    scaleGroup(m.lyricSpacing, k);
-    scaleGroup(m.spacing, k);
-    // 笔画（小节线、弧、松叶的粗细，反复点）与页眉落位也跟着缩：只缩字的话，原样档换成 500 首那张纸、
-    // 字号降到 12 时，小节线、减时线还是原版 1000 宽长图上的粗细，比简谱引擎那一路粗出一倍；页眉各行也空得老远
-    scaleGroup(m.stroke, k);
-    scaleGroup(m.head, k);
-    m.page.firstSystemTop *= k;
-  }
-  if (o.pageWidth && o.pageHeight) {
-    m.page.width = o.pageWidth;
-    m.page.height = o.pageHeight;
-  } else if (o.pageWidth && o.continuous) {
-    m.page.width = o.pageWidth; // 长图只定宽，高由内容定
-  }
-  if (o.continuous !== undefined) m.page.longImage = o.continuous;
-  if (o.margins) {
-    const [top, right, bottom, left] = o.margins;
-    m.page.margin = { top, right, bottom, left };
-  }
-  const h = o.header ?? {};
-  if (h.title?.family) m.font.title = h.title.family;
-  if (h.subtitle?.family) m.font.subtitle = h.subtitle.family;
-  if (h.credit?.family) m.font.credit = h.credit.family;
-  if (h.scripture?.family) m.font.scripture = h.scripture.family;
-  const hk = o.headerScale ?? 1;
-  if (h.title?.size) m.size.title = h.title.size * hk;
-  if (h.subtitle?.size) m.size.subtitle = h.subtitle.size * hk;
-  if (h.credit?.size) m.size.credit = h.credit.size * hk;
-  if (h.scripture?.size) m.size.scripture = h.scripture.size * hk;
-  // 署名行距跟着署名字号走（出厂 21 对 16 号字）：谱里给的署名字号大了，行与行就叠在一起
-  m.head.creditLineHeight = Math.max(m.head.creditLineHeight, m.size.credit * (21 / 16));
-  return m;
+  for (const side of ["left", "right", "top", "bottom"] as const) if (mg[side] !== undefined) st.page.margin[side] = mg[side]!;
+  return st;
 }
 
 /**
- * 原样文档布局的弧线样式。绘制与纵向预留**共用这一个来源**：
- * `slurArc` 是想要的弧顶高度，贝塞尔的弧顶约为控制点高的 0.75，所以上限按 /0.75 反算。
- * 在此之前 painter 把弧高直接丢掉、按 musicpp 的对数公式画（跨度大时高出一倍多），
- * 而 layout 又按弧高预留——两套数对不上。
+ * 原样文档布局的弧线样式：与简谱引擎同一口径（`layout.ts::slurStyleOf`）。绘制与纵向预留**共用这一个来源**。
  */
 export function jianpuSlurStyle(m: JianpuGrid, color: number): SlurStyle {
   const st = m.style;
   return {
     thickness: st.stroke.slur,
     color,
-    // 文本谱的参考实现（番茄原版渲染）弧高是**恒定**的（控制点固定在 top-10，与跨度无关），
-    // 所以上下限同值（`styleOfMetrics`）：长弧不长高、短弧也不塌成直线。
+    heightScale: st.arc.heightScale,
+    outlineWidth: st.stroke.slurOutline,
     maxHeight: st.arc.maxHeight,
     minHeight: st.arc.minHeight,
-    flatSpan: st.arc.flatSpan,
+    flatSpan: st.arc.flatSpan < 0 ? 0 : st.arc.flatSpan || st.size.note * 5,
+    flatRatio: st.arc.flatRatio,
+    flatLineWidth: st.stroke.slurFlat,
   };
 }
 

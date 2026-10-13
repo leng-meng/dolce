@@ -35,12 +35,8 @@ import { fillRect, strokePath, textItem } from "../../engrave/prims";
 import { breathPath } from "../../engrave/breath";
 import { BarStyle } from "../../score/enums";
 import type { Metadata, NoteElement } from "../../pu/ast";
-import ORIGINAL_SS from "../../style/books/original.ss?raw";
-import ORIGINAL_SHIGE_SS from "../../style/books/original-shige.ss?raw";
-import { computeStyleForPaper } from "../../style/themes";
-import { parseSs, type Region } from "../../style/ss";
-import { jianpuMetricsOf } from "../../style/original";
-import type { Dialect } from "../../pu/dialect";
+import type { Region } from "../../style/ss";
+import type { JianpuStyle } from "../../engrave/jianpustyle";
 
 import { layoutRegion, songFields } from "../../style/template";
 import { emptyMetadata } from "../../pu/ast";
@@ -48,7 +44,6 @@ import type { ElementId, ScoreDoc } from "../../model/doc";
 import type { DocView } from "../../pu/slots";
 import { originalInputOf } from "./input";
 import { applyBreaks } from "../../model/breaks";
-import { pageOfDefaults } from "../../model/pagemeta";
 import {
   chordLane,
   graceLayout,
@@ -67,21 +62,8 @@ import {
 } from "./place";
 import { BRACE_GLYPHS } from "./brace";
 import { addBarlineOwner } from "../identity";
-import { applyDocOptions, applyUserOptions, noteMarkGap, jianpuSlurStyle, withDigitInk, type JianpuGrid, type JianpuMetrics, type JianpuUserOptions } from "./metrics";
+import { applyDocOptions, gridOf, noteMarkGap, jianpuSlurStyle, type GridPage, type JianpuGrid } from "./metrics";
 import { ACCOMP_BRACKET, ACCIDENTAL_GLYPH, BARLINE_MARKS, BRACKET, DYNAMICS, ORNAMENTS, TERMS } from "../../pu/glyph";
-
-/**
- * 定稿度量：按数字字体实测「1」的墨迹占比补上 `ink`（字号来自样式值 `size.note`）。
- * 不同字体的数字高宽比不同，但锚点按固定步进、字形按墨迹居中，位置仍与原版一致。
- */
-function resolveDigitInk(m: JianpuMetrics): JianpuGrid {
-  const b = new Font(m.font.note, 100, m.font.noteBold).charBound("1");
-  return withDigitInk(m, (Math.abs(b.bottom - b.top) || 71) / 100);
-}
-
-/** 文本谱的出厂墨色。歌词比谱面略黑一点，是原版量出来的。 */
-const DEFAULT_INK = 0xff1b1b1b;
-const DEFAULT_LYRIC_INK = 0xff101010;
 
 /** 一次原样文档排版的上下文（原 PuPainter 的实例状态）。墨色也在这里：
  *  原先是模块级可变量、在 `load` 开头设一次，现在随上下文传，多个实例互不影响。 */
@@ -96,9 +78,11 @@ interface OriginalCtx {
   pageHeight: number;
   /** 连续长图裁紧后，整页要平移多少（把墨迹推到左侧留白处） */
   _pageShiftX: number;
-  /** 谱面墨色；用户指定前景色时与歌词同色——用户指定的是「前景色」，没道理还留着那点深浅差。 */
+  /** 墨色（`style.page.color`）。歌词同色。 */
   ink: number;
   lyricInk: number;
+  /** 页脚模板（样式表的 `song-foot` 区域；没有就不印） */
+  foot: Region | null;
 }
 
 // 歌词联合括号：尺寸对照印刷原版量得（单位 = 歌词字号）
@@ -276,38 +260,6 @@ const PU_BARLINE_SPEC: Record<string, BarlineSpec | undefined> = {
   "repeat-both": { repeatBackward: true, repeatForward: true },
 };
 
-/** 方言版式（内置方言表）→ 谱面自带的 `FontSize:` / `Margin:`（手动字号那层之前的全部）。 */
-function docMetricsOf(view: DocView): JianpuMetrics {
-  const meta0 = view.songs[0]?.metadata;
-  const m = builtinOf(view.dialect).metrics;
-  return applyDocOptions(m, meta0?.fontSizes ?? [], meta0?.margins ?? []);
-}
-
-/**
- * 页眉字号（谱里 `<credit-words>` 的、面板上设的，都是**印刷 pt**）换成本页单位的倍数。
- * 选了纸时页宽就是 pt，倍数 1；连续长图的页宽是 1000（不是 pt），要按「印刷页宽 → 1000」等比换算——
- * 印刷页宽取谱里自己的纸（`<page-layout>`），没有按 A4。不换的话 148mm 宽的谱上 12pt 的标题
- * 在长图上只有数字的一半大（001《圣哉，圣哉，圣哉》）。
- */
-function headerPtScale(source: ScoreDoc, docMetrics: JianpuMetrics, o: JianpuUserOptions): number {
-  const continuous = o.continuous ?? docMetrics.page.longImage;
-  // 选了纸、或长图给了实际宽（与简谱原样档同一张纸宽）时页宽就是 pt，不用折算
-  if (!continuous || o.pageWidth) return 1;
-  const song = source.songs[0];
-  const srcW = (song && pageOfDefaults(song)?.w) || A4_WIDTH_PT;
-  return docMetrics.page.width / srcW;
-}
-
-const A4_WIDTH_PT = 595.28;
-
-/** 面板给的是**字号（pt）**，metrics 那层认的是缩放——在这里换算：
- *  拿「这套版式（含谱面自带的 FontSize 指令）原本多少 pt」当分母。 */
-function resolveScale(o: JianpuUserOptions | null, docMetrics: JianpuMetrics): JianpuUserOptions | null {
-  if (!o?.digitFontSize) return o;
-  const base = docMetrics.size.note;
-  return base > 0 ? { ...o, scale: o.digitFontSize / base } : o;
-}
-
 /** 数字按墨迹居中于锚点：返回该把文字画在哪个 x/y，并附带墨迹盒。 */
 function digitOrigin(c: OriginalCtx, ch: string): { dx: number; dy: number; b: Rect } {
   const b = c.digitFont.charBound(ch);
@@ -351,7 +303,7 @@ function systemMetrics(c: OriginalCtx, group: PlacedGroup, page?: PlacedPage): {
   const lineToLabel = m.style.size.verseNum * 0.55;
   // 首字前面挂出去的前置标点（`“高`，音节按主体居中、引号伸到左边，engrave/syllable.ts）也得让：
   // 只按半个字宽留，段号就压在引号上、连谱号压到引号
-  const lyricFont = new Font(m.style.font.text.family, m.style.size.lyric);
+  const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
   let lead = 0;
   for (const v of group.voices) {
     for (const line of v.voice.lyrics) {
@@ -458,9 +410,9 @@ function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): Group {
   return root;
 }
 
-/** 页脚区域（`original.ss` 的 `song-foot`）。按页宽算右缘，所以 `shiftX` 与 paintHeader 同口径；字号按 `as 角色` 取（`footerSize`）。 */
+/** 页脚区域（样式表的 `song-foot`，出厂在 print 主题）。按页宽算右缘，所以 `shiftX` 与 paintHeader 同口径；字号按 `as 角色` 取（`footerSize`）。 */
 function layoutFooters(c: OriginalCtx, shiftX: number): { page: number; bottom: number; items: TextFrame[] }[] {
-  const region = c.doc ? builtinOf(c.doc.dialect).foot : null;
+  const region = c.foot;
   const placed = c.placed;
   if (!region || !c.doc || !placed) return [];
   const m = c.metrics;
@@ -480,7 +432,7 @@ function layoutFooters(c: OriginalCtx, shiftX: number): { page: number; bottom: 
         "pageText.bottomRight": meta.bottomRight.map((text) => ({ text })),
       }),
       pageNo: 1,
-      content: { left: m.page.margin.left, right: c.pageWidth - m.page.longImageMargin - shiftX },
+      content: { left: m.page.margin.left, right: c.pageWidth - m.page.margin.right - shiftX },
       dy: low + m.style.size.lyric,
       sizeOf: (role) => footerSize(m, role),
       measure: (_r, t, size) => font(size).measureText(t),
@@ -549,9 +501,9 @@ function keyLineInk(c: OriginalCtx, meta: Metadata): { top: number; bottom: numb
   const mt = meta.meters[0];
   if (mt) {
     const eq = headFont.charBound("=");
-    const meterY = (eq.top + eq.bottom) / 2 + m.style.stroke.beam / 2;
+    const meterY = (eq.top + eq.bottom) / 2 + timeSigRule(m) / 2;
     const r = new TimeSigGlyph(mt.numerator, mt.denominator, {
-      height: m.style.vertical.barlineHeight, centerY: 0, ruleWidth: m.style.stroke.beam, color: c.ink, font: headFont,
+      height: m.style.vertical.barlineHeight, centerY: 0, ruleWidth: timeSigRule(m), color: c.ink, font: headFont,
     });
     const ink = r.box();
     top = Math.min(top, meterY + ink.top);
@@ -611,7 +563,7 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
     root.add(text(l.text, centre - w / 2, l.y, l.font, c.ink));
   }
 
-  const right = c.pageWidth - m.page.longImageMargin - c._pageShiftX;
+  const right = c.pageWidth - m.page.margin.right - c._pageShiftX;
   const authorFont = new Font(m.style.header.credit.family ?? m.style.font.text.family, m.style.header.credit.size);
   // `Z:` 词曲作者靠右；`TL:`/`TR:` 是与标题同高的左右文字块（多行，允许空行占位）
   meta.authors.forEach((a, i) => {
@@ -668,7 +620,7 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
   // 拍号的分数线与调号的「=」**视觉居中**：按「=」墨迹的竖直中心定分数线（用户口径）。
   // TimeSigGlyph 把分数线描边中心放在 centerY − ruleWidth/2，这里补回那半个线宽。
   const eq = headFont.charBound("=");
-  const meterY = keyY + (eq.top + eq.bottom) / 2 + m.style.stroke.beam / 2;
+  const meterY = keyY + (eq.top + eq.bottom) / 2 + timeSigRule(m) / 2;
   const meterFrom = root.children.length;
   for (const meter of meta.meters) {
     x += paintMeter(c, root, x, meterY, meter, headFont) + 14;
@@ -694,6 +646,11 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
   }
 }
 
+/** 拍号分数线粗细（`time-sig-rule`；0 = 与减时线同粗）。 */
+function timeSigRule(m: JianpuGrid): number {
+  return m.style.stroke.timeSigRule || m.style.stroke.beam;
+}
+
 /**
  * 分数式拍号（分子在上、分母在下、中间一横）。返回占用的宽度。
  * 头部的调号拍号与小节线上的临时拍号共用。
@@ -711,7 +668,7 @@ function paintMeter(c: OriginalCtx,
   const r = new TimeSigGlyph(meter.numerator, meter.denominator, {
     height: c.metrics.style.vertical.barlineHeight,
     centerY: 0,
-    ruleWidth: c.metrics.style.stroke.beam, // 分数线与减时线同粗（用户口径）
+    ruleWidth: timeSigRule(c.metrics),
     color: c.ink,
     font,
   });
@@ -1024,8 +981,8 @@ function paintNote(c: OriginalCtx,
   const { dx: adx, dy: ady, b: ab } = digitOrigin(c, note.sound === "rhythm" ? "X" : String(note.pitch));
   const digitInk = ab.offset(x + adx, baseline + ady);
   for (let i = 0; i < note.dots; i++) {
-    const p = augDotCenter(digitInk, i, m.style.dot.octave, m.ink.stack.gap);
-    const d = dot(c.ink, p.cx, p.cy, m.style.dot.octave);
+    const p = augDotCenter(digitInk, i, m.style.dot.aug, m.ink.stack.gap);
+    const d = dot(c.ink, p.cx, p.cy, m.style.dot.aug);
     d.classes.add("aug-dot"); // 可视化编辑单独点选附点（`notePartEls`）
     d.ident = { kind: "aug-dot" };
     g.add(d);
@@ -1263,7 +1220,7 @@ function paintBarline(c: OriginalCtx,
     top: -half,
     bot: half + spanHeight,
     light: m.style.stroke.barline,
-    heavy: m.style.stroke.barline * 2.6,
+    heavy: m.style.stroke.finalBarline,
     dotRadius: m.style.dot.repeat,
     color: c.ink,
   });
@@ -1341,7 +1298,7 @@ function paintLyricAnnotations(c: OriginalCtx, root: Group, voice: PlacedVoice, 
     const w = font.measureText(line.annotation);
     // 首字前挂出去的前置标点（`“主`）也得让开，同 `systemMetrics` 留位的口径——不让的话段号压在引号上
     const syl = line.syllables.find((x) => x?.text);
-    const lead = syl ? syllableRun(syl.text, new Font(m.style.font.text.family, m.style.size.lyric), m.style.look.punctCompress).lead : 0;
+    const lead = syl ? syllableRun(syl.text, new Font(m.style.font.lyric.family, m.style.size.lyric), m.style.look.punctCompress).lead : 0;
     root.add(
       text(line.annotation, left - m.style.size.lyric * 0.5 - lead - gapPx - w, voice.lyricY[verse]!, font, c.lyricInk),
     );
@@ -1356,7 +1313,7 @@ function paintSyllables(c: OriginalCtx,
   rightEdge?: number[],
 ): void {
   const m = c.metrics;
-  const font = new Font(m.style.font.text.family, m.style.size.lyric);
+  const font = new Font(m.style.font.lyric.family, m.style.size.lyric);
   it.syllables.forEach((syl, verse) => {
     if (!syl) return;
     const str = syl.text + (syl.trailingPunctuation ?? "");
@@ -1377,10 +1334,13 @@ function paintSyllables(c: OriginalCtx,
 }
 
 
-/** 原样文档排版的外部配置：面板那一层（字号 / 纸 / 长图，见 `style/original.ts`）与前景色（null = 出厂墨色）。 */
+/** 原样文档排版的外部配置：尺子（`style/jianpu.ts::jianpuStyleOf`，与简谱引擎同一份）、纸、页脚模板。 */
 export interface OriginalDocumentConfig {
-  readonly user: JianpuUserOptions | null;
-  readonly ink: number | null;
+  readonly style: JianpuStyle;
+  readonly page: GridPage;
+  /** 面板上给了边距：谱面自带的 `Margin:` 不再生效（用户说了算） */
+  readonly userMargins: boolean;
+  readonly foot: Region | null;
   /** 已经按窄纸重新断过行（`reflowLineStarts`），不再断第二次 */
   readonly noReflow?: boolean;
 }
@@ -1401,11 +1361,10 @@ export interface OriginalDocumentLayout {
 /** 排一份文档并生成全部页面（原 `PuPainter.load`）。 */
 export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentConfig): OriginalDocumentLayout {
   const doc = originalInputOf(source);
-  // 谱面自带的 `FontSize:` / `Margin:` 也要生效（真实语料里 `all=` 用得最多）；
-  // 谱面自带的指令先生效，面板上的手动设置叠在最外层（用户说了算）
-  const docMetrics = docMetricsOf(doc);
-  const user = cfg.user ? { ...cfg.user, headerScale: headerPtScale(source, docMetrics, cfg.user) } : null;
-  const m = resolveDigitInk(applyUserOptions(docMetrics, resolveScale(user, docMetrics)));
+  // 谱面自带的 `FontSize:` / `Margin:` 也要生效（真实语料里 `all=` 用得最多）：乘在尺子上
+  const meta0 = doc.songs[0]?.metadata;
+  const style = applyDocOptions(cfg.style, meta0?.fontSizes ?? [], meta0?.margins ?? [], cfg.userMargins);
+  const m = gridOf(style, cfg.page);
   const c: OriginalCtx = {
     metrics: m,
     doc,
@@ -1415,14 +1374,15 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     pageWidth: m.page.width,
     pageHeight: m.page.height,
     _pageShiftX: 0,
-    ink: cfg.ink ?? DEFAULT_INK,
-    lyricInk: cfg.ink ?? DEFAULT_LYRIC_INK,
+    ink: style.page.color,
+    lyricInk: style.page.color,
+    foot: cfg.foot,
   };
   const headerBottoms = doc.songs.map((song) => headerBottom(c, song.metadata));
   // 歌词的**墨迹**伸出注入给排版（它不碰字体）：落位口径同 paintSyllables——主体居中于锚点、
   // 尾随标点挂右边。量墨迹而不是字面框：「声，」的全角逗号字面框右半边是空的，
   // 按字面框约束会把墨迹根本没碰到的行也撑开（《圣哉三一歌》长图就是这样被误伤的）。
-  const lyricFont = new Font(m.style.font.text.family, m.style.size.lyric);
+  const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
   // 歌词避让量的是**画出来的**那串：与 paintSyllables 同一个居中点、同一串挤压后的宽
   const measure: LyricMeasure = (syl) => {
     const str = syl.text + (syl.trailingPunctuation ?? "");
@@ -1486,18 +1446,4 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     view: doc,
     placed,
   };
-}
-
-/** 内置样式表：公共底表 `original.ss`，诗歌本方言再叠 `original-shige.ss`（番茄 = 出厂值，没有叠加表）。
- *  各方言解析一次：出度量（`jianpuMetricsOf`）与页脚区域。 */
-const BUILTIN_SS: Record<Dialect, string[]> = { tomato: [ORIGINAL_SS], shige: [ORIGINAL_SS, ORIGINAL_SHIGE_SS] };
-const builtinCache = new Map<Dialect, { metrics: JianpuMetrics; foot: Region | null }>();
-function builtinOf(dialect: Dialect): { metrics: JianpuMetrics; foot: Region | null } {
-  let hit = builtinCache.get(dialect);
-  if (!hit) {
-    const sheet = computeStyleForPaper(BUILTIN_SS[dialect].map((src) => parseSs(src).rules), { engine: "original" });
-    hit = { metrics: jianpuMetricsOf(sheet), foot: (sheet.template?.regions?.["song-foot"] as Region | undefined) ?? null };
-    builtinCache.set(dialect, hit);
-  }
-  return hit;
 }

@@ -625,6 +625,9 @@ export function chordLane(voice: ScoreLine, m: JianpuGrid): number {
   return lane;
 }
 
+/** 上一组末行与本组头顶之间至少留几个歌词字号（`layoutSong` 的组间让位）。 */
+const GROUP_CLEAR = 0.75;
+
 /**
  * 一组曲行头顶需要留多少空间——记号是往上画的（弧线、跳房子、渐强渐弱、装饰音、
  * 临时伴奏），不预留就会压到上一组的歌词。
@@ -648,7 +651,11 @@ function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
       }
     }
     for (const el of voice.elements) {
-      if (el.kind === "inline-layer") consider(m.note.cueY - m.ink.noteHeight * 0.6);
+      if (el.kind === "inline-layer" && el.role === "voice") {
+        // `{dsb}` 并排块：上行整体抬高 `splitRise`，头顶是它自己的记号或花括号上端，取高的那个
+        const inner: ScoreLine = { voice: voice.voice, elements: el.elements, marks: el.marks, lyrics: [], raw: el.code, source: el.source };
+        consider(-splitRise(m) - Math.max(m.ink.noteHeight * 0.64, voiceHeadroom(inner, m)));
+      } else if (el.kind === "inline-layer") consider(m.note.cueY - m.ink.noteHeight * 0.6);
       // 和弦/注释画在 annotationY 那条**基线**上，字还要往上长一截——只留 annotationY
       // 的话，system 间距一收紧（gapGroup 按无和弦的底本量得）和弦就顶进上一组的低音点。
       // 再往上让一个数字高：只让到墨迹顶是「不打架」，两组之间还得看得出是两组。
@@ -667,7 +674,19 @@ function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
     }
   }
   if (group.texts.length > 0) consider(m.note.wordsY);
+  // 多声部的连谱号：上花头伸出首声部基线 `braceReach`（见 layoutSong 末尾、compose.ts::paintBrace）
+  if (group.voices.length > 1) consider(-braceReach(m));
   return -top;
+}
+
+/** `{dsb}` 并排块里上行比主旋律抬高多少（下行主旋律同量下移）。 */
+function splitRise(m: JianpuGrid): number {
+  return m.ink.noteHeight * 1.552;
+}
+
+/** 连谱号上下花头伸出首/末声部基线多少：粗线探出 0.85 个墨迹高，花头字形高 1.18 线距（= 1.18/4 em × 字号 2.2 墨迹高）。 */
+function braceReach(m: JianpuGrid): number {
+  return m.ink.noteHeight * (0.85 + (1.18 / 4) * 2.2);
 }
 
 /**
@@ -944,7 +963,7 @@ function placeLayers(
 
     // `{dsb}`：并排块。括起的内容排在上行，主旋律从 host 起**等时长**的一段排在下行，
     // 两行同字号、按拍位对齐（原版里两行结构本就一致）。
-    const split = m.ink.noteHeight * 1.552;
+    const split = splitRise(m);
     let total = 0;
     for (const it of laid.items) total += it.beats;
     let acc = 0;
@@ -1049,10 +1068,11 @@ export function layoutSong(
   for (const [pageIdx, srcPage] of song.pages.entries()) {
     for (const [groupIdx, group] of srcPage.groups.entries()) {
       let y = 0;
-      // 记号往上画，先给这一组留够头顶空间
+      // 记号往上画，先给这一组留够头顶空间：上一组末行（歌词基线或音符基线）到本组基线是 `system-gap`，
+      // 本组头顶（常备的和弦槽，或更高的弧、房号、记号）与上一组末行之间至少留 `GROUP_CLEAR` 个歌词字号
+      //（歌词下伸约 0.25 字号，再空半行），不够就整组下移
       const head = groupHeadroom(group, m);
-      const baseHead = -m.note.chordY;
-      if (head > baseHead) y += head - baseHead;
+      y += Math.max(0, head + GROUP_CLEAR * m.style.size.lyric - m.style.vertical.systemGap);
       // `W:` 文字行与和弦同处头顶那一槽，让位口径也同和弦（见 groupHeadroom）：墨迹顶再往上让一个数字高。
       // 只让到基线（textLineY）的话，字顶正落在上一组的组间距里——gapGroup 收到「只空一行」之后，
       // 上一组没有歌词时文字行就压到它的音符与小节线上（小兔子乖乖「前奏」压「引子」那行 16pt）。
@@ -1099,13 +1119,14 @@ export function layoutSong(
       laidOut.forEach((l, vi) => {
         const voice = group.voices[vi]!;
         const underlines = computeUnderlines(voice, l.items, m, l.groups);
-        // 第一行歌词的位置是**动态**的：常规按 gapMusicLyric，但一行里若有十六分音符
-        // 这样「减时线 + 低音点」叠下来的音，就按最低墨迹再让开一个 stackGap，
-        // 免得歌词字顶贴到低音点上。
+        // 第一行歌词的位置：样式给了 `lyric-baseline` 就不低于它；自动值与简谱引擎同一口径
+        //（`layout.ts::Line.updateLyricY`）：数字墨迹底往下一个音符字号，再让开 max(0.4 字号, 数字底之下的叠层深度)
+        //——一行里有「减时线 + 低音点」叠下来的音，歌词整行跟着下移，免得字顶贴到低音点上。
         const inkBottom = lineInkBottom(l.items, m);
+        const digitBottom = m.ink.noteHeight / 2;
         const firstLyric = Math.max(
           m.style.vertical.lyricBaseline,
-          inkBottom + m.style.vertical.slurGap + m.style.size.lyric * 0.8,
+          digitBottom + m.style.size.note + Math.max(m.style.size.note * 0.4, inkBottom - digitBottom),
         );
         const lyricY0 = firstLyric;
         // 内联层要先排：`{dsb}` 会给主旋律那一段打上 dy，减时线与记号都得跟着走
@@ -1196,12 +1217,12 @@ export function layoutSong(
   // 1.18/4 em × 字号 2.2 墨迹高，见 compose.ts::paintBrace）。末声部底下有歌词时歌词块早把它盖住；
   // 展开档里末声部这一遍没词（同一首歌的 Q2）时，上一组的下花头会压到下一组的上花头。
   // 只在真会相压时把上一块往下撑——不压的一点不动，原样档的行距是对过原书的。
-  const braceReach = m.ink.noteHeight * (0.85 + (1.18 / 4) * 2.2);
+  const reach = braceReach(m);
   for (let i = 0; i + 1 < blocks.length; i++) {
     const a = blocks[i]!;
     const b = blocks[i + 1]!.group;
     if (!a.group.hasBrace || !b.hasBrace) continue;
-    const need = a.group.braceBottom + 2 * braceReach - b.braceTop + m.ink.noteHeight * 0.3;
+    const need = a.group.braceBottom + 2 * reach - b.braceTop + m.ink.noteHeight * 0.3;
     if (a.bottom < need) a.bottom = need;
   }
   // 首页要让过标题/词曲/调号那一整块——头部行数因谱而异，写死会压到正文

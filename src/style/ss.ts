@@ -334,7 +334,7 @@ class Parser {
         return;
       }
       case "pu":
-        this.fail("`@pu` 已删：原样文档布局也读 `@jianpu`（键表里的 original 一列）", at);
+        this.fail("`@pu` 已删：简谱各档都读 `@jianpu`", at);
         break;
       case "template": {
         const nameTok = this.peek();
