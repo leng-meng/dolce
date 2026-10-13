@@ -1095,15 +1095,14 @@ class DocPartLoader {
   private calcStemLen(): void {
     // parser.cpp::calcStemLen —— 仅有 <stem> 的音符算符干长；有 default-y 用之（长度量到**和弦尾音**：
     // `fabs(-ch->tailNote()->cy() - stemY)`，Sibelius 只在和弦首音写 <stem>，量到首音会把朝上的符干算长一截），
-    // 否则回退 35（grace 乘 cueSize）。无符干（全音符）保持默认 0。
-    const cueSize = this.score.options.cueSize;
+    // 否则回退 35（grace 乘 graceSize）。无符干（全音符）保持默认 0。
     for (const nt of this.stemNotes) {
       const ch = nt.chord;
       const sy = this.stemYMap.get(nt);
       const len = sy !== undefined ? Math.abs(-ch.tailNote().cy() - sy) : NaN;
       // 量不出数（转来的谱音高位置这会儿还没定、或 default-y 不是数）按没写处理：否则符干长成 NaN，
       // 挂在符干上的延长记号、混排简谱层的上沿跟着全是 NaN（264《陶我成器》、081 的 `.jpwabc` 混排）
-      ch.stemLen = Number.isFinite(len) ? len : ch.grace ? 35 * cueSize : 35;
+      ch.stemLen = Number.isFinite(len) ? len : ch.grace ? 35 * this.score.options.graceSize : 35;
     }
   }
 
@@ -1122,7 +1121,7 @@ class DocPartLoader {
         if (!flag) continue;
         const bb = meta.getBBox(flag);
         if (!bb) continue;
-        const scale = ch.cue || ch.grace || ch.notes.some((n) => n.size === 1) ? cueSize : 1;
+        const scale = ch.grace ? this.score.options.graceSize : ch.cue || ch.notes.some((n) => n.size === 1) ? cueSize : 1;
         const flagLen = (bb.bBoxNE[1] - bb.bBoxSW[1]) * 10 * scale; // 1 格 = 10 tenths
         ch.stemLen = Math.max(ch.stemLen, flagLen + 2.5 * scale);
       }

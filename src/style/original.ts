@@ -14,17 +14,21 @@ import { JIANPU_KEYS } from "./keys";
 import { pageMargins, resolvePaper } from "./paper";
 import { headerFontsOf } from "./header";
 import { resolveLength } from "./units";
+import { LONG_IMAGE_WIDTH, ORIGINAL_NOTE_SIZE } from "./themes";
 
 /** 面板那一层：字号（pt）+ 纸 / 长图 + 边距。 */
 export function jianpuUserOptionsOf(sheet: StyleSheet): JianpuUserOptions {
   const size = sheet.roles.note?.size;
   const pt = size === undefined ? null : resolveLength(size, { em: NaN, sp: NaN });
-  const digitFontSize = pt !== null && Number.isFinite(pt) && pt > 0 ? pt : undefined;
+  // 面板没给字号：照 500 首（`ORIGINAL_NOTE_SIZE`），整套实测版式按它缩放——原版那套是照 1000 宽的长图量的，
+  // 原样纸与长图都改成 500 首那张的宽之后，照原尺寸排就比版心宽出一倍
+  const digitFontSize = pt !== null && Number.isFinite(pt) && pt > 0 ? pt : ORIGINAL_NOTE_SIZE;
   const margins = pageMargins(sheet.page);
   const header = headerFontsOf(sheet);
   const paper = resolvePaper(sheet.page);
   if (paper === undefined) return { digitFontSize, margins, header }; // 没选纸：纸与长图都跟档位自带的
-  if (paper === null) return { digitFontSize, margins, header, continuous: true }; // 长图：纸交给内容定
+  // 长图：宽与简谱原样档的长图同一张（500 首那张纸的宽），高由内容定
+  if (paper === null) return { digitFontSize, margins, header, continuous: true, pageWidth: LONG_IMAGE_WIDTH };
   return { digitFontSize, margins, header, pageWidth: paper.w, pageHeight: paper.h, continuous: false };
 }
 

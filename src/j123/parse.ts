@@ -32,6 +32,7 @@ import type {
   Measure,
   NoteType,
   Part,
+  PartGroup,
   PlayPass,
   ScoreDoc,
   Song,
@@ -579,10 +580,10 @@ function buildMusicLine(
         } else {
           ch.notes.push(ctx.d.note(t));
         }
-        if ((t.beams ?? 0) > 0) {
-          ch.beams = Array.from({ length: t.beams! }, () => "continue" as const);
-          if (ctx.d.spaceBeams) ch.beamGroup = beamGroup;
-        }
+        if ((t.beams ?? 0) > 0) ch.beams = Array.from({ length: t.beams! }, () => "continue" as const);
+        // ABC 的空白分组：音长写在 `L:` 里、token 不带减时线条数，所以不能只给带 `beams` 的音记——
+        // 以前八分音符一个组号都没有，五线谱层全成了单独的符尾
+        if (ctx.d.spaceBeams && !rest) ch.beamGroup = beamGroup;
         applyTieAndBroken(ch);
         attach(ch);
         cur.sustainHost = ch;
@@ -1338,6 +1339,17 @@ export function parseAbcFamily(
     ctx.breakAfter.clear();
     song.marks = marks;
     if (rawPlay.length) song.playOrder = resolvePlayOrder(song, rawPlay);
+    // `%%score [1 2]` / `{1 2}`（ABC §11.1）：声部分组的括号。原文仍留在 `style.raw` 里（写回照原样），
+    // 这里只把最外层的 `[…]`（bracket）`{…}`（brace）落成 `partGroups`，五线谱、原样档据此画括号
+    const sc = song.style?.raw?.find((r) => r.key === "score");
+    if (sc) {
+      const groups = scorePartGroups(sc.value, (id) => {
+        // 123/ABC 的 `V:` 是数字；Muse 的音轨名按首次出现编号（`voiceIds`）
+        const n = voiceIds.get(id) ?? (/^\d+$/.test(id) ? Number(id) : undefined);
+        return n !== undefined && song!.parts.some((p) => p.id === `P${n}`) ? `P${n}` : null;
+      });
+      if (groups.length) song.partGroups = groups;
+    }
     doc.songs.push(song);
     song = null;
     pb = null;
@@ -1705,4 +1717,16 @@ function applyInstruction(
       (song.style ??= {}).raw = [...(song.style.raw ?? []), { key: name, value: ins.value }];
       break;
   }
+}
+
+/** `%%score` 的值 → 声部分组：只认最外层的 `[…]`（bracket）与 `{…}`（brace），组内是 `V:` 号（括号 `( )` 当作同组）。 */
+function scorePartGroups(value: string, partOf: (voiceId: string) => string | null): PartGroup[] {
+  const out: PartGroup[] = [];
+  const re = /([[{])([^\]}]*)[\]}]/g;
+  for (let m = re.exec(value); m; m = re.exec(value)) {
+    const parts = (m[2]!.match(/[^\s()|]+/g) ?? []).map(partOf).filter((p): p is string => p !== null);
+    if (parts.length < 2) continue;
+    out.push({ number: String(out.length + 1), symbol: m[1] === "{" ? "brace" : "bracket", parts });
+  }
+  return out;
 }

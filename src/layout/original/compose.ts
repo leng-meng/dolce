@@ -47,11 +47,13 @@ import { emptyMetadata } from "../../pu/ast";
 import type { ElementId, ScoreDoc } from "../../model/doc";
 import type { DocView } from "../../pu/slots";
 import { originalInputOf } from "./input";
+import { applyBreaks } from "../../model/breaks";
 import { pageOfDefaults } from "../../model/pagemeta";
 import {
   chordLane,
   graceLayout,
   layoutDocument,
+  reflowLineStarts,
   noteBeams,
   stackTop,
   type PlacedItem,
@@ -296,7 +298,8 @@ function docMetricsOf(view: DocView): JianpuMetrics {
  */
 function headerPtScale(source: ScoreDoc, docMetrics: JianpuMetrics, o: JianpuUserOptions): number {
   const continuous = o.continuous ?? docMetrics.page.longImage;
-  if (!continuous) return 1;
+  // 选了纸、或长图给了实际宽（与简谱原样档同一张纸宽）时页宽就是 pt，不用折算
+  if (!continuous || o.pageWidth) return 1;
   const song = source.songs[0];
   const srcW = (song && pageOfDefaults(song)?.w) || A4_WIDTH_PT;
   return docMetrics.page.width / srcW;
@@ -506,25 +509,6 @@ function footerSize(m: OriginalCtx["metrics"], role: string): number {
   const v = (m.size as Record<string, number | undefined>)[role];
   if (typeof v !== "number") throw new Error(`原样文档布局的模板认不出角色 ${role}（可用：${Object.keys(m.size).join(" ")}）`);
   return v;
-}
-
-/** 头部文字需要的最小页宽（标题居中、词曲右对齐，页面太窄会挤在一起）。 */
-function headerWidth(c: OriginalCtx, meta: Metadata | undefined): number {
-  if (!meta) return 0;
-  const m = c.metrics;
-  let need = 0;
-  meta.titles.forEach((t, i) => {
-    const f = new Font(m.font.text, i === 0 ? m.size.title : m.size.subtitle, i === 0);
-    need = Math.max(need, f.measureText(t) + m.page.margin.left + m.page.margin.right);
-  });
-  const side = new Font(m.font.text, m.size.header);
-  const leftW = Math.max(0, ...meta.topLeft.map((t) => side.measureText(t)));
-  const rightW = Math.max(
-    0,
-    ...meta.topRight.map((t) => side.measureText(t)),
-    ...meta.authors.map((t) => side.measureText(t)),
-  );
-  return Math.max(need, leftW + rightW + m.page.margin.left + m.page.margin.right + m.ink.noteHeight);
 }
 
 /** 标题（含副标题）最后一行的**墨迹**底。落位同 paintHeader 画标题那段。 */
@@ -1397,6 +1381,8 @@ function paintSyllables(c: OriginalCtx,
 export interface OriginalDocumentConfig {
   readonly user: JianpuUserOptions | null;
   readonly ink: number | null;
+  /** 已经按窄纸重新断过行（`reflowLineStarts`），不再断第二次 */
+  readonly noReflow?: boolean;
 }
 
 /** 一份文档排好的原样页面与身份索引。 */
@@ -1453,6 +1439,20 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     const center = run.lead + run.body / 2;
     return { left: center - ink.left, right: Math.min(run.width, ink.right) - center };
   };
+  // **源里的行放不下就整首重新断行**（用户定：原样档按排得下的位置断、中间不要短行）：断点写进文档克隆的换行位、
+  // 整份重排一遍。元素 id 不变，编辑器的点选、高亮照旧对得上。多声部文本谱（各声部小节对不齐）`applyBreaks` 不重断
+  if (!cfg.noReflow) {
+    const starts = reflowLineStarts(doc.songs, doc.idOf, m, measure);
+    if (starts) {
+      const clone = structuredClone(source);
+      let changed = false;
+      clone.songs.forEach((song, i) => {
+        const ls = starts[i];
+        if (ls && applyBreaks(song, ls.map((id) => ({ id: id as ElementId })), { mid: "source", pages: "keep" })) changed = true;
+      });
+      if (changed) return layoutOriginalDocument(clone, { ...cfg, noReflow: true });
+    }
+  }
   const placed = layoutDocument(doc.songs, m, headerBottoms, measure);
   c.placed = placed;
   // 页脚（BL/BC/BR）：每首末页、最低一行之下。先排一遍拿到占高，连续长图的页高要把它算进去
@@ -1470,10 +1470,12 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     const inkLeft = Math.min(...placed.pages.map((p) => systemLeft(c, p)));
     const inkRight =
       m.page.margin.left + m.page.systemIndent + placed.contentRight + m.ink.noteHeight * 0.6;
-    const side = m.page.longImageMargin;
-    const titleNeed = headerWidth(c, doc.songs[0]?.metadata);
-    c.pageWidth = Math.max(inkRight - inkLeft + side * 2, titleNeed);
-    c._pageShiftX = side - inkLeft;
+    // **纸宽固定**（用户定：长图与分页纸同宽，各曲一样宽）：墨迹那一段在纸宽里左右居中；
+    // 放不下（单个小节就比版心宽）才按墨迹撑宽
+    // 墨迹段本来就是「版心 + 两侧伸出的一点」，不再另加长图留白（加了就总比纸宽）
+    const span = inkRight - inkLeft;
+    c.pageWidth = Math.max(m.page.width, span);
+    c._pageShiftX = (c.pageWidth - span) / 2 - inkLeft;
   }
   const footerItems = layoutFooters(c, c._pageShiftX);
   const pages = placed.pages.map((pg, i) => {

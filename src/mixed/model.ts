@@ -3035,6 +3035,8 @@ export class MixedOptions {
   stackGap = STACK_GAP_DEFAULT;
   jpGraceScale = 0.6;
   cueSize = 0.8;
+  /** 倚音的缩放（符头、符干、符尾、符杠）。比 cue 音符小一号：照 0.8 画，倚音看着跟正常音符差不多大、挤在主音旁边（常规制谱 0.6~0.65） */
+  graceSize = 0.65;
 
   meta: MetaData;
   musicFont: Font;

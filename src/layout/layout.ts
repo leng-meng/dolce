@@ -903,6 +903,94 @@ export class Line {
     }
   }
 
+  /**
+   * **整首重新断行**（`LayoutOptions.reflowOverflow`）：源里每一行都放得下就返回 null，照原文的行排；
+   * 有一行放不下（窄纸），就不认源里的换行，只在小节线处断，求「各行余白平方和最小」——行长均匀，
+   * 中间不会冒出半截短行（照条目贪心、或只把超宽那行劈开，都会留下一两个小节的短行）。
+   * 源里的换页（`LineBreak.newPage`）仍是硬断点；单个小节就比版心宽时退回 `doLineBreak`。
+   */
+  private reflowBreak(width: number, opt: LayoutOptions): Line[] | null {
+    if (!(width > 0)) return null;
+    let ents = this.entries;
+    const right = (k: number): number => ents[k]!.group.x + entryBounds(ents[k]!.group).right;
+    /** [i, k) 这一段（跳过 LineBreak）的自然宽 */
+    const span = (i: number, k: number): number => {
+      let a = i, b = k - 1;
+      while (a < k && ents[a] instanceof LineBreak) a++;
+      while (b >= a && ents[b] instanceof LineBreak) b--;
+      return a > b ? 0 : right(b) - ents[a]!.group.x;
+    };
+    // 源里的行放得下就不动
+    let from = 0;
+    let fits = true;
+    for (let k = 0; k <= ents.length; k++) {
+      if (k < ents.length && !(ents[k] instanceof LineBreak)) continue;
+      if (span(from, k) >= width) fits = false;
+      from = k + 1;
+    }
+    if (fits) return null;
+    // 源里的普通换行不再认：先拿掉，挨上的两条小节线（行末 `|` + 行首 `‖:`）并成一条，横坐标重排
+    this.entries = this.entries.filter((e) => !(e instanceof LineBreak && !e.newPage));
+    this.dropDoubledBarlines(opt);
+    this.calcXPos();
+    ents = this.entries;
+    // 候选断点 k = 「新行从第 k 个条目起」：小节线之后（`‖:` 是下一小节的开头，断在它前面）
+    const cand = new Set<number>([ents.length]);
+    const hard = new Set<number>();
+    ents.forEach((e, k) => {
+      if (e instanceof LineBreak && e.newPage) hard.add(k + 1);
+      if (!(e instanceof Barline)) return;
+      cand.add(e.spec.repeatForward && !e.spec.repeatBackward ? k : k + 1);
+    });
+    for (const k of hard) cand.add(k);
+    const pts = [0, ...[...cand].filter((k) => k > 0 && k <= ents.length).sort((a, b) => a - b)];
+    const hasNote = (i: number, k: number): boolean => {
+      for (let j = i; j < k; j++) if (ents[j] instanceof NoteEntry) return true;
+      return false;
+    };
+    // DP：best[j] = 前 pts[j] 个条目排完的最小代价
+    const best: number[] = pts.map(() => Infinity);
+    const prev: number[] = pts.map(() => -1);
+    best[0] = 0;
+    for (let j = 1; j < pts.length; j++) {
+      for (let i = j - 1; i >= 0; i--) {
+        // 不许跨过硬断点
+        let crossesHard = false;
+        for (const h of hard) if (h > pts[i]! && h < pts[j]!) crossesHard = true;
+        if (crossesHard) break;
+        if (!hasNote(pts[i]!, pts[j]!)) continue;
+        const w = span(pts[i]!, pts[j]!);
+        if (w >= width) {
+          if (j - i > 1) break; // 再往前只会更宽
+          return null; // 单个小节就放不下：退回逐条目断
+        }
+        if (best[i]! === Infinity) continue;
+        const c = best[i]! + (width - w) ** 2;
+        if (c < best[j]!) {
+          best[j] = c;
+          prev[j] = i;
+        }
+      }
+    }
+    if (best[pts.length - 1] === Infinity) return null;
+    const cuts: number[] = [];
+    for (let j = pts.length - 1; j > 0; j = prev[j]!) cuts.unshift(pts[j]!);
+    const res: Line[] = [];
+    let i = 0;
+    for (const k of cuts) {
+      const line = new Line();
+      // 源里的普通换行一律不认（硬断点的换页条目留在行尾，分页要读它）
+      for (let t = i; t < k; t++) {
+        const e = ents[t]!;
+        if (e instanceof LineBreak && !e.newPage) continue;
+        line.addEntry(e);
+      }
+      if (line.entries.length) res.push(line);
+      i = k;
+    }
+    return res;
+  }
+
   private doLineBreak(width: number): Line[] {
     const res: Line[] = [];
     let idx = 0;
@@ -1345,7 +1433,7 @@ export class Line {
     this.lyricGap = opt.lyricGap;
     this.dropDoubledBarlines(opt);
     this.calcXPos();
-    const lines = this.doLineBreak(width);
+    const lines = (opt.reflowOverflow ? this.reflowBreak(width, opt) : null) ?? this.doLineBreak(width);
     this.lineStarts = lines.flatMap((l) => {
       const e = l.entries.find((x): x is NoteEntry => x instanceof NoteEntry && x.chord.id !== null);
       return e?.chord.id != null ? [e.chord.id] : [];
@@ -1925,8 +2013,19 @@ export class Line {
 
   /** `skip`：跳过本小节开头这么多个和弦（弱起式接入，见 PlayItem.skip）。
    *  `limit`：只装载前这么多个和弦（-1 = 整节，见 PlayItem.limit）；截断时不补小节线。 */
-  load(m: JMeasure, lrc: number, options: LayoutOptions, final: boolean, skip = 0, limit = -1, ignoreBreaks = false): void {
+  load(m: JMeasure, lrc: number, options: LayoutOptions, final: boolean, skip = 0, limit = -1, ignoreBreaks = false, unrolled = false): void {
     const ents = byPosition(m.entries).filter((e) => !(ignoreBreaks && e.kind === "break"));
+    // **反复已经逐遍展开（展开档）就不画反复记号**：`‖:` `:‖` 是叫人往回唱的，展开后每一遍都照实排出来了，
+    // 再印反复点就成了「唱完这遍还要回头」。连同反复线自带的粗线一起去掉（`:‖` 的样式是 light-heavy），画成普通小节线
+    if (unrolled && (m.repeatForward || m.repeatBackward)) {
+      m = {
+        ...m,
+        repeatForward: false,
+        repeatBackward: false,
+        leftBarline: m.repeatForward ? null : m.leftBarline,
+        barline: m.repeatBackward ? null : m.barline,
+      };
+    }
     if (m.timeChange && m.index !== 0) {
       const ts = TimeSig.fromTime(m.time, options);
       this.entries.push(ts);
@@ -2106,11 +2205,18 @@ export class Layout {
     // 好几遍，064《啊！圣善夜》甚至摊成 10 遍——照着它排，一首歌能排出十几页。
     // 逐遍怎么走（首尾裁切、遍末换页）与文本谱共用 jianpu/expand.ts::walkPlay。
     const plan = this.options.lyricStack > 0 ? identityPlan(p.measures.length) : scr.playData.measures;
+    // 有小节被唱了不止一遍 = 反复确实展开了（展开档）；一遍过的序列（没认出演唱顺序）照原样留着反复记号
+    const seen = new Set<number>();
+    let unrolled = false;
+    for (const it of plan) for (let mid = it.mid; mid < it.end; mid++) {
+      if (seen.has(mid)) unrolled = true;
+      seen.add(mid);
+    }
     walkPlay(plan, {
       measure: (mid, pass, cut) => {
         const m = p.measures[mid];
         for (const [ch, g] of beamGroupsOf(m, p.measures[mid + 1])) l.beamGroups.set(ch, g);
-        l.load(m, pass, this.options, cut.final, cut.skip, cut.limit, ignoreBreaks);
+        l.load(m, pass, this.options, cut.final, cut.skip, cut.limit, ignoreBreaks, unrolled);
       },
       passEnd: () => {
         if (dur !== null) return;

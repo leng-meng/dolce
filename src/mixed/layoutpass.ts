@@ -107,7 +107,9 @@ function gracesOf(md: { chords: readonly ChordLayout[] }, ch: ChordLayout, after
 
 function autoSlotWidth(durQuarters: number): number {
   const d = durQuarters > 0 ? durQuarters : 0.25;
-  return Math.max(AUTO_MIN_SLOT, 30 * Math.pow(d, 0.6));
+  // 长音每拍至少一格（简谱层的数字 + 增时线一拍占一格）：只按时值的次线性增长给，转调转拍后那小节里的附点二分
+  // 只有 58，`5 - -` 两条增时线挤成一条、贴到小节线上
+  return Math.max(AUTO_MIN_SLOT, 30 * Math.pow(d, 0.6), Math.floor(d) * AUTO_MIN_SLOT);
 }
 
 /** 该 MusicXML 是否自带版面坐标（任一小节有 width 或任一音符有 default-x）。读谱之前就要知道（弧的缺省朝向跟它走），
@@ -229,7 +231,10 @@ const LAST_LINE_MIN_FILL = 0.5;
 function autoLayoutWidths(score: StaffLayout, input: LayoutInput): Set<number> {
   const n = score.measures.length;
   const w: number[] = [];
-  for (let i = 0; i < n; i++) w[i] = score.measures[i].width = autoNaturalWidth(score, i);
+  for (let i = 0; i < n; i++) {
+    score.measures[i].width = autoNaturalWidth(score, i);
+    w[i] = score.measures[i].width + midAttrWidth(score, i); // 折行按带转调转拍号的宽量
+  }
   const preferred = new Set<number>();
   const hard = new Set<number>();
   /** 小节中间换行拆出的后半（`implicit` 且起新行）：拆它就是为了在这儿断，不断就在行中间留一道隐藏线缝 */
@@ -324,6 +329,25 @@ function autoLead(score: StaffLayout, mi: number): number {
   return 5 + 32 + key + time + AUTO_ATTR_GAP;
 }
 
+/** 行中（不在行首）的转调、转拍号要占的宽：`layoutAttr` 从数据区里扣，自然宽不算它的话，那一小节留给音符的地方
+ *  就被吃掉一大截（转调转拍后的 `5 - -` 两条增时线挤成一条、贴到小节线上）。 */
+function midAttrWidth(score: StaffLayout, mi: number): number {
+  if (mi === 0) return 0;
+  const mif = score.measures[mi]!;
+  let key = 0;
+  let time = 0;
+  for (const part of score.parts) {
+    for (const ps of part.staves) {
+      if (ps.keyChange(mif.offset)) {
+        const ks = ps.getKey(mif.offset);
+        key = Math.max(key, keyChangeWidthCalc(ks.cancel, ks.fifths));
+      }
+      if (ps.timeChange(mif.offset)) time = Math.max(time, timeSigWidthCalc(ps.getTime(mif.offset), score.options.meta));
+    }
+  }
+  return key + time;
+}
+
 /** 折行后拉伸每个 system 的小节宽度以铺满页宽（末行保持自然宽，不拉伸）。 */
 function autoJustifySystems(score: StaffLayout): void {
   const d = score.defaults;
@@ -333,15 +357,18 @@ function autoJustifySystems(score: StaffLayout): void {
     const avail = d.pageWidth - d.leftMargin - d.rightMargin - sys.leftMargin - sys.rightMargin;
     // 行首小节预留谱号/调号/拍号占位，使拉伸后仍有容纳区。
     sys.measures[0].width += autoLead(score, sys.firstMeasure);
+    // 行中转调转拍号那一截不拉伸，另加在小节上（行首的已在 autoLead 里）
+    const attr = sys.measures.map((m, k) => (k === 0 ? 0 : midAttrWidth(score, m.index)));
     let sum = 0;
     for (const m of sys.measures) sum += m.width;
     if (sum <= 0) continue;
+    const attrSum = attr.reduce((a, b) => a + b, 0);
     const isLast = si === score.systems.length - 1;
     // 末行也拉满，但最多拉到自然宽的 LAST_LINE_MAX_STRETCH 倍：太短的末行（剩一两个小节）照拉满就稀得不成样子，
     // 拉到上限为止、右边留空
-    let scale = avail / sum;
+    let scale = Math.max(0, avail - attrSum) / sum;
     if (isLast && scale > LAST_LINE_MAX_STRETCH) scale = LAST_LINE_MAX_STRETCH;
-    for (const m of sys.measures) m.width *= scale;
+    sys.measures.forEach((m, k) => { m.width = m.width * scale + attr[k]!; });
   }
 }
 
@@ -546,7 +573,7 @@ function autoStaffDistances(score: StaffLayout): void {
 
 // 标题/词曲信息：OMR MusicXML 的 <credit> 无 default-x/-y/font-size，且标题只在
 // <work-title> 里（未作为 credit）→ 全挤在页首同一位置、无字号区分。此处按页面重排：
-// 标题居中大字，作词/作曲逐行居中小字，堆叠在标题下方。
+// 标题居中大字，作词/作曲逐行靠右小字，堆叠在标题下方。
 const AUTO_TITLE_FS = 20;   // pt
 const AUTO_CREDIT_FS = 11;  // pt
 const AUTO_LYRIC_GAP = 10;   // 音符/符干/弧最低点到首行歌词字顶的净空（tenths）
@@ -575,17 +602,21 @@ function autoLayoutHeader(score: StaffLayout): void {
     });
     yTop += tenths(titleFs) * 0.4;
   }
-  // 标题下依次：副标题 → 题下经文 → 其余 credit（作词/作曲…），各自按原顺序，居中小字
-  const push = (text: string, type: string | null, fs: number): void => {
+  // 标题下依次：副标题 → 题下经文（居中小字）→ 其余 credit（作词/作曲…，**靠右**，右缘对版心右缘），各自按原顺序。
+  // 署名靠右与简谱原样档的页眉同一个排法（`jianpupages.ts::bookHead`，照 500 首）
+  const push = (text: string, type: string | null, fs: number, right = false): void => {
     yTop += tenths(fs) * 1.3;
-    creds.push({ page: 0, text, type, x: cx, y: d.pageHeight - yTop, justify: LCR.Center, fontSize: fs });
+    creds.push({
+      page: 0, text, type, x: right ? d.pageWidth - d.rightMargin : cx, y: d.pageHeight - yTop,
+      justify: right ? LCR.Right : LCR.Center, fontSize: fs,
+    });
   };
   // 标题已按 `score.title` 排了：credit 里的标题那条（带过版面坐标的谱改动后转自动铺排时就有）不再排第二遍
   const norm = (t: string): string => t.replace(/\s+/g, "");
   const rest = score.credits.filter((c) => c.text && !(score.title && (c.type === "title" || norm(c.text) === norm(score.title))));
   for (const c of rest) if (c.type === "subtitle") push(c.text, c.type, hf.subtitle?.size ?? creditFs);
   for (const t of score.scripture) push(t, "scripture", hf.scripture?.size ?? creditFs);
-  for (const c of rest) if (c.type !== "subtitle") push(c.text, c.type, creditFs);
+  for (const c of rest) if (c.type !== "subtitle") push(c.text, c.type, creditFs, true);
   score.credits = creds;
 }
 
@@ -758,9 +789,11 @@ function updateDataXPos(score: StaffLayout): void {
         // **写在小节末尾的（`D.S.` / `Fine`）与小节线右对齐**（同简谱 `layout.ts::addDirections`）：
         // 小节末的拍位是最后一个音之后的数据区末端，照它左对齐就从线上探出去。只管自动铺排、
         // 原文没写横坐标的（带版面的谱照原文）
-        if (score.autoLayout && fEq(t.offset, mif.dur) && t.justify === LCR.Left && t.x === 0 && t.src && !xmlPos(t.src)) {
-          t.x = mif.width;
-          t.justify = LCR.Right;
+        if (score.autoLayout && fEq(t.offset, mif.dur) && t.justify !== LCR.Center && t.x === 0 && t.src && !xmlPos(t.src)?.relativeX && !xmlPos(t.src)?.defaultX) {
+          // 画文字块不按 justify 往左让（Sibelius 那条路是读谱时自己减的宽，`layout.ts::processDirection`），
+          // 所以直接给左缘：右缘落在小节线上
+          t.x = mif.width - t.width();
+          t.justify = LCR.Left;
           continue;
         }
         t.x += mif.getEntPos(t.offset);

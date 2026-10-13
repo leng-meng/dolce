@@ -104,7 +104,7 @@ export function drawNotesNormal(
 
       let x: number;
       const cue = n.size === 1 || ch.cue || ch.grace;
-      const scale = cue ? eng.cueSize : 1;
+      const scale = ch.grace ? eng.graceSize : cue ? eng.cueSize : 1;
 
       if (ch.measureRest) {
         const mif = md.measureInfo;
@@ -156,7 +156,7 @@ export function drawNotesNormal(
       const flagCode = ch.tailSym(ch.stemUp);
       if (flagCode) {
         // 符尾与音符头同一个缩放（倚音也是小号，原先只认 cue，倚音的符尾是整号的、垂过音符头）
-        const scale = ch.cue || ch.grace || ch.notes.some((n) => n.size === 1) ? eng.cueSize : 1;
+        const scale = ch.grace ? eng.graceSize : ch.cue || ch.notes.some((n) => n.size === 1) ? eng.cueSize : 1;
         // 按 SMuFL 锚点接到符干末端（`stemUpNW` / `stemDownSW`），不是拿字形原点硬对
         const anc = meta.getAnchor(flagCode);
         const a = (ch.stemUp ? anc?.stemUpNW : anc?.stemDownSW) ?? [0, 0];
@@ -197,6 +197,9 @@ export function drawNotesNormal(
       if (ch.stemUp && ch.noteType.compareTo(new Fraction(4)) < 0) {
         x -= ch.noteheadWidth(meta);
       }
+      // **墨迹中心对符头中心**：照原排版程序是字形原点对符头左缘，窄的顿音点就偏到左边、宽的延长号偏到右边
+      const bb = meta.getBBox(nota.symbol);
+      if (bb) x += ch.noteheadWidth(meta) / 2 - ((bb.bBoxSW[0] + bb.bBoxNE[0]) / 2) * 10;
       addSmufl(container, nota.symbol, x, nota.y, fs);
     }
   }
@@ -356,6 +359,7 @@ export function drawBeams(
   container: Group,
   md: PartMeasureLayout,
   subStaff: number,
+  graceSize: number,
 ): void {
   const stfY = md.staffY(subStaff);
   for (const grp of md.beams) {
@@ -370,7 +374,7 @@ export function drawBeams(
       ch.notes.some((n) => n.staff === subStaff),
     );
     if (relevantChords.length === 0) continue;
-    drawBeamGroup(container, grp.chords, stfY, 0.8);
+    drawBeamGroup(container, grp.chords, stfY, graceSize);
   }
 }
 
@@ -1295,7 +1299,7 @@ function drawSysStaff(container: Group, sys: Sys, st: SysStaff, ypos: number): v
       const md = ps.part.measures[m.index];
       if (md) {
         drawNotesNormal(eng, grp, md, ps.subIndex);
-        drawBeams(grp, md, ps.subIndex);
+        drawBeams(grp, md, ps.subIndex, eng.graceSize);
         drawLrc(eng, grp, md, ps.subIndex);
         drawHarmony(eng, grp, md, ps.subIndex, scr.scaling, nota === Notation.Mixed);
         drawTextBlocks(grp, md, ps.subIndex);

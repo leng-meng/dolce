@@ -386,7 +386,7 @@ export interface JianpuUserOptions {
   headerScale?: number;
 }
 
-/** 把面板上的手动设置叠到量好的度量上。整体缩放动 `note`、`size`、`lyricSpacing`、`spacing` 四组。 */
+/** 把面板上的手动设置叠到量好的度量上。整体缩放动 `note`、`size`、`lyricSpacing`、`spacing`、`stroke`、`head` 六组与首行起点。 */
 export function applyUserOptions(base: JianpuMetrics, o: JianpuUserOptions | null): JianpuMetrics {
   if (!o) return base;
   const m = cloneMetrics(base);
@@ -396,10 +396,17 @@ export function applyUserOptions(base: JianpuMetrics, o: JianpuUserOptions | nul
     scaleGroup(m.size, k);
     scaleGroup(m.lyricSpacing, k);
     scaleGroup(m.spacing, k);
+    // 笔画（小节线、弧、松叶的粗细，反复点）与页眉落位也跟着缩：只缩字的话，原样档换成 500 首那张纸、
+    // 字号降到 12 时，小节线、减时线还是原版 1000 宽长图上的粗细，比简谱引擎那一路粗出一倍；页眉各行也空得老远
+    scaleGroup(m.stroke, k);
+    scaleGroup(m.head, k);
+    m.page.firstSystemTop *= k;
   }
   if (o.pageWidth && o.pageHeight) {
     m.page.width = o.pageWidth;
     m.page.height = o.pageHeight;
+  } else if (o.pageWidth && o.continuous) {
+    m.page.width = o.pageWidth; // 长图只定宽，高由内容定
   }
   if (o.continuous !== undefined) m.page.longImage = o.continuous;
   if (o.margins) {

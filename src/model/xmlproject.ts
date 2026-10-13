@@ -729,7 +729,8 @@ function projectPart(
     if (m.attrs?.time) time = m.attrs.time;
     /** 各元素的减时线条数（投影前的占位），自动分组用 */
     const levels = new Map<Element, number>();
-    for (const el of m.elements) levels.set(el, el.beams?.length ?? 0);
+    // 没写减时线条数的（ABC：音长在 `L:` 里）按音符类型给层数
+    for (const el of m.elements) levels.set(el, el.beams?.length ?? (el.kind === "chord" && !el.grace ? GRACE_BEAM_LEVELS[el.duration.type ?? ""] ?? 0 : 0));
     if (m.attrs?.key) {
       if (m.attrs.key.fifths === 0 && m.attrs.key.spelling) {
         const f = MusicCommon.keyNameToFifth(m.attrs.key.spelling);
@@ -868,7 +869,9 @@ function autoBeams(
   let curBeat = -1;
   let curVoice = 0;
   for (const it of items) {
-    const b = Math.floor((it.start + shift) / beat + 1e-9);
+    // ABC 的空白分组（`Chord.beamGroup`）说了算：同组连杠、跨拍也连；没有才按拍分
+    const bg = it.el.kind === "chord" ? it.el.beamGroup : undefined;
+    const b = bg !== undefined ? 1e6 + bg : Math.floor((it.start + shift) / beat + 1e-9);
     if (it.level > 0 && it.dur <= beat) {
       if (b !== curBeat || it.voice !== curVoice) groups.push([]);
       groups[groups.length - 1]!.push(it);
@@ -938,7 +941,7 @@ function autoBeams(
   }
 }
 
-/** 倚音的音符类型 → 符杠层数（`autoBeams` 给倚音成杠用）。 */
+/** 音符类型 → 符杠层数（`autoBeams` 给倚音成杠、给没写减时线条数的 ABC 音符用）。 */
 const GRACE_BEAM_LEVELS: Partial<Record<string, number>> = { eighth: 1, "16th": 2, "32nd": 3, "64th": 4 };
 
 /** 拆开的小节：符杠不能跨过切点。段末的音 begin/continue → 收尾，段首的 continue/end → 起头；只剩自己一个的去掉。 */

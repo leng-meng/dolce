@@ -33,9 +33,13 @@ export const PAPER_SIZES: Record<string, readonly [number, number] | null> = { .
 /** 「原样」档能选的纸（含长图）。 */
 export const ORIGINAL_PAPERS = ["A4", "A5", "B5", "Letter", "150×216mm", "155×240mm", "长图"] as const;
 
-/** 「长图」那一档的纸宽。取文本谱「原版」量到的那一份（`layout/original/metrics.ts::JIANPU_DEFAULTS.page.width`）
- *  ——两者本就是同一种观感，长图也就该同宽。 */
-export const LONG_IMAGE_WIDTH = 1000;
+/** 「长图」那一档的纸宽：与 500 首那张纸（`150×216mm`）同宽（用户定）——长图只是不分页，版心与字号照分页纸。
+ *  从前取文本谱「原版」的 1000 宽、配 PPT 的 28pt，比 500 首宽出一倍多。文本谱原样档自己的长图宽仍是
+ *  `layout/original/metrics.ts::JIANPU_DEFAULTS.page.width`（那一路是照原版整体缩放的一套实测）。 */
+export const LONG_IMAGE_WIDTH = STANDARD_PAPERS["150×216mm"]![0];
+
+/** 简谱原样档的出厂音符字号：照 500 首（实测 12.08pt），不借展开档投影片的 28。 */
+export const ORIGINAL_NOTE_SIZE = 12;
 
 /** 出厂纸。原样档与文本谱「原版」档一贯的观感都是长图。 */
 export const PAPER_DEFAULT = "长图";
@@ -69,7 +73,7 @@ export const THEMES: Record<ThemeId, StyleLayer> = {
   print: [
     { set: { page: { paper: PAPER_DEFAULT, ink: INK, background: PAPER_WHITE }, jianpu: { preset: "original" } } },
     // 文本谱不给字号：那一路的尺寸是实测来的一整套，缺省 = 跟随版式量到的原尺寸
-    { when: { engine: "jianpu" }, set: { roles: { note: { size: PPTX_PAGE.fontSize } } } },
+    { when: { engine: "jianpu" }, set: { roles: { note: { size: ORIGINAL_NOTE_SIZE } } } },
   ],
   // 成书的其余一切在 `book` 块（由歌本样式表算出的 BookStyle，见 style/bookss.ts），由调用方作为第二层叠上
   book: [{ set: { jianpu: { preset: "book" } } }],

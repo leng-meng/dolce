@@ -157,6 +157,7 @@ function applyOriginalPreset(opt: LayoutOptions, longImage: boolean): void {
   opt.lyricStack = opt.lrcFont.size * LYRIC_STACK_RATIO;
   opt.continuousPage = longImage;
   opt.bookHead = true;
+  opt.reflowOverflow = true; // 长图与分页纸同宽（500 首那张），一样按排得下的位置断
   // **笔画按字号的比例给**（em，照 500 首成书实测：`dev/style/books/hymn500-measured.ss` 的 @jianpu）：
   // 小节线 0.0714em、终止线粗线 0.125em、弧厚 0.214em；减时线、弧描边、弧高上下限 500 首没量，取与它同一档的比例。
   // 写成绝对量的话换小纸（500 首那张 425×612、字号 12）时不跟着缩，小节线和反复点粗得压过数字
@@ -164,6 +165,7 @@ function applyOriginalPreset(opt: LayoutOptions, longImage: boolean): void {
   opt.barlineWidth = em / 14;
   opt.finalBarlineWidth = em / 8;
   opt.jpBeamWidth = em * (3 / 56);
+  opt.timeSigRuleWidth = em * (0.3 / 12.08); // 拍号（含页眉、转拍）的分数线照 500 首成书（0.3pt ÷ 音符 12.08）；写死 1.5 时粗得扎眼
   opt.slurTieThickness = em * (3 / 14);
   opt.slurOutlineWidth = em * 0.025;
   opt.slurMaxHeight = em * (9 / 14);

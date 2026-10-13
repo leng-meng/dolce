@@ -16,6 +16,7 @@ import type {
   Barline,
   Chord,
   Element,
+  ElementId,
   Key,
   Mark,
   Measure,
@@ -24,7 +25,9 @@ import type {
   ScoreDoc,
   Song,
 } from "../model/doc";
+import { SIMPLE_DIVISIONS } from "../model/doc";
 import { breakAfter, lyricOfVerse, type BreakKind } from "../model/helpers";
+import { beatGroupIndex, beatGroupSize } from "../engrave/beatgroup";
 import { lyricSlots, type LyricSlotRule } from "./lyricslot";
 import { arcsToNextNote, isLatinEnd, isLatinStart, isOneCjkWithPunct, nestArcsInTuplets, ownIds, ownMarks, partRanges, systemRanges, type SystemRange } from "../model/emitutil";
 import { harmonyText } from "../model/jianpu";
@@ -314,6 +317,39 @@ export abstract class AbcFamilyEmitter {
   /** 符杠分组写不写成「连写」。ABC 写（§4.7 空白即分组）；123 不写——符杠按拍自动算，音符一律空格隔开。 */
   protected readonly spaceBeams: boolean = true;
 
+  /** 正在写的小节的拍号（`autoBeamGroups` 按它分拍）。 */
+  private curTime: { beats: number; beatType: number } = { beats: 4, beatType: 4 };
+
+  /**
+   * 源里没有空白分组（123、文本谱、MusicXML 来源都不设 `Chord.beamGroup`）时**按拍自动分组**：
+   * 带减时线、不超过一拍的音按拍位归组（与简谱减时线同一份判据 `engrave/beatgroup.ts`），各声部分开计位，
+   * 多连音整组按起点那拍归组、时值按比例折。不分的话 123 → ABC 每个音之间都隔空格，读回来全是单独的符尾。
+   */
+  private autoBeamGroups(mea: Measure, mi: MarkIndex): Map<ElementId, number> {
+    const out = new Map<ElementId, number>();
+    const size = beatGroupSize(this.curTime.beats, this.curTime.beatType);
+    const pos = new Map<number, number>();
+    let tuplet: { ratio: number; group: number; left: number } | null = null;
+    for (const el of mea.elements) {
+      const voice = el.voice > 1 ? el.voice : 1;
+      const at = pos.get(voice) ?? 0;
+      if (el.kind !== "chord") {
+        if (el.duration) pos.set(voice, at + el.duration.divisions / SIMPLE_DIVISIONS);
+        continue;
+      }
+      if (el.grace) continue;
+      const tp = mi.tupletStart.get(el.id)?.ratios[0];
+      if (tp && !tuplet) tuplet = { ratio: tp.normal / tp.actual, group: beatGroupIndex(at, 0, size), left: tp.actual };
+      const tm = el.duration.timeMod;
+      const q = (el.duration.divisions / SIMPLE_DIVISIONS) * (tm ? tm.normal / tm.actual : tuplet?.ratio ?? 1);
+      const g = tuplet ? tuplet.group : beatGroupIndex(at, 0, size);
+      if (!el.rest && (el.beams?.length ?? 0) > 0 && q <= size + 1e-9) out.set(el.id, voice * 1000 + g);
+      pos.set(voice, at + q);
+      if (tuplet && (--tuplet.left <= 0 || mi.tupletEnd.has(el.id))) tuplet = null;
+    }
+    return out;
+  }
+
   /** 小节内临时多声部的分隔符（ABC 的 `&`，§7.4）。123 没有这个记号，恒为 null。 */
   protected readonly overlayText: string | null = null;
 
@@ -473,6 +509,7 @@ export abstract class AbcFamilyEmitter {
     let key = song.key ? this.keyValue(song.key) : "";
     const timeOf = (t: { beats: number; beatType: number } | undefined): string => (t ? `${t.beats}/${t.beatType}` : "");
     let time = timeOf(song.time);
+    this.curTime = song.time ?? { beats: 4, beatType: 4 };
     /** 收一行：换行标记若是（或带着）真换行，join 出来的两侧空格要收掉；末尾的换行也收掉，否则歌词行前多一个空行。
      *  代码行以「字母（+ 数字）+ 冒号」起头（小节中间换行后 `C :|`、`C4 :|`、123 的 `x :|`）会被读成字段行
      *  （`fields.ts::ASCII_PREFIX` 容忍 `V1:` 式编号与冒号前的空格），前面垫一个空格 */
@@ -509,6 +546,7 @@ export abstract class AbcFamilyEmitter {
       const t = mea.attrs?.time ? timeOf(mea.attrs.time) : time;
       if (t !== time) out.push(`[M:${t}]`);
       time = t;
+      if (mea.attrs?.time) this.curTime = mea.attrs.time;
       let el0 = 0;
       for (const cut of cuts) {
         out.push(this.measureBody(mea, { slurStart, slurEnd, tupletStart, tupletEnd, arcNext, wedgeStart, wedgeEnd }, el0, cut.at));
@@ -552,6 +590,8 @@ export abstract class AbcFamilyEmitter {
     // 一个声部连着一个声部，所以这里只在**声部号变了**的地方断开；MusicXML 读进来的交错
     // 多声部先按声部归并（只在整小节写出时才归并——小节中间换行那条路按下标切片，不能重排）。
     const order = this.voiceOrder(mea, from, to);
+    const auto = this.spaceBeams && !mea.elements.some((e) => e.kind === "chord" && e.beamGroup !== undefined)
+      ? this.autoBeamGroups(mea, mi) : null;
     let prevVoice: number | undefined;
     for (const j of order) {
       const el = mea.elements[j]!;
@@ -625,7 +665,7 @@ export abstract class AbcFamilyEmitter {
         prevGroup = undefined;
       }
       // 符杠分组（ABC）：同组连写、不同组之间留空格
-      const group = ch?.beamGroup;
+      const group = ch ? ch.beamGroup ?? auto?.get(ch.id) : undefined;
       const sameGroup = this.spaceBeams && group !== undefined && group === prevGroup;
       if (pieces.length && sameGroup) pieces[pieces.length - 1] += s;
       else pieces.push(s);
