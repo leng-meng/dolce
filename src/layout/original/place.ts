@@ -29,7 +29,7 @@ import { paginate, type SystemBlock } from "../../jianpu/vertical";
 import { DYNAMICS, TERMS } from "../../pu/glyph";
 import { latinWordBreak } from "../../engrave/syllable";
 import { beatGroupIndex, beatGroupSize, pickupOffset } from "../../engrave/beatgroup";
-import { ARC_CHAIN_INSET_DIV } from "../../engrave/arc";
+import { ARC_CHAIN_INSET_DIV, arcClearShift, jpArcY } from "../../engrave/arc";
 
 /** 西文词间空格 ÷ 歌词字号（常见无衬线字体的空格宽约 0.28 em）。 */
 const LATIN_SPACE_EM = 0.28;
@@ -714,11 +714,12 @@ function voiceHeadroom(voice: ScoreLine, m: JianpuGrid): number {
  * 有几个高八度点就抬到最上面那个点的上缘。弧线据此定位——与 .jpwabc 谱面同一规则
  * （见 layout.ts 的 NoteEntry.entryTop / slurRung），固定槽位会离音符太远。
  */
-export function stackTop(el: MusicElement | undefined, m: JianpuGrid): number {
+export function stackTop(el: MusicElement | undefined, m: JianpuGrid, withAccidental = true): number {
   const inkTop = -m.ink.noteHeight / 2;
   if (el?.kind !== "note") return inkTop;
-  // 临时记号比数字高出一截（engrave/accidental.ts），弧与连音要让开它
-  const accTop = el.accidental !== undefined ? inkTop - accidentalRise(el.accidental as AccidentalKind, m.ink.noteHeight, m.look.accidentalScale) : inkTop;
+  // 临时记号比数字高出一截（engrave/accidental.ts），弧与连音要让开它（简谱弧的起点除外：那个临时记号在弧外侧）
+  const accTop = withAccidental && el.accidental !== undefined
+    ? inkTop - accidentalRise(el.accidental as AccidentalKind, m.ink.noteHeight, m.look.accidentalScale) : inkTop;
   if (el.octave <= 0) return accTop;
   return Math.min(accTop, stackTopOf(-m.ink.noteHeight / 2, el.octave, m.ink.stack));
 }
@@ -831,30 +832,26 @@ function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid): Place
       endEl: b.element,
     };
     if (mark.type === "slur" || mark.type === "tuplet") {
-      // 取**跨度里所有音符**最高的那个堆叠顶（不只两端：中间那个带临时记号或高音点的也得让开，
-      // 与简谱引擎 `Line.addTuplet` 同一口径），再让开一个 stackGap；嵌套层按 level 继续上移
-      let top = Math.min(stackTop(a.element, m), stackTop(b.element, m));
-      for (let k = Math.min(a.index, b.index); k <= Math.max(a.index, b.index); k++) {
-        const it = items[k];
-        if (it) top = Math.min(top, stackTop(it.element, m));
-      }
-      placed.y = top - m.note.slurGap - (level - 1) * m.note.slurLevelStep;
+      // 简谱弧（engrave/arc.ts，三条简谱路同一条；多连音的两段弧也是弧）：只看起止两个音——两摞的墨迹顶
+      // （终点算上临时记号）取高者，再往上一道叠层的空；源码里的 `+` 抬高级别照旧按 level 上移
+      placed.y = jpArcY(stackTop(a.element, m, false), stackTop(b.element, m), m.ink.stack.gap)
+        - (level - 1) * m.note.slurLevelStep;
     }
     // 只有**两端都**落在并排块的下行里，这个记号才跟着下移；跨过并排块的（比如
     // 从块前一直画到块后的跳房子）另行处理，见下面的「抬到上行之上」
     if (a.dy !== undefined && b.dy !== undefined) placed.dy = a.dy;
     out.push(placed);
   }
-  // **弧套弧**（slur 罩着延音线、同一个音起的两条弧）：外面那条整条抬到里面那条弧顶之上一道空。
-  // 从短的排起，外层才看得到里层定下的高度（260《感恩的泪》`2⌒2 3 2` 两条弧原先同一个起点、贴在一起）
+  // **弧套弧**（slur 罩着延音线、同一个音起的两条弧、罩着多连音的弧）：外弧按实际弧线判碰里面那些弧的弧顶
+  // （engrave/arc.ts::arcClearShift），碰了才整条抬、高出一道空。从短的排起，外层才看得到里层定下的高度
+  // （260《感恩的泪》`2⌒2 3 2` 两条弧原先同一个起点、贴在一起）
   const arcs = out.filter((p) => p.y !== undefined && isArcMark(p.mark));
   arcs.sort((p, q) => (p.mark.end - p.mark.start) - (q.mark.end - q.mark.start));
   const rise = jianpuSlurRise(m);
   for (const [i, outer] of arcs.entries()) {
-    for (const inner of arcs.slice(0, i)) {
-      if (!nests(inner.mark, outer.mark)) continue;
-      outer.y = Math.min(outer.y!, inner.y! - rise - m.note.slurLevelStep / 2);
-    }
+    const inner = arcs.slice(0, i).filter((q) => nests(q.mark, outer.mark))
+      .map((q) => ({ x: (q.x0 + q.x1) / 2, y: q.y! - rise - m.stroke.slurThickness }));
+    outer.y = outer.y! + arcClearShift(outer.x0, outer.y!, outer.x1, outer.y!, rise, true, inner, m.ink.stack.gap);
   }
   // **渐强渐弱**：`y` 记松叶的**底边**。贴着跨度里音符那一摞（含延长记号、弧、三连音）之上一道空；
   // 跨度里有和弦/注释才抬到那一槽之上（从前一律抬到固定的 `hairpinY`，没和弦的行松叶悬在上一组歌词底下）

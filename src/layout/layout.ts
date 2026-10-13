@@ -15,7 +15,7 @@ import { getOrNull, PageItem, Group, GraphicPath, TextFrame, SmuflText, JpNumber
 import { hairpinPath } from "../engrave/hairpin";
 import { latinWordBreak } from "../engrave/syllable";
 import { beatGroupIndex, beatGroupSize, pickupOffset } from "../engrave/beatgroup";
-import { ARC_CHAIN_INSET_DIV, type SlurStyle } from "../engrave/arc";
+import { ARC_CHAIN_INSET_DIV, arcClearShift, arcRise, jpArcY, type SlurStyle } from "../engrave/arc";
 import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, BeamLine, EntryItemInfo, entryBounds, normalizeEntryX, placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "./entry";
 import { LayoutOptions } from "./options";
 
@@ -1147,56 +1147,50 @@ export class Line {
       if (!(e instanceof NoteEntry)) continue;
       const nt = e.chord.notes[0];
       if (!nt.tieStart) continue;
-      const ent = this.chordEntry.get(nt.chord);
-      if (!ent) {
-        console.error("no entry for tied");
-        continue;
-      }
+      // 一个和弦只画一次：带增时线的长音（`1 - -`）摊成好几个格位、共用同一个和弦，逐格位画会把同一条弧叠画几遍
+      //（从前坐标一样看不出来；弧套弧按判碰抬升之后就露成了几层，180《脱离捆绑》）。只认和弦的头一个格位
+      if (this.chordEntry.get(nt.chord) !== e) continue;
       const endCh = nt.tieNext?.chord;
       const endEntry = endCh ? this.chordEntry.get(endCh) : undefined;
       if (!endEntry) continue;
-      const ypos = Math.min(this.tiedTop(e, opt, true), this.tiedTop(endEntry, opt, false));
+      const ypos = jpArcY(this.arcTop(e, opt, false), this.arcTop(endEntry, opt, true), opt.stack.gap);
       this.addSlurTie(nt, nt.tieNext!, ypos);
     }
   }
-  // tiedTop/slurTop sit on the octave-dot ladder (NoteEntry.slurRung), plus one
-  // more rung per element that has to pass underneath.
-  private tiedTop(ent: NoteEntry, opt: LayoutOptions, left: boolean): number {
-    const res = ent.slurRung(opt);
-    const nt = ent.chord.notes[0];
-    const rung = opt.jpDotRung;
-    if (left && nt.tupletBegin) return res - rung;
-    if (!left && nt.tupletEnd) return res - rung;
-    return res;
-  }
-  private slurTop(ent: NoteEntry, opt: LayoutOptions, left: boolean): number {
-    let res = ent.slurRung(opt);
-    const nt = ent.chord.notes[0];
-    const rung = opt.jpDotRung;
-    if (left) {
-      if (nt.tieStart) res -= rung;
-    } else {
-      if (nt.tieEnd) res -= rung;
-    }
-    // 三连音括线不在这里避：它与弧同属上方带 layer 0，谁在下面由跨度定（范围小的在下），见 Line.stackAbove。
-    return res;
+  /** 简谱弧端点那一摞的墨迹顶（行坐标，数字基线在 0）：数字与高音点；**终点**再算上临时记号（起点的在弧外侧）。
+   *  弧的定位口径见 `engrave/arc.ts`（简谱弧：只看起止两个音、往上一道叠层的空）。 */
+  private arcTop(ent: NoteEntry, opt: LayoutOptions, isEnd: boolean): number {
+    const top = ent.entryTop(opt);
+    const acc = isEnd ? ent.accidentalTop() : null;
+    return acc !== null ? Math.min(top, acc) : top;
   }
   private addSlur(opt: LayoutOptions): void {
     this.slurStyle = slurStyleOf(opt);
     this.slurFlatNotes = opt.slurFlatNotes;
+    const arcs: { e: NoteEntry; end: NoteEntry; endCh: JChord }[] = [];
     for (const e of this.entries) {
       if (!(e instanceof NoteEntry)) continue;
-      const nt = e.chord.notes[0];
       if (!e.chord.slurStart) continue;
+      if (this.chordEntry.get(e.chord) !== e) continue; // 一个和弦只画一次（同 `addTie`）
       for (const endCh of e.chord.slurEndChords) {
-        const endEntry = this.chordEntry.get(endCh);
-        if (!endEntry) continue;
-        // **弧套弧**：同一个端点上还起/收着更短的弧（`((5_ 5_) 6)` 外弧与内弧同起点、`(3 (4 3) 2)` 同终点），
-        // 外弧在那一头要叠在内弧之上——内弧有几层就抬几格，否则两条从同一点出发、起头叠成一条（同原样文档、混排）
-        const ypos = Math.min(this.slurTop(e, opt, true), this.slurTop(endEntry, opt, false))
-          - this.nestedArcsAt(e.chord, endCh) * opt.jpDotRung;
-        this.addSlurTie(nt, endCh.notes[0], ypos);
+        const end = this.chordEntry.get(endCh);
+        if (end) arcs.push({ e, end, endCh });
       }
+    }
+    // **弧套弧**：从短的画起，外弧才看得到里面那些已经落定的弧（延音线在 `addTie` 里先画了）。
+    // 外弧按实际弧线判碰（`arcClearShift`，障碍 = 套在它里面的弧的弧顶），碰了才整条抬、高出一道空——
+    // 同一个音起的外弧与内弧（`((5_ 5_) 6)`）、罩着延音线的 slur（260《感恩的泪》）都是这一条
+    const span = (a: { e: NoteEntry; end: NoteEntry }): number => a.end.group.x - a.e.group.x;
+    arcs.sort((a, b) => span(a) - span(b));
+    const gap = opt.stack.gap;
+    for (const { e, end, endCh } of arcs) {
+      const base = jpArcY(this.arcTop(e, opt, false), this.arcTop(end, opt, true), gap);
+      const x0 = e.group.x + e.cx, x1 = end.group.x + end.cx;
+      const inner = this.slurTies
+        .filter((t) => t.x >= x0 - 0.5 && t.x + t.width <= x1 + 0.5)
+        .map((t) => ({ x: t.x + t.width / 2, y: t.y }));
+      const shift = arcClearShift(x0, base, x1, base, arcRise(x1 - x0, this.slurStyle), true, inner, gap);
+      this.addSlurTie(e.chord.notes[0], endCh.notes[0], base + shift);
     }
   }
 
@@ -1226,7 +1220,7 @@ export class Line {
       for (const e of notes) {
         const c = cxOf(e);
         if (c < x0 - H || c > x1 + H) continue;
-        bottom = Math.min(bottom, this.slurTop(e, opt, true)); // 行坐标：数字基线在 0，同弧（`addSlurTie`）
+        bottom = Math.min(bottom, this.arcTop(e, opt, false) - opt.stack.gap); // 行坐标：数字基线在 0，同弧（`addSlurTie`）
       }
       if (!Number.isFinite(bottom)) return;
       const y = bottom - half;
@@ -1251,26 +1245,6 @@ export class Line {
       if (!end) continue;
       draw(Math.max(0, cxOf(notes[0]!) - H * 0.9), cxOf(end) + H * 0.3, w.type, part, 1);
     }
-  }
-
-  /** 本行里与 `start`→`end` 这条弧共一个端点、又套在它里面的弧（圆滑线与延音线）有几条。 */
-  private nestedArcsAt(start: JChord, end: JChord): number {
-    const order = new Map<JChord, number>();
-    this.entries.forEach((e, i) => {
-      if (e instanceof NoteEntry && !order.has(e.chord)) order.set(e.chord, i);
-    });
-    const s0 = order.get(start), e0 = order.get(end);
-    if (s0 === undefined || e0 === undefined) return 0;
-    let n = 0;
-    for (const [c, i] of order) {
-      const ends = [...c.slurEndChords, ...(c.notes[0]?.tieStart && c.notes[0].tieNext ? [c.notes[0].tieNext.chord] : [])];
-      for (const d of ends) {
-        const j = order.get(d);
-        if (j === undefined || (c === start && d === end)) continue;
-        if ((i === s0 && j < e0) || (j === e0 && i > s0)) n++;
-      }
-    }
-    return n;
   }
 
   /** 上面各行起头、收在本行的弧（`Layout.layout` 断行后填）。 */
@@ -1301,7 +1275,7 @@ export class Line {
     for (const arc of this.carriedArcs) {
       const end = this.chordEntry.get(arc.end);
       if (!end) continue;
-      const ypos = arc.tie ? this.tiedTop(end, opt, false) : this.slurTop(end, opt, false);
+      const ypos = this.arcTop(end, opt, true) - opt.stack.gap;
       const size = end.number!.font.size;
       const xr = end.group.x + end.cx;
       const xl = Math.min(first.group.x + first.cx, xr) - size * 0.9;

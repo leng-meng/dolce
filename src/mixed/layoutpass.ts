@@ -151,11 +151,16 @@ function autoMeasureSlots(score: StaffLayout, mi: number): Slot[] {
     for (const l of md.lyrics) if (!l.empty) minText(l.offset.toString(), l.width + AUTO_LYRIC_SPACE);
     // 西文词与词之间留一个空格（判据同另两个引擎，engrave/syllable.ts::latinWordBreak）：歌词按音符居中，
     // 相邻两个音节的中心距至少「各半宽之和 + 字距 + 空格」，`十love` 才不粘成一个词
-    for (const l of md.lyrics) {
-      const n = l.next;
-      if (l.empty || !l.end || !n || n.empty || n.measure !== md || !l.offset.compareTo(n.offset)) continue;
-      if (!latinWordBreak(l.text, n.text)) continue;
-      minText(l.offset.toString(), (l.width + n.width) / 2 + AUTO_LYRIC_SPACE + l.font.measureText(" "));
+    // 同一段里本小节相邻的两个音节（`LyricLayout.next` 只连一个词内部的音节，词与词之间要自己排）
+    const byVerse = new Map<string, typeof md.lyrics>();
+    for (const l of md.lyrics) if (!l.empty) byVerse.set(l.num, [...(byVerse.get(l.num) ?? []), l]);
+    for (const list of byVerse.values()) {
+      list.sort((a, b) => a.offset.compareTo(b.offset));
+      for (let k = 0; k + 1 < list.length; k++) {
+        const l = list[k]!, n = list[k + 1]!;
+        if (!l.end || !l.offset.compareTo(n.offset) || !latinWordBreak(l.text, n.text)) continue;
+        minText(l.offset.toString(), (l.width + n.width) / 2 + AUTO_LYRIC_SPACE + l.font.measureText(" "));
+      }
     }
     for (const h of md.harmonies) {
       harms.push({ t: h.offset.toFloat(), w: harmFont.measureText(h.asPlainText()) });

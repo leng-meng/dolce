@@ -498,15 +498,21 @@ export class NoteEntry extends Entry {
    *  这会儿子级坐标还是「相对基线」那一套，没归一化过。 */
   private static notationTop(options: LayoutOptions, ent: NoteEntry): number {
     let y = ent.slurRung(options);
-    const acc = ent.accidental;
-    if (acc) {
-      const sc = Math.abs(acc.matrix.scaleY) || 1;
-      const top = acc instanceof SmuflText ? -acc.bound.bottom : acc.bound.top;
-      // 与升降号之间留宽一点（1.6 格）：那个 `#` 本来就斜挎在数字左上角，
-      // 只留一格的话 `>` 看着像挂在它身上（470《出到营外》）。
-      y = Math.min(y, acc.y + top * sc - options.jpStackGap * 1.6);
-    }
+    const accTop = ent.accidentalTop();
+    // 与升降号之间留宽一点（1.6 格）：那个 `#` 本来就斜挎在数字左上角，
+    // 只留一格的话 `>` 看着像挂在它身上（470《出到营外》）。
+    if (accTop !== null) y = Math.min(y, accTop - options.jpStackGap * 1.6);
     return y;
+  }
+
+  /** 临时记号的墨迹顶，相对数字基线（`update()` 前组原点就在基线上；之后子级归一、组原点挪到 `group.y`，
+   *  加回去仍是相对基线——行坐标里数字基线在 0）。没有临时记号返回 null。 */
+  accidentalTop(): number | null {
+    const acc = this.accidental;
+    if (!acc) return null;
+    const sc = Math.abs(acc.matrix.scaleY) || 1;
+    const top = acc instanceof SmuflText ? -acc.bound.bottom : acc.bound.top;
+    return this.group.y + acc.y + top * sc;
   }
 
   static addNotations(ch: JChord, options: LayoutOptions, ent: NoteEntry): void {

@@ -79,3 +79,51 @@ export function calcSlurPoints(pl: Point, pr: Point, o: Pick<SlurStyle, "heightS
 /** 首尾相接的两条弧（前一条的终点就是后一条的起点）在接点**各内缩**数字字号的几分之一：免得两条弧顶在一起。
  *  简谱引擎与原样文档同一个值（musicpp 的 size/14）。 */
 export const ARC_CHAIN_INSET_DIV = 14;
+
+// ── 弧的定位：只分**简谱**与**五线谱**两种（用户定） ──
+//
+// 简谱弧（简谱引擎、原样文档、混排的简谱层三路同一条）：
+//   - 端点落在数字墨心；高度只看**起止两个音**：两摞（数字、高音点；终点那个音再算上它的临时记号——起点的在弧外侧）
+//     的墨迹顶取高者，再往上**一道叠层的空**（`stack-gap × 数字墨迹高`，与八度点、减时线之间同一个量）；
+//   - 首尾相接的两条在接点各内缩字号的 1/`ARC_CHAIN_INSET_DIV`；
+//   - 弧套弧：外弧按实际弧线判碰内弧（`arcClearShift`，障碍 = 内弧弧顶），碰了才整条抬，抬到高出一道空；
+//   - 跨行的弧**只画后半条**（行末不画，下一行从行首起弧画到收尾的音）。
+// 五线谱弧（混排的五线谱层）：端点照原 C++ 工程挂符头/符干，**看整个跨度**——跨度里的符头、符干尖都是障碍。
+
+/** 简谱弧的端点高度：起止两摞的墨迹顶（终点算上临时记号，由调用方并进 `endTop`）取高者，再往上一道 `gap`。y 向下为正。 */
+export function jpArcY(startTop: number, endTop: number, gap: number): number {
+  return Math.min(startTop, endTop) - gap;
+}
+
+/** 一个障碍点：弧那一侧最外的墨迹（朝上的弧给墨迹顶，朝下的给墨迹底）。 */
+export interface ArcObstacle {
+  x: number;
+  y: number;
+}
+
+/**
+ * 弧要**整条**挪多少才让开这些障碍、再留一道 `gap`。弧线按抛物线近似：端点连线 + 弧高 `rise × 4u(1−u)`
+ * （贝塞尔弧的顶在控制点高的 0.75，调用方给 `rise` 时已折好）。`above` 为真时弧朝上（y 减）。
+ * 返回值朝上为负、朝下为正；不用挪返回 0。只看端点之间（开区间）的障碍。
+ */
+export function arcClearShift(
+  x0: number, y0: number, x1: number, y1: number,
+  rise: number, above: boolean, obstacles: readonly ArcObstacle[], gap: number,
+): number {
+  if (x1 - x0 <= 1e-6) return 0;
+  let shift = 0;
+  for (const o of obstacles) {
+    if (o.x <= x0 || o.x >= x1) continue;
+    const u = (o.x - x0) / (x1 - x0);
+    const line = y0 + (y1 - y0) * u;
+    const bulge = rise * 4 * u * (1 - u);
+    if (above) shift = Math.min(shift, o.y - gap - (line - bulge));
+    else shift = Math.max(shift, o.y + gap - (line + bulge));
+  }
+  return shift;
+}
+
+/** 弧（月牙）弧顶离端点连线多高：控制点高 `arcHeight` 的 0.75（三次贝塞尔两控制点等高时的顶点）。 */
+export function arcRise(dist: number, o: Pick<SlurStyle, "heightScale" | "maxHeight" | "minHeight"> = {}): number {
+  return arcHeight(dist, o) * 0.75;
+}

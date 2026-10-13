@@ -9,7 +9,8 @@
 import { Fraction } from "../common/fraction";
 import { Point } from "../common/geom";
 import { Font } from "../layout/font";
-import { calcSlurPoints, type SlurStyle } from "../engrave/arc";
+import { arcClearShift, arcRise, calcSlurPoints, jpArcY, type ArcObstacle, type SlurStyle } from "../engrave/arc";
+import { accidentalRise } from "../engrave/accidental";
 import type { CompressMode } from "../common/cjkpunct";
 import { syllableRun } from "../engrave/syllable";
 import type { HarmonySeg } from "../engrave/chord";
@@ -3261,52 +3262,34 @@ export function slurTiedPos(
   return [pl, pr];
 }
 
-/** 简谱层 slur/tied 锚点（SpanObj::slurTiedPosForJp）。 */
-export function slurTiedPosForJp(
-  eng: MixedOptions,
-  chl: ChordLayout,
-  chr: ChordLayout,
-  checkTied = false,
-): [Pt2, Pt2] {
-  const refLeft = chl.stemNote();
-  const refRight = chr.stemNote();
-  const pl: Pt2 = { x: refLeft.cx(eng.meta) + chl.measure.xpos(), y: 0 };
-  const pr: Pt2 = { x: refRight.cx(eng.meta) + chr.measure.xpos(), y: 0 };
+/** 简谱层一个弧端点：数字墨心 x（系统坐标）与那一摞的墨迹顶（数字、高音点；`isEnd` 时再算上临时记号——
+ *  起点的临时记号在弧外侧）。口径同另两条简谱路（engrave/arc.ts）。 */
+function jpArcEnd(eng: MixedOptions, ch: ChordLayout, isEnd: boolean): { x: number; top: number } {
+  const x = ch.stemNote().cx(eng.meta) + ch.measure.xpos();
   let dot = 0;
-  let hasTied = false;
-  for (const nt of chl.notes) {
-    if (nt.jpMelody) {
-      const dd = nt.octaveJp();
-      if (dd > dot) dot = dd;
-      if (checkTied && nt.tieBegin) hasTied = true;
-    }
+  let acc: number | null = null;
+  for (const nt of ch.notes) {
+    if (!nt.jpMelody) continue;
+    dot = Math.max(dot, nt.octaveJp());
+    if (isEnd && acc === null) acc = nt.jpAccidental();
   }
-  for (const nt of chr.notes) {
-    if (nt.jpMelody) {
-      const dd = nt.octaveJp();
-      if (dd > dot) dot = dd;
-    }
-  }
-  // 端点落在这一摞的顶之上一道空（engrave/stack.ts，与简谱引擎 `slurRung`、原样文档 `stackTop` 同一条：
-  // 数字墨迹顶 → 高音点 → 弧）。空取混排原先没有高音点时的那一截（render.cpp 的 y = 4，数字墨迹顶在 6.4）
   const row = mainRow(eng);
-  const y = stackTop(row.inkTop, dot, row.st) - JP_ARC_GAP * (row.inkBottom - row.inkTop);
-  pl.y = y;
-  pr.y = y;
-  if (hasTied) {
-    pl.y -= 5;
-    pr.y -= 5;
+  let top = stackTop(row.inkTop, dot, row.st);
+  if (acc !== null) {
+    const kind = acc > 0 ? "sharp" : acc < 0 ? "flat" : "natural";
+    top = Math.min(top, row.inkTop - accidentalRise(kind, row.inkBottom - row.inkTop, eng.accidentalScale));
   }
-  pl.y -= eng.jpTopDy;
-  pr.y -= eng.jpTopDy;
-  return [pl, pr];
+  return { x, top };
 }
 
-/** 简谱层弧端点离那一摞顶的空 ÷ 数字墨迹高（混排出厂 2.4 tenths / 墨迹高 16.07）。 */
-const JP_ARC_GAP = 2.4 / 16.065;
-
-/** 简谱层里 slur 罩着延音线时，两条弧之间（延音线弧顶 → slur 端点）留的空（tenths）。 */
-const JP_ARC_NEST_GAP = 2.5;
+/** 简谱层 slur/tied 锚点（SpanObj::slurTiedPosForJp）：简谱弧只看起止两个音，往上一道叠层的空（engrave/arc.ts::jpArcY）。
+ *  `chl` 缺省 = 跨系统续过来的后半条（左端由调用方给）。 */
+export function slurTiedPosForJp(eng: MixedOptions, chl: ChordLayout | null, chr: ChordLayout): [Pt2, Pt2] {
+  const r = jpArcEnd(eng, chr, true);
+  const l = chl ? jpArcEnd(eng, chl, false) : r;
+  const y = jpArcY(l.top, r.top, mainRow(eng).st.gap) - eng.jpTopDy;
+  return [{ x: l.x, y }, { x: r.x, y }];
+}
 
 // ---------------- slur / tie 画在哪（绘制与避让共用） ----------------
 
@@ -3350,8 +3333,10 @@ export function tiedEnds(
 
   if (nota === Notation.JianPu || nota === Notation.Mixed) {
     above = true;
+    // 简谱弧跨系统**只画后半条**（同另两条简谱路）：起头那一系统不画
+    if (hasNext) return null;
     if (chr.voice > 1 && hasPrev) return null;
-    const [pl, pr] = slurTiedPosForJp(eng, chl, chr);
+    const [pl, pr] = slurTiedPosForJp(eng, hasPrev ? null : chl, chr);
     plx = pl.x; ply = pl.y;
     prx = pr.x; pry = pr.y;
   } else {
@@ -3393,13 +3378,7 @@ export function tiedEnds(
     }
   }
 
-  if (hasPrev) {
-    if (nota === Notation.JianPu) {
-      plx = 0;
-    } else {
-      plx = sys.measures[0].dataPos;
-    }
-  }
+  if (hasPrev) plx = sys.measures[0].dataPos;
   if (hasNext) {
     const last = sys.measures[sys.measures.length - 1];
     prx = last.xpos() + last.dataEnd;
@@ -3436,27 +3415,43 @@ export function slurEnds(
 
   if (nota === Notation.JianPu) {
     above = true; // 简谱层 slur 一律朝上（render.cpp::drawSlur）
-    if (!chr || !chl) return null;
-    const [pl, pr] = slurTiedPosForJp(eng, chl, chr, true);
+    // 简谱弧跨系统**只画后半条**：起头那一系统不画，收尾那一系统从系统开头起弧（`hasPrev` 的左端在下面补）
+    if (!chr) return null;
+    const [pl, pr] = slurTiedPosForJp(eng, chl, chr);
     plx = pl.x; ply = pl.y;
     prx = pr.x; pry = pr.y;
-    // 罩着延音线的 slur（同一个音起或止，或整条在里面）：两端整体抬到延音线**画出来的**弧顶之上一道空。
-    // 只抬固定的 5 不够——短延音线弧陡，两条弧在起点附近还是贴在一起（260《感恩的泪》`2⌒2 3 2`）
-    let tieTop = Infinity;
-    for (const t of chl.measure.part.tied) {
-      if (!t.startNote || fLt(t.startTick, slur.startTick) || fGt(t.endTick, slur.endTick)) continue;
+    // **弧套弧**：套在它里面的延音线与更短的 slur 当障碍，按实际弧线判碰（engrave/arc.ts::arcClearShift），
+    // 碰了才整条抬、高出一道叠层的空（260《感恩的泪》`2⌒2 3 2` 两条弧同一个起点）
+    const x0 = hasPrev ? sys.measures[0].dataPos : plx;
+    const inner: ArcObstacle[] = [];
+    const part = chr.measure.part;
+    const within = (a: Fraction, b: Fraction): boolean => !fLt(a, slur.startTick) && !fGt(b, slur.endTick);
+    for (const t of part.tied) {
+      if (!t.startNote || !within(t.startTick, t.endTick)) continue;
       const te = tiedEnds(sys, eng, t, Notation.JianPu);
-      if (te) tieTop = Math.min(tieTop, arcExtent(te)[0]);
+      if (te) inner.push({ x: (te.plx + te.prx) / 2, y: arcExtent(te)[0] });
     }
-    const need = tieTop - JP_ARC_NEST_GAP;
-    if (ply > need) {
-      pry -= ply - need;
-      ply = need;
+    for (const o of part.slurs) {
+      if (o === slur || !o.startNote || o.startNote.staff !== slur.startNote.staff || !within(o.startTick, o.endTick)) continue;
+      if (fEq(o.startTick, slur.startTick) && fEq(o.endTick, slur.endTick)) continue;
+      const oe = slurEnds(sys, eng, o, Notation.JianPu);
+      if (oe) inner.push({ x: (oe.plx + oe.prx) / 2, y: arcExtent(oe)[0] });
     }
+    const shift = arcClearShift(x0, ply, prx, pry, arcRise(prx - x0, mixedSlurStyle(true)), true, inner, mainRow(eng).st.gap);
+    ply += shift;
+    pry += shift;
   } else {
     const [pl, pr] = slurTiedPos(eng, chl, chr, above);
     plx = pl.x; ply = pl.y;
     prx = pr.x; pry = pr.y;
+    // 五线谱弧**看整个跨度**（用户定；简谱弧只看起止）：跨度里的符头、弧那一侧的符干尖都是障碍，
+    // 弧线（抛物线近似）碰了就整条往外挪，留 `STAFF_ARC_GAP`（engrave/arc.ts::arcClearShift）
+    const x0 = hasPrev ? sys.measures[0].dataPos : plx;
+    const x1 = hasNext ? sys.measures[sys.measures.length - 1]!.xpos() + sys.measures[sys.measures.length - 1]!.dataEnd : prx;
+    const obstacles = staffArcObstacles(sys, refCh, slur.startNote.staff, slur.startTick, slur.endTick, above, eng);
+    const shift = arcClearShift(x0, ply, x1, pry, arcRise(x1 - x0, mixedSlurStyle(above)), above, obstacles, STAFF_ARC_GAP);
+    ply += shift;
+    pry += shift;
   }
 
   if (hasPrev) {
@@ -3468,6 +3463,35 @@ export function slurEnds(
   }
 
   return { plx, ply, prx, pry, above };
+}
+
+/** 五线谱弧离跨度里符头、符干尖留的空（tenths，半个谱线间距）。 */
+const STAFF_ARC_GAP = 5;
+
+/** 五线谱弧跨度里（起止之间、本系统内、同一谱表）弧那一侧的墨迹点：符头外缘，与朝弧那一侧的符干尖。 */
+function staffArcObstacles(sys: Sys, ref: ChordLayout, staff: number, t0: Fraction, t1: Fraction, above: boolean, eng: MixedOptions): ArcObstacle[] {
+  const out: ArcObstacle[] = [];
+  const four = new Fraction(4);
+  const part = ref.measure.part;
+  for (const mif of sys.measures) {
+    const md = part.measures[mif.index];
+    if (!md) continue;
+    for (const ch of md.chords) {
+      if (ch.rest || ch.grace || !ch.notes.length) continue;
+      const t = ch.tick();
+      if (!fGt(t, t0) || !fLt(t, t1)) continue;
+      const xpos = mif.xpos();
+      for (const n of ch.notes) {
+        if (n.staff !== staff || !n.visible) continue;
+        out.push({ x: n.cx(eng.meta) + xpos, y: n.cy() + ch.measure.staffY(n.staff) + (above ? -5 : 5) });
+      }
+      // 符干尖在弧那一侧才挡（朝上的弧挡朝上的符干）
+      if (fLt(ch.noteType, four) && ch.stemUp === above && ch.notes[0]!.staff === staff) {
+        out.push({ x: ch.stemX() + xpos, y: ch.tailY(true) });
+      }
+    }
+  }
+  return out;
 }
 
 /** 弧（连同月牙的厚度）画出来的纵向范围 [顶, 底]：几何与 `render.ts::drawSlurTied` 同一份（`SlurTieBase` + `mixedSlurStyle`）。 */
