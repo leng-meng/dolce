@@ -667,7 +667,7 @@ export function inferBookStyle(
   rec("midStartGap", ms.midStartGap, false);
 
   // 三个层距（高音点上距 / 低音点下距 / 减时线首层距）够近才共用一把尺子，
-  // 否则 style/book.ts::applyBookPreset 那边要分开覆写（见计划 §5.3 与 docs/实现/简谱纵向栅格.md）。
+  // 否则 style/book.ts::bookJianpuStyle 那边要分开覆写（见计划 §5.3 与 docs/实现/简谱纵向栅格.md）。
   const gUp = med(ms.octaveDotUpGap);
   const gDown = med(ms.octaveDotDownGap);
   const gDiv = med(ms.divLineGap);

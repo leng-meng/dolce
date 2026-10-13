@@ -207,7 +207,7 @@ function graceMetricsOf(opt: LayoutOptions): GraceMetrics {
   return {
     ink: bnd.height,
     // 原书 260/264 两页实测：倚音数字墨迹高 4.82~5.00、正常音符 8.33 → 0.58~0.60
-    scale: 0.59,
+    scale: opt.graceScale,
     octaveUpY: bnd.top - opt.stack.gap,
     octaveDownY: opt.jpDotRung,
     octaveDotGap: opt.jpDotRung,

@@ -10,7 +10,6 @@ import type { CompressMode } from "../common/cjkpunct";
 import { syllableRun } from "../engrave/syllable";
 import { Font } from "./font";
 import { MetaData } from "../smufl/smufl";
-import type { LayoutOptions } from "./options";
 
 export function getOrNull<T>(arr: T[], i: number): T | null {
   return i >= 0 && i < arr.length ? arr[i] : null;
@@ -293,10 +292,16 @@ export class GraphicLine extends PageItem {
   }
 }
 
+/** SMuFL 文字要的两样：字（Bravura 那支）与字形元数据（量紧包围盒）。简谱引擎的 `LayoutOptions` 就满足它。 */
+export interface SmuflSource {
+  smuflMeta: MetaData;
+  smuflFont: Font;
+}
+
 export class SmuflText extends TextFrame {
   asPath = false;
   meta: MetaData;
-  constructor(options: LayoutOptions) {
+  constructor(options: SmuflSource) {
     super();
     this.meta = options.smuflMeta;
     this.font = options.smuflFont;
@@ -645,21 +650,6 @@ export class Tie extends SlurTieBase {
   endId: number | null = null;
 }
 export class Slur extends SlurTieBase {}
-
-/** LayoutOptions → SlurStyle。谱面这一路的弧全由它配参数，别在调用点各配各的。 */
-export function slurStyleOf(opt: LayoutOptions): SlurStyle {
-  return {
-    thickness: opt.slurTieThickness,
-    color: opt.color,
-    heightScale: opt.slurHeightScale,
-    outlineWidth: opt.slurOutlineWidth,
-    maxHeight: opt.slurMaxHeight,
-    minHeight: opt.slurMinHeight,
-    flatSpan: opt.slurFlatSpan < 0 ? 0 : opt.slurFlatSpan || opt.numberSize * 5,
-    flatRatio: opt.slurFlatRatio,
-    flatLineWidth: opt.slurFlatWidth,
-  };
-}
 
 /** 子树里带类 `cls` 的项，按页面树顺序；命中的项不再往下找。
  *  可视化编辑按它从音符格里认出挂在音符上的记号（和弦名 `chord-group`、装饰 `artic`…）。 */

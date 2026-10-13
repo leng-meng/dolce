@@ -18,6 +18,7 @@ import type { AccidentalSide, AccidentalStyleKind } from "../../engrave/spacing"
 import type { CompressMode } from "../../common/cjkpunct";
 import { STACK_GAP_DEFAULT, highDotY, lowDotY, type StackStyle } from "../../engrave/stack";
 import type { NoteElement } from "../../pu/ast";
+import type { JianpuStyle } from "../../engrave/jianpustyle";
 
 /**
  * 原样文档布局（文本谱、MusicXML、多声部 123/ABC 的原样档）的简谱度量，单位 pt。
@@ -170,8 +171,11 @@ export interface JianpuMetrics {
   };
 }
 
-/** 定稿度量：`withDigitInk` 按数字字体实测补上的派生量。**不是样式值**。 */
+/** 定稿度量：`withDigitInk` 按数字字体实测补上的派生量。**不是样式值**。
+ *  样式值（字号、字体、笔画、点、竖向间距、写法）一律从 `style` 取——引擎不读本类型里的同名组，
+ *  那几组只是折成 `style` 之前的来源（谱面指令与面板缩放叠在它们上面）。 */
 export interface JianpuGrid extends JianpuMetrics {
+  style: JianpuStyle;
   ink: {
     /** 数字「1」的**墨迹高**：纵向栅格（减时线、八度点、记号槽位）是贴着墨迹排的，拿它当内部单位。 */
     noteHeight: number;
@@ -269,13 +273,95 @@ function scaleGroup(g: Record<string, number | undefined>, k: number): void {
  *  数字按墨迹竖直居中于基线画（墨迹顶 −noteHeight/2、底 +noteHeight/2），八度点与减时线的落点
  *  走公共那一份（engrave/stack.ts：墨迹到墨迹等距，空 = `look.stackGap` × 墨迹高）。 */
 export function withDigitInk(m: JianpuMetrics, inkPerPt: number): JianpuGrid {
-  const noteHeight = m.size.note * inkPerPt;
+  const style = styleOfMetrics(m);
+  const noteHeight = style.size.note * inkPerPt;
   return {
     ...cloneMetrics(m),
+    style,
     ink: {
       noteHeight,
-      stack: { gap: m.look.stackGap * noteHeight, dotRadius: m.note.dotRadius, beamWidth: m.note.beamWidth },
+      stack: { gap: style.vertical.stackGap * noteHeight, dotRadius: style.dot.octave, beamWidth: style.stroke.beam },
     },
+  };
+}
+
+/**
+ * 叠好的度量 → 尺子 `JianpuStyle`（只取样式那几组；栅格——步进、槽位、页头基线——仍在度量里）。
+ * 弧：原样文档的弧高是**恒定**的（`slurArc` = 弧顶，控制点 = 它 / 0.75），上下限同值，见 `jianpuSlurStyle`。
+ */
+export function styleOfMetrics(m: JianpuMetrics): JianpuStyle {
+  const face = (family: string, bold = false) => ({ family, bold, italic: false });
+  const control = m.note.slurArc / 0.75;
+  return {
+    font: { note: face(m.font.note), lyric: face(m.font.text), text: face(m.font.text), smufl: face("Bravura") },
+    header: {
+      title: { size: m.size.title, ...(m.font.title ? { family: m.font.title } : {}) },
+      subtitle: { size: m.size.subtitle, ...(m.font.subtitle ? { family: m.font.subtitle } : {}) },
+      credit: { size: m.size.credit, ...(m.font.credit ? { family: m.font.credit } : {}) },
+      scripture: { size: m.size.scripture ?? m.size.subtitle, ...(m.font.scripture ? { family: m.font.scripture } : {}) },
+    },
+    size: {
+      note: m.size.note,
+      lyric: m.size.lyric,
+      chord: m.size.chord,
+      keyMeter: m.size.keyMeter,
+      verseNum: m.size.verseNum,
+      ending: m.size.keyMeter,
+      sectionWord: m.size.chord,
+      words: m.size.words,
+      header: m.size.header,
+      grace: m.ratio.graceScale,
+      cue: m.ratio.cueScale,
+    },
+    stroke: {
+      barline: m.stroke.barline,
+      finalBarline: m.stroke.barline,
+      beam: m.note.beamWidth,
+      slur: m.stroke.slurThickness,
+      slurOutline: 0,
+      slurFlat: 0,
+      hairpin: m.stroke.hairpinThickness,
+      timeSigRule: m.note.beamWidth,
+      bracket: 0,
+      doubleBarlineGap: m.stroke.doubleBarlineGap,
+    },
+    dot: { octave: m.note.dotRadius, aug: m.note.dotRadius, repeat: m.stroke.repeatDotRadius },
+    vertical: {
+      stackGap: m.look.stackGap,
+      slurGap: m.note.slurGap,
+      lyricBaseline: m.lyricSpacing.lyricGap,
+      lyricStack: m.lyricSpacing.lyricStack,
+      systemGap: m.spacing.systemGap,
+      systemSpread: 0,
+      staffDist: 0,
+      voiceGap: m.spacing.voiceGap,
+      chordGap: 0,
+      bracketFoot: 0,
+      staffTop: 0,
+      staffBottom: 0,
+      barlineHeight: m.note.barlineHeight,
+    },
+    arc: { heightScale: 1, maxHeight: control, minHeight: control, flatSpan: m.note.slurFlatSpan, flatNotes: 0, flatRatio: 0 },
+    spacing: {
+      lyricGap: 0,
+      maxHorizontalScale: m.justify.maxHorizontalScale,
+      justify: m.justify.enable,
+      lastLineMinFill: m.justify.lastLineMinFill,
+    },
+    look: {
+      noteBold: m.font.noteBold,
+      chordPlain: m.look.chordPlain,
+      ...(m.look.accidentalSide ? { accidentalSide: m.look.accidentalSide } : {}),
+      accidentalStyle: m.look.accidentalStyle,
+      accidentalScale: m.look.accidentalScale,
+      punctCompress: m.look.punctCompress,
+      tupletStyle: "arc",
+      verseNumbers: "always",
+      verseNumberAutoMin: 0,
+      timeSigDigitRatio: 0,
+      timeSigRuleLenRatio: 0,
+    },
+    page: { color: 0xff1b1b1b, margin: { ...m.page.margin } },
   };
 }
 
@@ -434,35 +520,37 @@ export function applyUserOptions(base: JianpuMetrics, o: JianpuUserOptions | nul
  * 在此之前 painter 把弧高直接丢掉、按 musicpp 的对数公式画（跨度大时高出一倍多），
  * 而 layout 又按弧高预留——两套数对不上。
  */
-export function jianpuSlurStyle(m: JianpuMetrics, color: number): SlurStyle {
+export function jianpuSlurStyle(m: JianpuGrid, color: number): SlurStyle {
+  const st = m.style;
   return {
-    thickness: m.stroke.slurThickness,
+    thickness: st.stroke.slur,
     color,
-    maxHeight: m.note.slurArc / 0.75,
     // 文本谱的参考实现（番茄原版渲染）弧高是**恒定**的（控制点固定在 top-10，与跨度无关），
-    // 所以这里上下限同值：长弧不长高、短弧也不塌成直线。
-    minHeight: m.note.slurArc / 0.75,
-    flatSpan: m.note.slurFlatSpan,
+    // 所以上下限同值（`styleOfMetrics`）：长弧不长高、短弧也不塌成直线。
+    maxHeight: st.arc.maxHeight,
+    minHeight: st.arc.minHeight,
+    flatSpan: st.arc.flatSpan,
   };
 }
 
 /** 弧线实际占的头顶高度（纵向预留用），与 jianpuSlurStyle 同源。 */
-export function jianpuSlurRise(m: JianpuMetrics): number {
+export function jianpuSlurRise(m: JianpuGrid): number {
   return arcHeight(Infinity, jianpuSlurStyle(m, 0)) * 0.75;
 }
 
 /** 原样文档布局折算给公共倚音几何的度量（见 `engrave/grace.ts`）。
  *  painter 画倚音、layout 给倚音留位，用的必须是同一份。 */
 export function jianpuGraceMetrics(m: JianpuGrid): GraceMetrics {
+  const st = m.style;
   return {
     ink: m.ink.noteHeight,
-    scale: m.ratio.graceScale,
+    scale: st.size.grace,
     octaveUpY: highDotY(-m.ink.noteHeight / 2, 0, m.ink.stack),
     octaveDownY: lowDotY(m.ink.noteHeight / 2, 0, 0, m.ink.stack),
-    octaveDotGap: m.ink.stack.gap + 2 * m.note.dotRadius,
-    octaveDotRadius: m.note.dotRadius,
-    underlineGap: m.ink.stack.gap + m.note.beamWidth,
-    stackGap: m.look.stackGap,
+    octaveDotGap: m.ink.stack.gap + 2 * st.dot.octave,
+    octaveDotRadius: st.dot.octave,
+    underlineGap: m.ink.stack.gap + st.stroke.beam,
+    stackGap: st.vertical.stackGap,
   };
 }
 

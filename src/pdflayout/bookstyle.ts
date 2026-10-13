@@ -65,7 +65,7 @@ export interface BookMetrics {
   // 不是原书的描边宽（0.19pt 上下），所以一律存 `*Em`（× 字号）。
   /** 弧的**凸起高度**（× 音符字号）。引擎的弧高公式是按 fontSize≈28 的绝对像素调的，
    *  换成成书的小字号后按比例缩会扁成一条线，所以这里给一个明确的物理目标，
-   *  由 style/book.ts::applyBookPreset 反算缩放系数。 */
+   *  由 style/book.ts::bookJianpuStyle 反算缩放系数。 */
   slurArcEm: number;
   /** 弧顶的**上限**与**下限**，× 音符字号（与 `slurArcEm` 同口径）。
    *  对数公式两头都失控：长跨度一路长高去顶和弦，短跨度塌成一条直线。

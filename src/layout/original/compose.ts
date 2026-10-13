@@ -340,7 +340,7 @@ function systemMetrics(c: OriginalCtx, group: PlacedGroup, page?: PlacedPage): {
   labelFont: Font;
 } {
   const m = c.metrics;
-  const labelFont = new Font(m.font.text, m.size.verseNum);
+  const labelFont = new Font(m.style.font.text.family, m.style.size.verseNum);
   const widthOf = (g: PlacedGroup) => {
     let w = 0;
     for (const v of g.voices) {
@@ -354,19 +354,19 @@ function systemMetrics(c: OriginalCtx, group: PlacedGroup, page?: PlacedPage): {
   const slotWidth = Math.max(labelWidth, ...(page?.groups ?? []).map(widthOf));
   const notesLeft = m.page.margin.left + m.page.systemIndent;
   // 段号排在 [细竖线] ← 间隙 → [段号] ← 间隙 → [歌词首字] 之间
-  const labelToLyric = m.size.verseNum * 0.2;
-  const lineToLabel = m.size.verseNum * 0.55;
+  const labelToLyric = m.style.size.verseNum * 0.2;
+  const lineToLabel = m.style.size.verseNum * 0.55;
   // 首字前面挂出去的前置标点（`“高`，音节按主体居中、引号伸到左边，engrave/syllable.ts）也得让：
   // 只按半个字宽留，段号就压在引号上、连谱号压到引号
-  const lyricFont = new Font(m.font.text, m.size.lyric);
+  const lyricFont = new Font(m.style.font.text.family, m.style.size.lyric);
   let lead = 0;
   for (const v of group.voices) {
     for (const line of v.voice.lyrics) {
       const syl = line.syllables.find((x) => x?.text);
-      if (syl) lead = Math.max(lead, syllableRun(syl.text, lyricFont, m.look.punctCompress).lead);
+      if (syl) lead = Math.max(lead, syllableRun(syl.text, lyricFont, m.style.look.punctCompress).lead);
     }
   }
-  const firstCharHalf = m.size.lyric * 0.5 + lead;
+  const firstCharHalf = m.style.size.lyric * 0.5 + lead;
   const labelSlot =
     slotWidth > 0 ? firstCharHalf + labelToLyric + slotWidth + lineToLabel : 0;
   const thinX = notesLeft - Math.max(labelSlot, m.note.barlineSpace * 0.55, lead > 0 ? firstCharHalf + labelToLyric : 0);
@@ -401,7 +401,7 @@ function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): Group {
     sys.classes.add("system");
     const texts = group.group.texts;
     if (texts.length > 0) {
-      const font = new Font(m.font.text, m.size.words);
+      const font = new Font(m.style.font.text.family, m.style.size.words);
       sys.add(text(texts.map((t) => t.text).join("  "), m.page.margin.left, group.textY, font, c.ink));
     }
     const { braceX, notesLeft } = systemMetrics(c, group, page);
@@ -413,7 +413,7 @@ function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): Group {
     if (group.hasBrace) {
       paintBrace(c, sys, braceAt, group.braceTop, group.braceBottom);
       // 声部名（`Q1"女高"` / `Q1<女高>`）排在连谱号**左侧**，与各自的声部行对齐
-      const nameFont = new Font(m.font.text, m.size.chord);
+      const nameFont = new Font(m.style.font.text.family, m.style.size.chord);
       for (const v of group.voices) {
         const caption = v.voice.caption;
         if (!caption) continue;
@@ -478,7 +478,7 @@ function layoutFooters(c: OriginalCtx, shiftX: number): { page: number; bottom: 
     if (!meta || ![...meta.bottomLeft, ...meta.bottomCenter, ...meta.bottomRight].some((t) => t.trim() && t.trim() !== "-")) return;
     let low = 0;
     for (const g of pg.groups) for (const v of g.voices) low = Math.max(low, v.y, ...v.lyricY);
-    const font = (size: number): Font => new Font(m.font.text, size);
+    const font = (size: number): Font => new Font(m.style.font.text.family, size);
     const res = layoutRegion(region, {
       field: songFields(undefined, {
         "pageText.bottomLeft": meta.bottomLeft.map((text) => ({ text })),
@@ -487,7 +487,7 @@ function layoutFooters(c: OriginalCtx, shiftX: number): { page: number; bottom: 
       }),
       pageNo: 1,
       content: { left: m.page.margin.left, right: c.pageWidth - m.page.longImageMargin - shiftX },
-      dy: low + m.size.lyric,
+      dy: low + m.style.size.lyric,
       sizeOf: (role) => footerSize(m, role),
       measure: (_r, t, size) => font(size).measureText(t),
       fontMetrics: (_r, size) => ({ ascent: -font(size).metrics.ascent, height: size }),
@@ -499,15 +499,18 @@ function layoutFooters(c: OriginalCtx, shiftX: number): { page: number; bottom: 
       const x = p.align === "center" ? p.x - w / 2 : p.align === "right" ? p.x - w : p.x;
       return [text(p.text, x, p.y, f, c.ink)];
     });
-    out.push({ page: i, bottom: low + m.size.lyric + res.span, items });
+    out.push({ page: i, bottom: low + m.style.size.lyric + res.span, items });
   });
   return out;
 }
 
-/** 模板角色 → 字号：原样文档布局的字号在 `JianpuMetrics.size`，角色名与字段同名（`header`、`lyric`、`note`…）。 */
+/** 模板角色 → 字号：取尺子 `JianpuStyle` 的 `size` 与页眉四项，角色名与字段同名（`header`、`lyric`、`note`、`title`…）。 */
 function footerSize(m: OriginalCtx["metrics"], role: string): number {
-  const v = (m.size as Record<string, number | undefined>)[role];
-  if (typeof v !== "number") throw new Error(`原样文档布局的模板认不出角色 ${role}（可用：${Object.keys(m.size).join(" ")}）`);
+  const st = m.style;
+  const sizes: Record<string, number> = { ...st.size };
+  for (const r of ["title", "subtitle", "credit", "scripture"] as const) sizes[r] = st.header[r].size;
+  const v = sizes[role];
+  if (typeof v !== "number") throw new Error(`原样文档布局的模板认不出角色 ${role}（可用：${Object.keys(sizes).join(" ")}）`);
   return v;
 }
 
@@ -519,14 +522,14 @@ function titleLines(c: OriginalCtx, meta: Metadata): { text: string; y: number; 
   const out: { text: string; y: number; font: Font }[] = [];
   meta.titles.forEach((title, i) => {
     const font = i === 0
-      ? new Font(m.font.title ?? m.font.text, m.size.title, true)
-      : new Font(m.font.subtitle ?? m.font.text, m.size.subtitle, false);
-    const y = m.head.titleBaseline + (i === 0 ? 0 : m.size.title * 0.2 + i * (m.size.subtitle * 1.35));
+      ? new Font(m.style.header.title.family ?? m.style.font.text.family, m.style.header.title.size, true)
+      : new Font(m.style.header.subtitle.family ?? m.style.font.text.family, m.style.header.subtitle.size, false);
+    const y = m.head.titleBaseline + (i === 0 ? 0 : m.style.header.title.size * 0.2 + i * (m.style.header.subtitle.size * 1.35));
     out.push({ text: title, y, font });
   });
-  const size = m.size.scripture ?? m.size.subtitle;
-  const scrFont = new Font(m.font.scripture ?? m.font.text, size, false);
-  let y = out.length ? out[out.length - 1]!.y + (out.length === 1 ? m.size.title * 0.2 : 0) : m.head.titleBaseline - size * 1.35;
+  const size = m.style.header.scripture.size ?? m.style.header.subtitle.size;
+  const scrFont = new Font(m.style.header.scripture.family ?? m.style.font.text.family, size, false);
+  let y = out.length ? out[out.length - 1]!.y + (out.length === 1 ? m.style.header.title.size * 0.2 : 0) : m.head.titleBaseline - size * 1.35;
   for (const t of meta.scripture ?? []) {
     y += size * 1.35;
     out.push({ text: t, y, font: scrFont });
@@ -546,15 +549,15 @@ function titleInkBottom(c: OriginalCtx, meta: Metadata): number {
  */
 function keyLineInk(c: OriginalCtx, meta: Metadata): { top: number; bottom: number } {
   const m = c.metrics;
-  const headFont = new Font(m.font.text, m.size.keyMeter);
+  const headFont = new Font(m.style.font.text.family, m.style.size.keyMeter);
   const f = headFont.charBound("F");
   let top = f.top, bottom = f.bottom;
   const mt = meta.meters[0];
   if (mt) {
     const eq = headFont.charBound("=");
-    const meterY = (eq.top + eq.bottom) / 2 + m.note.beamWidth / 2;
+    const meterY = (eq.top + eq.bottom) / 2 + m.style.stroke.beam / 2;
     const r = new TimeSigGlyph(mt.numerator, mt.denominator, {
-      height: m.note.barlineHeight, centerY: 0, ruleWidth: m.note.beamWidth, color: c.ink, font: headFont,
+      height: m.style.vertical.barlineHeight, centerY: 0, ruleWidth: m.style.stroke.beam, color: c.ink, font: headFont,
     });
     const ink = r.box();
     top = Math.min(top, meterY + ink.top);
@@ -571,9 +574,9 @@ function keyLineInk(c: OriginalCtx, meta: Metadata): { top: number; bottom: numb
 function keyLineY(c: OriginalCtx, meta: Metadata): number {
   const m = c.metrics;
   const leftLines = Math.max(meta.topLeft.length, meta.authors.length);
-  if (leftLines > 0) return m.head.creditBaseline + leftLines * m.head.creditLineHeight + m.size.keyMeter * 0.6;
+  if (leftLines > 0) return m.head.creditBaseline + leftLines * m.head.creditLineHeight + m.style.size.keyMeter * 0.6;
   if (meta.titles.length === 0) return m.head.keyMeterBaseline;
-  return titleInkBottom(c, meta) + m.size.lyric - keyLineInk(c, meta).top;
+  return titleInkBottom(c, meta) + m.style.size.lyric - keyLineInk(c, meta).top;
 }
 
 /** 头部（标题/副标题/词曲/TL/TR/调号拍号）占到哪个 y——正文首行据此避让。 */
@@ -583,11 +586,11 @@ function headerBottom(c: OriginalCtx, meta: Metadata): number {
   const rightLines = meta.topRight.length;
   // 只有真有左右文字块时才算它的底；没有时不能拿 authorY 一行兜底，否则调号贴上标题也白贴
   const lines = Math.max(leftLines, rightLines);
-  const blockBottom = lines > 0 ? m.head.creditBaseline + (lines - 1) * m.head.creditLineHeight + m.size.credit * 0.2 : 0;
+  const blockBottom = lines > 0 ? m.head.creditBaseline + (lines - 1) * m.head.creditLineHeight + m.style.header.credit.size * 0.2 : 0;
   const hasTempoWords = meta.tempos.some((t) => typeof t === "string" && t !== "");
   const keyY = keyLineY(c, meta);
   let keyBottom = keyY + keyLineInk(c, meta).bottom;
-  if (hasTempoWords) keyBottom = keyY + m.size.keyMeter * 1.55 + m.size.keyMeter * 0.85 * 0.15;
+  if (hasTempoWords) keyBottom = keyY + m.style.size.keyMeter * 1.55 + m.style.size.keyMeter * 0.85 * 0.15;
   // 只报页首的**墨迹底**；「空一行」由 layout 量到首组真正的墨迹顶（和弦、W: 文字行、弧线都算），
   // 见 place.ts::layoutSong 的 firstTop。在这里按数字顶加一行，首组头顶有文字行时就被吃掉了
   //（小兔子乖乖的「引子」贴上了拍号）。
@@ -615,13 +618,13 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
   }
 
   const right = c.pageWidth - m.page.longImageMargin - c._pageShiftX;
-  const authorFont = new Font(m.font.credit ?? m.font.text, m.size.credit);
+  const authorFont = new Font(m.style.header.credit.family ?? m.style.font.text.family, m.style.header.credit.size);
   // `Z:` 词曲作者靠右；`TL:`/`TR:` 是与标题同高的左右文字块（多行，允许空行占位）
   meta.authors.forEach((a, i) => {
     const w = authorFont.measureText(a);
     root.add(text(a, right - w, m.head.creditBaseline + i * m.head.creditLineHeight, authorFont, c.ink));
   });
-  const topFont = new Font(m.font.text, m.size.header);
+  const topFont = new Font(m.style.font.text.family, m.style.size.header);
   meta.topLeft.forEach((t, i) => {
     if (!t) return;
     // `TL:` 与 system 左缘对齐（它不是跟着音符走的）
@@ -636,7 +639,7 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
   // 调号拍号行的基线（左侧文字块之下，或贴着标题空一行，见 keyLineY）
   const keyY = keyLineY(c, meta);
 
-  const headFont = new Font(m.font.text, m.size.keyMeter);
+  const headFont = new Font(m.style.font.text.family, m.style.size.keyMeter);
   const tonic = meta.tonic ?? "1";
   let x = systemLeft;
   // 调号走公共那一份（engrave/keysig.ts）：升降号是 SMuFL csym 字形并抬高，`=` 两侧各让一点。
@@ -646,7 +649,7 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
       font: headFont,
       music: new Font("Bravura", headFont.size),
       color: c.ink,
-      side: m.look.accidentalSide,
+      side: m.style.look.accidentalSide,
       classes: ["hdr-keysig"],
     });
     for (const it of k.items) {
@@ -671,7 +674,7 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
   // 拍号的分数线与调号的「=」**视觉居中**：按「=」墨迹的竖直中心定分数线（用户口径）。
   // TimeSigGlyph 把分数线描边中心放在 centerY − ruleWidth/2，这里补回那半个线宽。
   const eq = headFont.charBound("=");
-  const meterY = keyY + (eq.top + eq.bottom) / 2 + m.note.beamWidth / 2;
+  const meterY = keyY + (eq.top + eq.bottom) / 2 + m.style.stroke.beam / 2;
   const meterFrom = root.children.length;
   for (const meter of meta.meters) {
     x += paintMeter(c, root, x, meterY, meter, headFont) + 14;
@@ -681,14 +684,14 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
   // 数字部分是速度值，不显示在这里。
   const tempoWords = meta.tempos.filter((t): t is string => typeof t === "string" && t !== "");
   if (tempoWords.length > 0) {
-    const wordFont = new Font(m.font.text, m.size.keyMeter * 0.85);
+    const wordFont = new Font(m.style.font.text.family, m.style.size.keyMeter * 0.85);
     root.add(
-      text(tempoWords.join(" "), systemLeft, keyY + m.size.keyMeter * 1.55, wordFont, c.ink),
+      text(tempoWords.join(" "), systemLeft, keyY + m.style.size.keyMeter * 1.55, wordFont, c.ink),
     );
   }
 
   // 序号：左上 / 右上
-  const indexFont = new Font(m.font.text, m.size.title * 0.62);
+  const indexFont = new Font(m.style.font.text.family, m.style.header.title.size * 0.62);
   // `XL:` 序号同样对齐 system 左缘
   if (meta.indexLeft) root.add(text(meta.indexLeft, systemLeft, m.head.titleBaseline, indexFont, c.ink));
   if (meta.indexRight) {
@@ -712,9 +715,9 @@ function paintMeter(c: OriginalCtx,
   // 两个数字横向居中于分数线。原先这里各按 `font.size` 的 0.42/0.62/0.1 给，
   // 与谱面、混排三处口径各不相同。
   const r = new TimeSigGlyph(meter.numerator, meter.denominator, {
-    height: c.metrics.note.barlineHeight,
+    height: c.metrics.style.vertical.barlineHeight,
     centerY: 0,
-    ruleWidth: c.metrics.note.beamWidth, // 分数线与减时线同粗（用户口径）
+    ruleWidth: c.metrics.style.stroke.beam, // 分数线与减时线同粗（用户口径）
     color: c.ink,
     font,
   });
@@ -740,7 +743,7 @@ function paintBrace(c: OriginalCtx, root: Group, x: number, top: number, bottom:
   const size = ink * 2.2;
   const font = new Font("Bravura", size);
   const thick = size * 0.115;
-  const thin = m.stroke.barline;
+  const thin = m.style.stroke.barline;
   // 粗线与细线的中心距
   const gap = ink * 0.55;
   const y0 = top - ink * 0.85;
@@ -806,9 +809,9 @@ function paintVoice(c: OriginalCtx,
     root.add(
       rect(c.ink,
         left + u.x0,
-        baseline + (u.dy ?? 0) + beamY(m.ink.noteHeight / 2, u.level, m.ink.stack) - m.note.beamWidth / 2,
+        baseline + (u.dy ?? 0) + beamY(m.ink.noteHeight / 2, u.level, m.ink.stack) - m.style.stroke.beam / 2,
         u.x1 - u.x0,
-        m.note.beamWidth,
+        m.style.stroke.beam,
       ),
     );
   }
@@ -866,12 +869,12 @@ function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, ba
     case "decrescendo": {
       const half = m.note.hairpinOpening / 2;
       // `mk.y` 是松叶底边（`placeMarks` 按跨度里的音符与和弦定的）；没有才退回固定槽位
-      const y = mk.y !== undefined ? baseline + mk.y - half - m.stroke.hairpinThickness / 2
+      const y = mk.y !== undefined ? baseline + mk.y - half - m.style.stroke.hairpin / 2
         : baseline + m.note.hairpinY - (mk.level - 1) * m.note.levelStep;
       const open = mk.mark.type === "crescendo";
       // 画法走公共那一份（engrave/hairpin.ts，与五线谱同一笔）
       root.add(hairpinPath({
-        x0, x1, y, half0: open ? 0 : half, half1: open ? half : 0, lineWidth: m.stroke.hairpinThickness, color: c.ink,
+        x0, x1, y, half0: open ? 0 : half, half1: open ? half : 0, lineWidth: m.style.stroke.hairpin, color: c.ink,
       }));
       break;
     }
@@ -879,9 +882,9 @@ function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, ba
       const y = baseline + m.note.voltaY - (mk.level - 1) * m.note.levelStep;
       // 画法走公共那一份（engrave/ending.ts，与简谱引擎、混排同一套）：比例照混排——
       // 竖脚与房号字号都是谱高的一半（谱高取小节线高），房号在左脚右侧、横线下方按墨迹定位。
-      const H = m.note.barlineHeight;
+      const H = m.style.vertical.barlineHeight;
       const size = H * 0.5;
-      const lw = m.stroke.barline;
+      const lw = m.style.stroke.barline;
       const showLabel = !!mk.mark.caption && !mk.openLeft; // 跨行续过来的房子不再重复房号
       addEndingBracket(root, {
         x0, x1, top: y, drop: H * 0.5,
@@ -935,8 +938,8 @@ function paintLayer(c: OriginalCtx,
     return;
   }
   const y = baseline + m.note.cueY;
-  const cs = m.ratio.cueScale;
-  const font = new Font(m.font.text, c.digitFont.size * cs);
+  const cs = m.style.size.cue;
+  const font = new Font(m.style.font.text.family, c.digitFont.size * cs);
   const st = m.ink.stack;
   const cue = { gap: st.gap * cs, dotRadius: st.dotRadius * cs, beamWidth: st.beamWidth * cs };
   for (const it of layer.items) {
@@ -976,9 +979,9 @@ function paintLayer(c: OriginalCtx,
 /** 音符/增时线上方的和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）。 */
 function paintChord(c: OriginalCtx, g: Group, chord: string, x: number, baseline: number): void {
   const m = c.metrics;
-  const wordFont = new Font(m.font.text, m.size.chord);
-  const musicFont = new Font("Bravura", m.size.chord);
-  const segs = chordTextSegs(chord, m.look.chordPlain, m.look.accidentalSide);
+  const wordFont = new Font(m.style.font.text.family, m.style.size.chord);
+  const musicFont = new Font("Bravura", m.style.size.chord);
+  const segs = chordTextSegs(chord, m.style.look.chordPlain, m.style.look.accidentalSide);
   const grp = layoutHarmonySegs(segs, wordFont, musicFont, c.ink);
   grp.x = x - harmonyWidth(segs, wordFont, musicFont) / 2;
   grp.y = baseline + c.chordLane;
@@ -1007,7 +1010,7 @@ function paintNote(c: OriginalCtx,
     const kind = note.accidental as AccidentalKind | undefined;
     if (kind && ACCIDENTAL_GLYPH[kind]) {
       const digit = { font: c.digitFont, text: ch, x: x + dx, y: baseline + dy };
-      g.add(new AccidentalGlyph(kind, digit, { music: new Font("Bravura", 20), color: c.ink, kind: m.look.accidentalStyle, scale: m.look.accidentalScale }).item);
+      g.add(new AccidentalGlyph(kind, digit, { music: new Font("Bravura", 20), color: c.ink, kind: m.style.look.accidentalStyle, scale: m.style.look.accidentalScale }).item);
     }
 
     // 八度点：高音在上、低音在下，同侧多点向外叠。
@@ -1017,10 +1020,10 @@ function paintNote(c: OriginalCtx,
     // 落点走公共那一份（engrave/stack.ts，墨迹到墨迹等距；低音点挂在减时线之下）
     const half = m.ink.noteHeight / 2;
     for (let i = 0; i < note.octave; i++) {
-      g.add(dot(c.ink, x, baseline + highDotY(-half, i, m.ink.stack), m.note.dotRadius));
+      g.add(dot(c.ink, x, baseline + highDotY(-half, i, m.ink.stack), m.style.dot.octave));
     }
     for (let i = 0; i < -note.octave; i++) {
-      g.add(dot(c.ink, x, baseline + lowDotY(half, noteBeams(note), i, m.ink.stack), m.note.dotRadius));
+      g.add(dot(c.ink, x, baseline + lowDotY(half, noteBeams(note), i, m.ink.stack), m.style.dot.octave));
     }
   }
 
@@ -1028,8 +1031,8 @@ function paintNote(c: OriginalCtx,
   const { dx: adx, dy: ady, b: ab } = digitOrigin(c, note.sound === "rhythm" ? "X" : String(note.pitch));
   const digitInk = ab.offset(x + adx, baseline + ady);
   for (let i = 0; i < note.dots; i++) {
-    const p = augDotCenter(digitInk, i, m.note.dotRadius, m.ink.stack.gap);
-    const d = dot(c.ink, p.cx, p.cy, m.note.dotRadius);
+    const p = augDotCenter(digitInk, i, m.style.dot.octave, m.ink.stack.gap);
+    const d = dot(c.ink, p.cx, p.cy, m.style.dot.octave);
     d.classes.add("aug-dot"); // 可视化编辑单独点选附点（`notePartEls`）
     g.add(d);
   }
@@ -1038,7 +1041,7 @@ function paintNote(c: OriginalCtx,
   if (note.chord) {
     paintChord(c, g, note.chord, x, baseline);
   } else if (note.annotation) {
-    const font = new Font(m.font.text, m.size.chord);
+    const font = new Font(m.style.font.text.family, m.style.size.chord);
     const a = note.annotation;
     const t = text(a, x - font.measureText(a) / 2, baseline + c.chordLane, font, c.ink);
     t.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
@@ -1047,8 +1050,8 @@ function paintNote(c: OriginalCtx,
   // 曲中转调标签：新调首音上方，与和弦/注释同一槽；那一槽已有字就再往上叠一行（`place.ts::noteTextTop`）。
   // 左缘对齐数字左缘、往右写——居中的话行首那个会伸出左边距
   if (note.keyLabel) {
-    const font = new Font(m.font.text, m.size.chord);
-    const y = baseline + c.chordLane - (note.chord || note.annotation ? m.size.chord * 1.2 : 0);
+    const font = new Font(m.style.font.text.family, m.style.size.chord);
+    const y = baseline + c.chordLane - (note.chord || note.annotation ? m.style.size.chord * 1.2 : 0);
     const t = text(note.keyLabel, x - m.ink.noteHeight * 0.35, y, font, c.ink); // 数字宽约墨迹高的 0.7
     t.classes.add("key-change");
     g.add(t);
@@ -1084,7 +1087,7 @@ function paintGrace(c: OriginalCtx,
   const notes = side === "before" ? note.graceBefore : note.graceAfter;
   if (notes.length === 0) return;
   const m = c.metrics;
-  const font = new Font(m.font.text, c.digitFont.size * m.ratio.graceScale);
+  const font = new Font(m.style.font.text.family, c.digitFont.size * m.style.size.grace);
   // 落位与让位同一份（place.ts::graceLayout）：整块倚音的墨迹底离主音那一摞的顶一道空
   const geom = graceLayout(note, side, m, x, baseline);
   for (const d of geom.digits) {
@@ -1181,7 +1184,7 @@ function paintOrnaments(c: OriginalCtx,
 
     const term = TERMS[orn.name];
     if (term) {
-      const font = new Font(m.font.text, m.size.chord);
+      const font = new Font(m.style.font.text.family, m.style.size.chord);
       g.add(text(term, x - font.measureText(term) / 2, y, font, c.ink));
       slot += 1;
       continue;
@@ -1189,7 +1192,7 @@ function paintOrnaments(c: OriginalCtx,
 
     const mark = BARLINE_MARKS[orn.name];
     if (mark?.text) {
-      const font = new Font(m.font.text, m.size.chord);
+      const font = new Font(m.style.font.text.family, m.style.size.chord);
       const w = font.measureText(mark.text);
       // **与小节线右对齐**（同简谱引擎 `layout.ts::addDirections`）：居中在线上的话一半压着线，
       // 线头又比数字高，正好戳进字里。基线也不许低于线顶一道空
@@ -1228,7 +1231,7 @@ function paintBarline(c: OriginalCtx,
       root.add(g);
     }
     if (el.temporaryMeter) {
-      const font = new Font(m.font.text, m.size.keyMeter * 0.85);
+      const font = new Font(m.style.font.text.family, m.style.size.keyMeter * 0.85);
       paintMeter(c, root, x, baseline, el.temporaryMeter, font);
     }
     return null;
@@ -1236,8 +1239,8 @@ function paintBarline(c: OriginalCtx,
 
   // 临时拍号：`|"p:2/4"`，画在这条小节线右侧
   if (el.temporaryMeter) {
-    const font = new Font(m.font.text, m.size.keyMeter * 0.85);
-    paintMeter(c, root, x + m.stroke.doubleBarlineGap, baseline, el.temporaryMeter, font);
+    const font = new Font(m.style.font.text.family, m.style.size.keyMeter * 0.85);
+    paintMeter(c, root, x + m.style.stroke.doubleBarlineGap, baseline, el.temporaryMeter, font);
   }
 
   // 粗细组合、反复点、线间距**全部走谱面那一路的画法**（engrave/barline.ts::BarlineGlyph）。
@@ -1245,7 +1248,7 @@ function paintBarline(c: OriginalCtx,
   // 反复点在 ±0.18H 且离线 6px——同一件事两种写法，改一处忘一处。
   // 纵向范围仍是文本谱自己的（`barlineHeight` 居中于基线、再加 spanHeight），
   // 那是照原版量的，不是谱面那套 jpStaffTop/Bottom。
-  const half = m.note.barlineHeight * 0.5;
+  const half = m.style.vertical.barlineHeight * 0.5;
   // 下一小节左线上起反复（`repeatForwardAfter`）：这条线画成 `|:` / `:|:`
   const type = el.repeatForwardAfter && el.type === "normal" ? "repeat-start"
     : el.repeatForwardAfter && el.type === "repeat-end" ? "repeat-both" : el.type;
@@ -1261,9 +1264,9 @@ function paintBarline(c: OriginalCtx,
   const r = new BarlineGlyph(spec, type === "end", {
     top: -half,
     bot: half + spanHeight,
-    light: m.stroke.barline,
-    heavy: m.stroke.barline * 2.6,
-    dotRadius: m.stroke.repeatDotRadius,
+    light: m.style.stroke.barline,
+    heavy: m.style.stroke.barline * 2.6,
+    dotRadius: m.style.dot.repeat,
     color: c.ink,
   });
   // BarlineGlyph 的 x 从 0 起；文本谱的小节线是**居中于锚点**的
@@ -1320,9 +1323,9 @@ function paintOneJoinBrace(c: OriginalCtx,
   for (let i = first; i <= last; i++) right = Math.max(right, lyricRight[i] ?? 0);
   if (!Number.isFinite(right) || right <= 0) return;
   // 紧贴最长那行的末字右缘（原版留约 0.2 个歌词墨迹高的缝）
-  const x = right + m.size.lyric * BRACE_GAP;
-  const y0 = voice.lyricY[first]! - m.size.lyric * BRACE_TOP;
-  const y1 = voice.lyricY[last]! - m.size.lyric * BRACE_BOTTOM_UP;
+  const x = right + m.style.size.lyric * BRACE_GAP;
+  const y0 = voice.lyricY[first]! - m.style.size.lyric * BRACE_TOP;
+  const y1 = voice.lyricY[last]! - m.style.size.lyric * BRACE_BOTTOM_UP;
   if (y1 - y0 <= 0) return;
   // 右向 `}`：上下两端贴着歌词，尖端朝右
   root.add(braceItem(c.ink, x, y0, y1, 1, "lyric"));
@@ -1331,18 +1334,18 @@ function paintOneJoinBrace(c: OriginalCtx,
 /** 歌词行的前置说明（段号 `1.`、角色名「狼:」等）。 */
 function paintLyricAnnotations(c: OriginalCtx, root: Group, voice: PlacedVoice, left: number): void {
   const m = c.metrics;
-  const font = new Font(m.font.text, m.size.verseNum);
+  const font = new Font(m.style.font.text.family, m.style.size.verseNum);
   voice.voice.lyrics.forEach((line, verse) => {
     if (!line.annotation) return;
     // 右对齐到歌词首字的左缘（首字是居中于第一个音符锚点的）。
     // `%NN` 可以调这个间隙，默认 20% 字宽。
-    const gapPx = Math.max(line.annotationGap / 100, 0.1) * m.size.lyric;
+    const gapPx = Math.max(line.annotationGap / 100, 0.1) * m.style.size.lyric;
     const w = font.measureText(line.annotation);
     // 首字前挂出去的前置标点（`“主`）也得让开，同 `systemMetrics` 留位的口径——不让的话段号压在引号上
     const syl = line.syllables.find((x) => x?.text);
-    const lead = syl ? syllableRun(syl.text, new Font(m.font.text, m.size.lyric), m.look.punctCompress).lead : 0;
+    const lead = syl ? syllableRun(syl.text, new Font(m.style.font.text.family, m.style.size.lyric), m.style.look.punctCompress).lead : 0;
     root.add(
-      text(line.annotation, left - m.size.lyric * 0.5 - lead - gapPx - w, voice.lyricY[verse]!, font, c.lyricInk),
+      text(line.annotation, left - m.style.size.lyric * 0.5 - lead - gapPx - w, voice.lyricY[verse]!, font, c.lyricInk),
     );
   });
 }
@@ -1356,7 +1359,7 @@ function paintSyllables(c: OriginalCtx,
   rightEdge?: number[],
 ): void {
   const m = c.metrics;
-  const font = new Font(m.font.text, m.size.lyric);
+  const font = new Font(m.style.font.text.family, m.style.size.lyric);
   it.syllables.forEach((syl, verse) => {
     if (!syl) return;
     const str = syl.text + (syl.trailingPunctuation ?? "");
@@ -1364,7 +1367,7 @@ function paintSyllables(c: OriginalCtx,
     g.classes.add("lyric");
     g.data = syl;
     // 音节按其**主体**居中于音符锚点，前后标点挂出去；量宽与笔位同一串挤压后的坐标（engrave/syllable.ts）
-    const run = syllableRun(str, font, m.look.punctCompress);
+    const run = syllableRun(str, font, m.style.look.punctCompress);
     const x0 = x - run.lead - run.body / 2;
     const t = text(str, x0, voice.lyricY[verse]!, font, c.lyricInk);
     t.charXs = run.xs;
@@ -1414,7 +1417,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     metrics: m,
     doc,
     placed: null,
-    digitFont: new Font(m.font.note, m.size.note, m.font.noteBold),
+    digitFont: new Font(m.style.font.note.family, m.style.size.note, m.style.look.noteBold),
     chordLane: m.note.chordY,
     pageWidth: m.page.width,
     pageHeight: m.page.height,
@@ -1430,11 +1433,11 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   // 歌词的**墨迹**伸出注入给排版（它不碰字体）：落位口径同 paintSyllables——主体居中于锚点、
   // 尾随标点挂右边。量墨迹而不是字面框：「声，」的全角逗号字面框右半边是空的，
   // 按字面框约束会把墨迹根本没碰到的行也撑开（《圣哉三一歌》长图就是这样被误伤的）。
-  const lyricFont = new Font(m.font.text, m.size.lyric);
+  const lyricFont = new Font(m.style.font.text.family, m.style.size.lyric);
   // 歌词避让量的是**画出来的**那串：与 paintSyllables 同一个居中点、同一串挤压后的宽
   const measure: LyricMeasure = (syl) => {
     const str = syl.text + (syl.trailingPunctuation ?? "");
-    const run = syllableRun(str, lyricFont, m.look.punctCompress);
+    const run = syllableRun(str, lyricFont, m.style.look.punctCompress);
     const ink = lyricFont.charBound(str);
     const center = run.lead + run.body / 2;
     return { left: center - ink.left, right: Math.min(run.width, ink.right) - center };

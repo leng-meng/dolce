@@ -12,13 +12,28 @@ import { TupletGlyph } from "../engrave/tuplet";
 import type { Font } from "./font";
 import { measureDuration, type JChord, type JDirection, type JMeasure, type JNote, type JScore } from "./input";
 import { DYNAMIC_SIZE } from "../engrave/dynamics";
-import { getOrNull, PageItem, Group, GraphicPath, TextFrame, SmuflText, JpNumber, Lyric, Tie, slurStyleOf, type SlurTieBase } from "./pageitem";
+import { getOrNull, PageItem, Group, GraphicPath, TextFrame, SmuflText, JpNumber, Lyric, Tie, type SlurTieBase } from "./pageitem";
 import { hairpinPath } from "../engrave/hairpin";
 import { latinWordBreak } from "../engrave/syllable";
 import { beatGroupIndex, beatGroupSize, pickupOffset } from "../engrave/beatgroup";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, arcRise, jpArcY, type SlurStyle } from "../engrave/arc";
 import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, BeamLine, EntryItemInfo, entryBounds, normalizeEntryX, placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "./entry";
 import { LayoutOptions } from "./options";
+
+/** LayoutOptions → SlurStyle。谱面这一路的弧全由它配参数，别在调用点各配各的。 */
+export function slurStyleOf(opt: LayoutOptions): SlurStyle {
+  return {
+    thickness: opt.slurTieThickness,
+    color: opt.color,
+    heightScale: opt.slurHeightScale,
+    outlineWidth: opt.slurOutlineWidth,
+    maxHeight: opt.slurMaxHeight,
+    minHeight: opt.slurMinHeight,
+    flatSpan: opt.slurFlatSpan < 0 ? 0 : opt.slurFlatSpan || opt.numberSize * 5,
+    flatRatio: opt.slurFlatRatio,
+    flatLineWidth: opt.slurFlatWidth,
+  };
+}
 
 // ---------------- Line / layout ----------------
 
@@ -1347,7 +1362,7 @@ export class Line {
     const notes = this.entries.filter((e): e is NoteEntry => e instanceof NoteEntry);
     if (!notes.length) return;
     const H = opt.numberBound("1").height;
-    const half = H * 0.35, lw = H * 0.07, part = 0.6;
+    const half = H * 0.35, lw = opt.hairpinWidth > 0 ? opt.hairpinWidth : H * 0.07, part = 0.6;
     const cxOf = (e: NoteEntry): number => e.group.x + e.number!.x + e.number!.cx;
     const draw = (x0: number, x1: number, type: "crescendo" | "diminuendo", f0: number, f1: number): void => {
       if (x1 <= x0) return;

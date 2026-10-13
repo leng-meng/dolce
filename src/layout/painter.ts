@@ -15,7 +15,7 @@ import { headerPartsOf, mixedVisitor, renderPageSvg, type HeaderPart } from "./r
 import { layoutExpandedPages, layoutOriginalPages } from "./jianpupages";
 import { fromPt, pageGeometry, type LayoutHit, type LayoutPage, type LayoutResult, type PaintTarget } from "./result";
 import { MetaData } from "../smufl/smufl";
-import { applyJianpuStyle, jianpuFontSize } from "../style/jianpu";
+import { jianpuFlagsOf, jianpuFontSize, jianpuStyleOf } from "../style/jianpu";
 import type { StyleSheet } from "../style/sheet";
 import { applyStaffStyle } from "../style/staff";
 import { computeStyleForPaper, THEMES } from "../style/themes";
@@ -32,7 +32,7 @@ import { jianpuUserOptionsOf } from "../style/original";
 
 /** 简谱引擎的排版设置（原样 / 展开 / 成书 / 帮助示例 / 量宽共用）。 */
 export interface JianpuConfig {
-  /** 已计算样式表，按它灌 `LayoutOptions`（`style/jianpu.ts::applyJianpuStyle`）；null = 引擎缺省（帮助示例）。 */
+  /** 已计算样式表，折成尺子 `JianpuStyle` 灌进 `LayoutOptions`（`style/jianpu.ts::jianpuStyleOf`）；null = 引擎缺省（帮助示例）。 */
   readonly style: StyleSheet | null;
   /** `style` 为 null 时的字号。 */
   readonly fontSize?: number;
@@ -125,7 +125,7 @@ export function jianpuLayoutOf(cfg: JianpuConfig, res: PreparedResources): Layou
   const layout = new Layout(cfg.style ? jianpuFontSize(cfg.style) : cfg.fontSize ?? 28);
   const opt = layout.options;
   if (res.smuflMeta) opt.smuflMeta = res.smuflMeta;
-  if (cfg.style) applyJianpuStyle(opt, cfg.style);
+  if (cfg.style) opt.applyStyle(jianpuStyleOf(cfg.style), jianpuFlagsOf(cfg.style));
   if (cfg.ink !== undefined) opt.color = cfg.ink;
   if (cfg.lyricStack !== undefined) opt.lyricStack = cfg.lyricStack;
   return layout;

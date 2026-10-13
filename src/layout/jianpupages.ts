@@ -1,7 +1,7 @@
 // 简谱引擎这一路的排页（`Layout.fromScore` 之后把页组装好）：原样档 / 成书 / 帮助示例的标题块与连续长纸，
 // 展开档的标题页与页脚。只动 `layout.pages` 与页面树，不碰 DOM、不持有状态——排版器与导出都调它。
 //
-// 原样档：版面由调用方经样式表灌进 `layout.options`（`style/jianpu.ts::applyJianpuStyle`：原样档 `original` 预设、成书 `book` 预设），
+// 原样档：版面由调用方经样式表灌进 `layout.options`（`style/jianpu.ts::jianpuStyleOf`：原样档 `original` 预设、成书 `book` 预设），
 // 标题排在第一页顶上（`bookHead`）或整首一张连续长纸。
 // 展开档：反复与多段歌词逐遍展开（`Layout.fromScore` 走 `playData`），第一页是独立的标题词曲页、其后每页有页脚曲名 + 「i/n」页码。
 

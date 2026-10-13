@@ -5,9 +5,8 @@ import { Rect, Colors } from "../common/geom";
 import type { CompressMode } from "../common/cjkpunct";
 import type { AccidentalSide, AccidentalStyleKind } from "../engrave/spacing";
 import { STACK_GAP_DEFAULT, type StackStyle } from "../engrave/stack";
-
-/** 「原样」档多段歌词叠排时的段间行距 ÷ 歌词字号。原书量到的是 1.3 上下。 */
-export const LYRIC_STACK_RATIO = 1.35;
+import type { FaceSpec, JianpuStyle } from "../engrave/jianpustyle";
+import type { JianpuFlags } from "../style/jianpu";
 
 // ---------------- options / CJK util ----------------
 
@@ -18,7 +17,7 @@ export class LayoutOptions {
   /**
    * 音符数字是否加粗。**只管数字与倚音**——`numberFont` 还派生出和弦、房号、
    * 调号拍号那一行，那些不跟着粗，所以这里是个开关而不是把 `numberFont` 换成粗体。
-   * 展开档（`style/jianpu.ts` 的 `pptx` 预设）与成书排版（`style/book.ts::applyBookPreset`）关掉：前者是投影的既有观感、
+   * 展开档（`style/jianpu.ts` 的 `pptx` 预设）与成书排版（`style/book.ts::bookJianpuStyle`）关掉：前者是投影的既有观感、
    * 后者要逐像素复刻印刷底本，都不能凭空变粗。
    */
   noteBold = true;
@@ -31,6 +30,8 @@ export class LayoutOptions {
   /** 和弦符号的字号与它到音符墨迹上缘的距离。0 = 不排和弦（默认：编辑器与 OMR 那两条路
    *  的引擎输入里本来就没有 harmony，排了也不会变，但留一道闸更明确）。 */
   chordSize = 0;
+  /** 倚音 ÷ 主音字号（`engrave/grace.ts` 的 `GraceMetrics.scale`）。 */
+  graceScale = 0.59;
   /** 段落词（「（副歌）」）的字号。0 = 不排（编辑器与 OMR 那两条路的引擎输入里没有这东西）。 */
   sectionWordSize = 0;
   chordGap = 0;
@@ -52,7 +53,7 @@ export class LayoutOptions {
    *  附点一律是矢量圆、且圆心与数字墨迹的中心等高，见 `NoteEntry.addAugDots`。 */
   augDotRadius = 0;
   /** 和弦排成**纯文本**（升降号不换 SMuFL 的 csym 字形、后缀不上标）。
-   *  原书 500 首就是这么印的，成书重排由 `style/book.ts::applyBookPreset` 打开；
+   *  原书 500 首就是这么印的，成书重排由 `style/book.ts::bookJianpuStyle` 打开；
    *  编辑器 / 五线谱 / 文本谱三路维持富文本排法。见 engrave/chord.ts。 */
   chordPlainText = false;
   /** 调号、转调、和弦根音/低音的升降号写在字母前还是后；undefined = 各自原来的写法。样式键 `accidental-side`。 */
@@ -142,6 +143,8 @@ export class LayoutOptions {
   slurFlatRatio = 0;
   /** 扁平长连音线**中段**的墨迹厚度（两端收尖）。0 = `slurTieThickness * 0.45`。 */
   slurFlatWidth = 0;
+  /** 渐强渐弱的线宽。0 = 数字墨迹高 × 0.07（`Line.addWedges`）。 */
+  hairpinWidth = 0;
   /** 小节线粗细。musicpp lineWidths.lightBarline / heavyBarline（pptutil.cpp:139），
    *  同样是按 fontSize≈28 调出来的绝对值——换字号排版时要等比缩，否则小节线相对字会变粗。 */
   barlineWidth = 2;
@@ -197,8 +200,81 @@ export class LayoutOptions {
     this.applyFontSize(fontSize);
   }
 
-  /** 由字号派生的那几个间距。构造时算一次；成书排版会在之后按 BookStyle 逐项覆盖
-   *  （见 src/style/book.ts::applyBookPreset）——**默认值必须原样保持**，
+  /** 按尺子 `JianpuStyle` 灌满全部样式字段（`style/jianpu.ts::jianpuStyleOf` 折算好的）。
+   *  排版方式那几个开关（长图、首页标题、重断行、页面装饰）不在尺子里，由调用方另给（`JianpuFlags`）。 */
+  applyStyle(st: JianpuStyle, flags?: JianpuFlags): void {
+    const font = (f: FaceSpec, size: number) => new Font(f.family, size, f.bold, f.italic);
+    this.color = st.page.color;
+    this.lrcFont = font(st.font.lyric, st.size.lyric);
+    this.numberFont = font(st.font.note, st.size.note);
+    this.smuflFont = font(st.font.smufl, st.size.note);
+    this.noteBold = st.look.noteBold;
+    this.titleSize = st.header.title.size;
+    this.creditSize = st.header.credit.size;
+    const hf: HeaderFonts = {};
+    for (const role of ["title", "subtitle", "credit", "scripture"] as const) {
+      const h = st.header[role];
+      hf[role] = { size: h.size, ...(h.family !== undefined ? { family: h.family } : {}), ...(h.bold !== undefined ? { bold: h.bold } : {}) };
+    }
+    this.headerFonts = hf;
+    this.chordSize = st.size.chord;
+    this.sectionWordSize = st.size.sectionWord;
+    this.endingSize = st.size.ending;
+    this.graceScale = st.size.grace;
+    this.chordGap = st.vertical.chordGap;
+    this.lyricBaselineGap = st.vertical.lyricBaseline;
+    this.lyricGap = st.spacing.lyricGap;
+    this.repeatDotRadius = st.dot.repeat;
+    this.octaveDotRadius = st.dot.octave;
+    this.augDotRadius = st.dot.aug;
+    this.chordPlainText = st.look.chordPlain;
+    this.accidentalSide = st.look.accidentalSide;
+    this.accidentalStyle = st.look.accidentalStyle;
+    this.accidentalScale = st.look.accidentalScale;
+    this.verseNumbers = st.look.verseNumbers;
+    this.verseNumberAutoMin = st.look.verseNumberAutoMin;
+    this.timeSigRuleWidth = st.stroke.timeSigRule;
+    this.timeSigDigitRatio = st.look.timeSigDigitRatio;
+    this.timeSigRuleLenRatio = st.look.timeSigRuleLenRatio;
+    this.bracketWidth = st.stroke.bracket;
+    this.bracketFoot = st.vertical.bracketFoot;
+    this.tupletStyle = st.look.tupletStyle;
+    this.lyricStack = st.vertical.lyricStack;
+    this.punctCompress = st.look.punctCompress;
+    this.slurTieThickness = st.stroke.slur;
+    this.slurHeightScale = st.arc.heightScale;
+    this.slurOutlineWidth = st.stroke.slurOutline;
+    this.slurMaxHeight = st.arc.maxHeight;
+    this.slurMinHeight = st.arc.minHeight;
+    this.slurFlatSpan = st.arc.flatSpan;
+    this.slurFlatNotes = st.arc.flatNotes;
+    this.slurFlatRatio = st.arc.flatRatio;
+    this.slurFlatWidth = st.stroke.slurFlat;
+    this.hairpinWidth = st.stroke.hairpin;
+    this.barlineWidth = st.stroke.barline;
+    this.finalBarlineWidth = st.stroke.finalBarline;
+    this.staffDist = st.vertical.staffDist;
+    this.marginTop = st.page.margin.top;
+    this.marginBottom = st.page.margin.bottom;
+    this.marginLeft = st.page.margin.left;
+    this.marginRight = st.page.margin.right;
+    this.maxLineDist = st.vertical.systemSpread;
+    this.maxHorizontalScale = st.spacing.maxHorizontalScale;
+    this.stackGap = st.vertical.stackGap;
+    this.jpStackGap = st.vertical.slurGap;
+    this.jpBeamWidth = st.stroke.beam;
+    this.jpStaffTopOverride = st.vertical.staffTop;
+    this.jpStaffBottomOverride = st.vertical.staffBottom;
+    if (flags) {
+      this.continuousPage = flags.continuous;
+      this.bookHead = flags.bookHead;
+      this.reflowOverflow = flags.reflow;
+      this.pageFurniture = flags.furniture;
+    }
+  }
+
+  /** 由字号派生的那几个间距。构造时算一次（缺省值同 `style/jianpu.ts::defaultJianpuStyle`），
+   *  有样式表时随后由 `applyStyle` 整份覆盖——**默认值必须原样保持**，
    *  编辑器与 OMR 那两条路的观感不能变。 */
   applyFontSize(fontSize: number): void {
     this.fontSize = fontSize;
