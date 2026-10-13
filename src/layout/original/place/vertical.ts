@@ -192,6 +192,13 @@ export function voiceHeadroom(voice: ScoreLine, m: JianpuGrid): number {
       consider(-m.ink.noteHeight / 2 - m.style.vertical.slurGap - (level - 1) * m.note.slurLevelStep - jianpuSlurRise(m) - nest);
     }
   }
+  // `{dsb}` 并排块的上行抬高 `splitRise`，头顶是它自己的记号或花括号上端（同 groupHeadroom）：
+  // 不算的话上一声部的歌词压在上行数字上（太阳出来喜洋洋 A4 第 3 页）
+  for (const el of voice.elements) {
+    if (el.kind !== "inline-layer" || el.role !== "voice") continue;
+    const inner: ScoreLine = { voice: voice.voice, elements: el.elements, marks: el.marks, lyrics: [], raw: el.code, source: el.source };
+    consider(-splitRise(m) - Math.max(m.ink.noteHeight * 0.64, voiceHeadroom(inner, m)));
+  }
   const lane = chordLane(voice, m);
   // 注释可能让邻音的和弦挤到上一行（compose/page.ts::liftedAnnotations）：行里和弦与注释同在就多留一行
   const hasChord = voice.elements.some((el) => (el.kind === "note" || el.kind === "sustain") && !!el.chord);

@@ -88,8 +88,11 @@ export function placeLayers(
         break;
       }
     }
-    const endAt = tailHasNote ? lastAt : items.length - 1;
-    // 主旋律这一段下移
+    // 并排段末音（段末紧跟的小节线不算）
+    let noteEnd = lastAt;
+    while (noteEnd > hostAt && items[noteEnd]!.element.kind === "barline") noteEnd -= 1;
+    // 主旋律这一段下移。后面还有音时，段末那条小节线留在主行（原版 `}|` 的线是正常高度，不跟下行走）
+    const endAt = tailHasNote ? noteEnd : items.length - 1;
     for (let i = hostAt; i <= endAt; i++) items[i]!.dy = split;
     const underlines = computeUnderlines(inner, laid.items, m, laid.groups);
     for (const u of underlines) u.dy = -split;
@@ -101,13 +104,19 @@ export function placeLayers(
       braceTop: -split - m.ink.noteHeight * 0.64,
       braceBottom: split + m.ink.noteHeight * 0.64,
     };
-    // 花括号画在并排段与单行段的交界上，开口朝着并排的两行；一直排到行末就只有左边那个
-    if (hostAt > 0) placed.braceLeftX = items[hostAt]!.x - m.ink.noteHeight * 1.55;
+    // 花括号画在并排段与单行段的交界上，开口朝着并排的两行；一直排到行末就只有左边那个。
+    // 前面只有隐藏线（`|/`，上一行接过来的并排段）也不画左括号（原版如此）
+    const before = items.slice(0, hostAt);
+    if (before.some((it) => it.element.kind !== "barline" || (it.element.type !== "hidden" && it.element.type !== "invisible"))) {
+      // 左括号离前面那条小节线 0.48 个墨迹高（同右括号离线），没有线就按离首音 1.07 个墨迹高往左排
+      const prev = items[hostAt - 1]!;
+      placed.braceLeftX = prev.element.kind === "barline"
+        ? prev.x + m.ink.noteHeight * 0.48
+        : items[hostAt]!.x - m.ink.noteHeight * 1.07 - SPLIT_BRACE_W;
+    }
     if (tailHasNote) {
       // 右花括号收在并排段最后一个音符之后、那条小节线**之前**。间距与左括号对称：
       // 离相邻音符 1.07、离小节线 0.48 个墨迹高（《太阳出来喜洋洋》里多处一致）
-      let noteEnd = lastAt;
-      while (noteEnd > hostAt && items[noteEnd]!.element.kind === "barline") noteEnd -= 1;
       placed.braceRightX = items[noteEnd]!.x + m.ink.noteHeight * 1.07;
       // 后面紧跟小节线时以线为准往回让：括号右缘离线 0.48 个墨迹高（列宽按内容排，末音到线的距离不是定值）
       const bar = items[noteEnd + 1];

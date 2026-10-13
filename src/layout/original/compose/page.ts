@@ -20,18 +20,29 @@ import { paintJoinBrace, paintLyricAnnotations, paintSyllables } from "./lyric";
  * 把一组声部切成若干「小节线贯穿块」：歌词行会把竖线截断，所以带歌词的声部就是
  * 一个块的末尾。四声部谱（S/A + 歌词 + T/B）因此得到 [1,2] 与 [3,4] 两块。
  */
-function barlineBlocks(voices: readonly PlacedVoice[]): PlacedVoice[][] {
+function barlineBlocks(voices: readonly PlacedVoice[], sungVoices: ReadonlySet<number>): PlacedVoice[][] {
   const blocks: PlacedVoice[][] = [];
   let current: PlacedVoice[] = [];
-  for (const voice of voices) {
+  for (const [vi, voice] of voices.entries()) {
     current.push(voice);
-    if (voice.voice.lyrics.length > 0) {
+    // 本行没词、但这个声部在曲中别处有词的（太阳出来喜洋洋末页女高那一行全是休止）也照样断开：
+    // 贯穿是四声部诗歌「上两声部共用下面那行词」的排法，不是「这一行碰巧没词」
+    if (voice.voice.lyrics.length > 0 || sungVoices.has(vi)) {
       blocks.push(current);
       current = [];
     }
   }
   if (current.length > 0) blocks.push(current);
   return blocks.filter((b) => b.length > 0);
+}
+
+/** 一首里在任一行带过词的声部（按组内序号）：这些声部的小节线不往下贯穿（`barlineBlocks`） */
+function sungVoices(c: OriginalCtx, song: number): Set<number> {
+  const out = new Set<number>();
+  for (const pg of c.doc?.songs[song]?.pages ?? []) {
+    for (const g of pg.groups) g.voices.forEach((v, vi) => { if (v.lyrics.length > 0) out.add(vi); });
+  }
+  return out;
 }
 
 /**
@@ -146,7 +157,7 @@ export function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): 
       paintVoice(c, sys, voice, pageIndex, spanBarlines);
     }
     if (spanBarlines) {
-      for (const block of barlineBlocks(group.voices)) {
+      for (const block of barlineBlocks(group.voices, sungVoices(c, group.song))) {
         const first = block[0]!;
         const last = block[block.length - 1]!;
         // 贯穿多声部的小节线画在这里（`paintVoice` 那边被 skipBarlines 跳过了），索引同样要建，
@@ -154,7 +165,8 @@ export function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): 
         // 把同一处的都指到它上面（模型里每个声部各有一条小节线，画出来只有一根）
         const drawn = new Map<number, Group>();
         for (const it of first.items) {
-          if (it.element.kind !== "barline") continue;
+          // 并排块下行里的线（`dy`）由 paintVoice 按下移后的位置画，这里不再贯穿画一遍
+          if (it.element.kind !== "barline" || it.dy !== undefined) continue;
           const g = paintBarline(c,
             sys,
             m.page.margin.left + it.x,

@@ -5,7 +5,7 @@ import { paginate, type SystemBlock } from "../../../jianpu/vertical";
 import type { InkMeasurer, PlacedGroup, PlacedItem, PlacedMark, PlacedPage, PlacedScore, PlacedVoice } from "./model";
 import { placeColumns } from "./spacing";
 import { type BeatCtx, assignLyrics, computeUnderlines, layoutVoiceLine, lineEndsWithForwardRepeat } from "./voice";
-import { GROUP_CLEAR, braceReach, wordsLead, chordLane, groupHeadroom, lineInkBottom, stackTop, voiceHeadroom } from "./vertical";
+import { GROUP_CLEAR, braceReach, splitRise, wordsLead, chordLane, groupHeadroom, lineInkBottom, stackTop, voiceHeadroom } from "./vertical";
 import { isArcMark, placeMarks } from "./marks";
 import { arcHeight } from "../../../engrave/arc";
 import { placeLayers } from "./layers";
@@ -234,6 +234,10 @@ export function layoutSong(
         const next = group.voices[vi + 1];
         if (next) {
           after = Math.max(after, voiceHeadroom(next, m) + m.ink.noteHeight * 0.6);
+          // 下一声部有并排块：上行整个抬高 splitRise，与本声部（歌词）之间照常留一个声部间距
+          if (next.elements.some((el) => el.kind === "inline-layer" && el.role === "voice")) {
+            after = Math.max(after, m.style.vertical.voiceGap + splitRise(m));
+          }
         }
         y += consumed + after;
       });

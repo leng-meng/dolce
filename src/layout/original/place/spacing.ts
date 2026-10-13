@@ -27,7 +27,7 @@ interface Column {
   right: number;
   /** 占位之前硬让出的地方：前倚音（简谱引擎 `Entry.leadSpace`）、小节线前那一小格 */
   lead: number;
-  /** 前面**想**多空的（临时记号伸到数字左边那一截）：不占紧排宽度，两端对齐时先填给它（`Entry.leadWant`） */
+  /** 临时记号伸到数字左边那一截再加一道空：紧排时硬让（与前倚音 `lead` 取大者）；简谱引擎那边是软让位（`Entry.leadWant`） */
   want: number;
   /** 临时记号伸出落笔原点左边多少（行首那一列要整个让出来：简谱引擎行首贴的是条目最左的内容） */
   over: number;
@@ -144,8 +144,10 @@ function packColumns(cols: readonly Column[], voices: number, m: JianpuGrid, ink
   // 紧排：落笔原点挨着上一列的占位右缘（+ 硬让位）；行首那一列的倚音、临时记号整个让出来
   const N: number[] = [];
   let cur = 0;
+  // 临时记号**硬**让位（伸出 + 一道空，`want`）：软让位只在两端对齐有余量时才填，行一挤满升降号就压到前面的音与小节线上
+  //（原样分页《同一首歌》）。简谱引擎那边仍是软的（硬让会把 .jpwabc 定死的行挤折）；这边放不下由重断行收
   cols.forEach((c, i) => {
-    cur += i === 0 ? Math.max(c.lead, c.over) : c.lead;
+    cur += i === 0 ? Math.max(c.lead, c.over) : Math.max(c.lead, c.want);
     N.push(cur + c.left);
     cur = N[i]! + c.right + c.pad;
   });
@@ -192,7 +194,7 @@ function packColumns(cols: readonly Column[], voices: number, m: JianpuGrid, ink
 
 /**
  * 水位法两端对齐（`Line.adjust`）：把 `extra` 摊进各列之间的空档，空档按「已有宽 ÷ 权重」从窄到宽依次灌平。
- * 权重：音符到音符 2，挨着小节线的 1。后一列想多空的（临时记号）当作这道空档更窄，先填给它。
+ * 权重：音符到音符 2，挨着小节线的 1。临时记号的让位已在紧排里硬留（packColumns），这里不再另算。
  */
 function justify(cols: readonly Column[], X: number[], extra: number): void {
   const infos: Array<{ i: number; dist: number; rate: number }> = [];
@@ -200,7 +202,7 @@ function justify(cols: readonly Column[], X: number[], extra: number): void {
     const a = cols[i]!;
     const b = cols[i + 1]!;
     const dist = X[i + 1]! - b.left - (X[i]! + a.right);
-    infos.push({ i, dist: dist - b.want, rate: !a.bar && !b.bar ? 2 : 1 });
+    infos.push({ i, dist, rate: !a.bar && !b.bar ? 2 : 1 });
   }
   infos.sort((p, q) => {
     const diff = p.dist * q.rate - q.dist * p.rate;

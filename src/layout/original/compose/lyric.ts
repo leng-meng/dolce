@@ -62,16 +62,24 @@ export function paintLyricAnnotations(c: OriginalCtx, root: Group, voice: Placed
   const font = new Font(m.style.font.text.family, m.style.size.verseNum);
   voice.voice.lyrics.forEach((line, verse) => {
     if (!line.annotation) return;
-    // 右对齐到歌词首字的左缘（首字是居中于第一个音符锚点的）。
+    // 右对齐到本行歌词首字**实际画出来**的左缘（含挂出去的前置标点 `“主`，同 paintSyllables 的落笔）：
+    // 按「首字居中于版心左缘」估的话，行首音符一往右排，段号就隔着一大截（原样分页四声部）。
     // `%NN` 可以调这个间隙，默认 20% 字宽。
     const gapPx = Math.max(line.annotationGap / 100, 0.1) * m.style.size.lyric;
     const w = font.measureText(line.annotation);
-    // 首字前挂出去的前置标点（`“主`）也得让开，同 `systemMetrics` 留位的口径——不让的话段号压在引号上
-    const syl = line.syllables.find((x) => x?.text);
-    const lead = syl ? syllableRun(syl.text, new Font(m.style.font.lyric.family, m.style.size.lyric), m.style.look.punctCompress).lead : 0;
-    root.add(
-      text(line.annotation, left - m.style.size.lyric * 0.5 - lead - gapPx - w, voice.lyricY[verse]!, font, c.lyricInk),
-    );
+    const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
+    const first = voice.items.find((it) => it.syllables[verse]);
+    let x0: number;
+    if (first) {
+      const syl = first.syllables[verse]!;
+      const run = syllableRun(syl.text + (syl.trailingPunctuation ?? ""), lyricFont, m.style.look.punctCompress);
+      x0 = left + first.x - run.lead - run.body / 2;
+    } else {
+      const syl = line.syllables.find((x) => x?.text);
+      const lead = syl ? syllableRun(syl.text, lyricFont, m.style.look.punctCompress).lead : 0;
+      x0 = left - m.style.size.lyric * 0.5 - lead;
+    }
+    root.add(text(line.annotation, x0 - gapPx - w, voice.lyricY[verse]!, font, c.lyricInk));
   });
 }
 

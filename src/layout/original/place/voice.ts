@@ -161,12 +161,12 @@ export function layoutVoiceLine(
     // 右花括号（字形宽 `SPLIT_BRACE_W`，不随字号缩放）前后各要一道空：离末音 1.07、离小节线 0.48 个墨迹高（layers.ts）；
     // 紧排本身已留出约 0.6 个墨迹高，差的补上——只按墨迹高让，小字号下括号就压到小节线上
     if (splitEnd.has(i)) pad[i]! += SPLIT_BRACE_W + m.ink.noteHeight * 0.95;
-    // 两个符号之间夹着并排块的话，中间要放得下一个花括号（原版给的间距比普通小节线宽 0.75）
+    // 两个符号之间夹着并排块的话，中间要放得下一个左花括号，口径同右括号：离前面的小节线 0.48、离并排段首音 1.07 个墨迹高
     if (next !== undefined) {
       const nextAt = srcOf(next);
       for (const at of splitAt) {
         if (at > srcIndex && at < nextAt) {
-          pad[i]! += m.ink.noteHeight * 1.05;
+          pad[i]! += SPLIT_BRACE_W + m.ink.noteHeight * 0.95;
           break;
         }
       }
