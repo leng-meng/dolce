@@ -1,4 +1,4 @@
-// 减时线按拍成组的**拍位判据**：三引擎共用一份（简谱引擎 `layout.ts::beamGroupsOf`、原样文档 `place.ts::beatGroups`、
+// 减时线按拍成组的**拍位判据**：三引擎共用一份（简谱引擎 `layout.ts::beamGroupsOf`、原样文档 `place/voice.ts::beatGroups`、
 // 混排 `mixed/model.ts::processJpBeam`，源头是 musicpp `MusicData::processJpBeam`）。
 //
 // 谁进组（时值、减时线条数、`~` `^` 强制连断、跨行续段）各引擎自己定；这里只管「这个音落在第几拍组」：

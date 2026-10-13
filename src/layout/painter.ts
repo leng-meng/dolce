@@ -1,5 +1,5 @@
 // 唯一的排版器 `ScorePainter`：按请求排版（简谱原样 / 展开、原样文档、五线谱 / 混排），持有提交后的结果、
-// 页面渲染（DOM 映射）、点选与播放高亮索引。排页算法在各自模块（`jianpupages.ts`、`original/compose.ts`、
+// 页面渲染（DOM 映射）、点选与播放高亮索引。排页算法在各自模块（`jianpupages.ts`、`original/compose/`、
 // `mixed/staffpages.ts`），SVG 出口在 `render.ts`，这里只管请求版本、结果提交与交互状态。
 // 设计与迁移记录见 docs/实现/PuPainter退役.md。
 //

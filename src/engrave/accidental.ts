@@ -113,7 +113,7 @@ const INK_WIDTH: Record<AccidentalKind, number> = {
 };
 
 /** 临时记号在数字墨迹左边占掉的宽（墨迹宽 + 与数字之间的空），横向排布给它让位用（`csym` 样子）。
- *  纯算术（不量字形），原样文档的定位（`place.ts`，不碰 DOM）也能调。 */
+ *  纯算术（不量字形），原样文档的定位（`place/`，不碰 DOM）也能调。 */
 export function accidentalLead(kind: AccidentalKind, digitInkHeight: number, scale = 1): number {
   return (INK_WIDTH[kind] * scale + GAP_PER_INK) * digitInkHeight;
 }

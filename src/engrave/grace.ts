@@ -1,7 +1,7 @@
 // 倚音的几何：小号数字 + 八度点 + 减时线 + 连接钩。
 // 竖向的点与线走叠层（engrave/stack.ts，墨迹到墨迹等距），支持高、低音点（钩子接在最低那件之下）。
 //
-// **两条简谱路共用这一份**（文本谱 `layout/original/compose.ts::paintGrace`、成书/编辑器
+// **两条简谱路共用这一份**（文本谱 `layout/original/compose/note.ts::paintGrace`、成书/编辑器
 // `src/layout/layout.ts::addGraceNotes`）。两边的绘图原语不一样（一边是 pu 自己的
 // text/dot/rect/stroke，一边是页面树的 TextFrame/GraphicPath），所以这里只算**坐标**，
 // 落笔各自去做。
@@ -198,7 +198,7 @@ export function graceHook(mid: number, startY: number, gInk: number, toward: -1 
  *
  * **不算连接钩**：钩子是从这一摞垂到主音身旁的那一笔，本来就该比主音顶低。
  * 落位规则「整块倚音的底离主音那一摞的顶一道空」用它——按 `centerY = 0` 排一遍量出底缘，
- * 再回填真正的 `centerY`（三引擎同一条，见 `entry.ts::addGraceNotes`、`compose.ts::paintGrace`、混排 `graceRow`）。
+ * 再回填真正的 `centerY`（三引擎同一条，见 `entry.ts::addGraceNotes`、`compose/note.ts::paintGrace`、混排 `graceRow`）。
  */
 export function graceBottom(g: GraceGeom, m: GraceMetrics): number {
   let low = (m.ink * m.scale) / 2; // 数字自己的墨迹底

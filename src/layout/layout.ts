@@ -40,7 +40,7 @@ export function slurStyleOf(opt: LayoutOptions): SlurStyle {
 /** 一行里的一段房：`cont` = 上一行续过来的（不画左脚、不印房号）。 */
 interface EndingSpan { num: string; notes: NoteEntry[]; closed: boolean; x0: number; x1: number; cont?: boolean }
 
-/** 力度、Segno 这类乐谱字体记号的字号：按数字字号算（与原样文档 `compose.ts::paintOrnaments` 同口径），
+/** 力度、Segno 这类乐谱字体记号的字号：按数字字号算（与原样文档 `compose/note.ts::paintOrnaments` 同口径），
  *  力度另乘 `DYNAMIC_SIZE`。按和弦字号排的话 Bravura 的力度字形小得看不清。 */
 function musicDirectionSize(opt: LayoutOptions, d: JDirection): number {
   return opt.numberSize * (d.dynamic ? DYNAMIC_SIZE : 0.95);
@@ -1418,7 +1418,7 @@ export class Line {
 
   /**
    * 跨行的弧**只画后半条**：起头那一行行末不画，收尾这一行从行首起弧画到收尾的音
-   * （口径同原样文档布局 `original/place.ts`，判据是印刷原版：行末空着、下一行行首有弧）。
+   * （口径同原样文档布局 `original/place/`，判据是印刷原版：行末空着、下一行行首有弧）。
    * 左端在本行头一个音符左侧不到一个字宽处。
    */
   private addCarriedArcs(opt: LayoutOptions): void {
@@ -1625,7 +1625,7 @@ export class Line {
    * 与五线谱同一套画法；行内画不完的房（跨行、或 `discontinue`）右端不封口。
    * 房的范围来自 `Measure.endingLeft/endingRight`，按**本行内**出现的那一段画。
    *
-   * 高度与端点都照**文本谱那一路**的口径（`layout/original/place.ts`，那边是按印刷原版做的）：
+   * 高度与端点都照**文本谱那一路**的口径（`layout/original/place/`，那边是按印刷原版做的）：
    *   - 横线走一条**全行统一的车道**，不按各房各自区间的墨迹顶算。原版里一房二房的横线
    *     是同一条高度（169 首曾因一房上方有和弦、二房没有而错开）；要让开下方内容时
    *     也是整行一起抬。
