@@ -40,6 +40,8 @@ export interface PersistedSettings {
   /** 当前排版输出（展开 / 原样），两种格式各记一个：简谱 normal|pptx、文本谱 print|slide（slide = 展开）。 */
   jpProfile?: "normal" | "pptx";
   originalProfile?: "print" | "slide";
+  /** 原样档的风格（`style/styles.ts`，App 自己校验） */
+  printStyle?: unknown;
   /** 谱面上显示换行/换页符号（可视化编辑，交 VisualEditController 自己校验） */
   showFormatMarks?: unknown;
   /** 小节时值自检开关（同上） */

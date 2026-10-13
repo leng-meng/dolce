@@ -13,6 +13,8 @@ import { JpwFile, LayoutSection } from "../jpword/jpwfile";
 import { measureJianpu, PaintResources, ScorePainter, type JianpuPaintRequest } from "../layout/painter";
 import { toPt } from "../layout/result";
 import { computeStyle, sanitizeLayer, upsertRule, type StyleRule } from "../style/cascade";
+import type { Length } from "../style/units";
+import { isPrintStyle, NOTE_FONTS, PRINT_STYLE_DEFAULT, printStyleLayer, type PrintStyle } from "../style/styles";
 import { docPageLayer, pageMargins, resolvePaper, songPageDecl } from "../style/paper";
 import { songHeaderFonts, songLyricSize, songStaffSize } from "../model/pagemeta";
 import { headerFontsOf, headerLayerOfSong, type HeaderFonts, type HeaderRole } from "../style/header";
@@ -171,6 +173,8 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   /** 用户层：每个主题一层规则，**两档各记一套**（用户口径：「区分 展开/原样的字号设置」）。
    *  同一档里各格式共用一套（字号、纸、配色），规则不带限定。 */
   private _userLayers: Record<"projection" | "print" | "staff" | "header", StyleRule[]> = { projection: [], print: [], staff: [], header: [] };
+  /** 原样档的风格（设置面板选；`style/styles.ts`）。持久化。 */
+  printStyle: PrintStyle = PRINT_STYLE_DEFAULT;
   // `header`：页眉四项（标题/副标题/经文/词曲作者）的字体字号，**各档共用一份**，叠在各档用户层之上（`style/header.ts`）
 
   /** 某一档、某把尺子看到的 computed 样式表（内置主题 → 曲内层 → 用户层）。
@@ -178,8 +182,10 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   styleOf(mode: JianpuLayoutMode): StyleSheet {
     const theme = themeOfMode(mode);
     const page = theme === "print" && !this._userSetsPaper("jianpu") ? this._docLayer() : [];
+    // 风格（设置面板选的）只归原样档：叠在主题之上、歌本样式表之下
+    const style = theme === "print" ? printStyleLayer(this.printStyle) : [];
     return computeStyleForPaper(
-      [THEMES[theme], this._bookLayer, page, this._docHeaderLayer(theme === "print"), this._userLayers[theme], this._userLayers.header],
+      [THEMES[theme], style, this._bookLayer, page, this._docHeaderLayer(theme === "print"), this._userLayers[theme], this._userLayers.header],
       { mode, engine: "jianpu" },
     );
   }
@@ -428,6 +434,44 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     }
   }
 
+  /** 原样档用户层里的音符字体（`NOTE_FONTS` 的 id；空串 = 没设、跟随风格）。 */
+  get noteFont(): string {
+    const fam = computeStyle([this._userLayers.print], { mode: "original", engine: "jianpu" }).roles.note?.family;
+    return NOTE_FONTS.find((f) => f.family === fam)?.id ?? "";
+  }
+
+  /** 原样档用户层里和弦升降号的写法（空串 = 没设、照原文）。 */
+  get chordAccidental(): "" | "before" | "after" {
+    const v: unknown = computeStyle([this._userLayers.print], { mode: "original", engine: "jianpu" }).jianpu.overrides?.["accidental-side"];
+    return v === "before" || v === "after" ? v : "";
+  }
+
+  /** 设音符字体：字体族写在 `note` 角色上，加不加粗写 `note-bold`；空串 = 两样都清掉。 */
+  private _setNoteFont(id: string): void {
+    const f = NOTE_FONTS.find((x) => x.id === id);
+    const rules = this._userLayers.print.map((r) => ({ ...r, set: { ...r.set, roles: { ...(r.set.roles ?? {}) } } }));
+    for (const r of rules) {
+      if (!r.set.roles!.note) continue;
+      const { family: _f, ...rest } = r.set.roles!.note;
+      r.set.roles!.note = rest;
+    }
+    this._userLayers.print = rules;
+    this._setPrintOverride("note-bold", f ? f.bold : undefined);
+    if (f) this._setStyle("original", { roles: { note: { family: f.family } } });
+  }
+
+  /** 原样档用户层的一个 `@jianpu` 键：给值就写，`undefined` 就从各条规则里删掉。 */
+  private _setPrintOverride(key: string, v: string | boolean | undefined): void {
+    this._userLayers.print = this._userLayers.print.map((r) => {
+      const ov = r.set.jianpu?.overrides;
+      if (!ov || !(key in ov)) return r;
+      const { [key]: _drop, ...rest } = ov;
+      return { ...r, set: { ...r.set, jianpu: { ...r.set.jianpu, overrides: rest } } };
+    });
+    // 词类键（`accidental-side` 等）在样式表里和长度同存一个字段（同 `themes.ts` 的 `lrc-punct-compress`）
+    if (v !== undefined) this._setStyle("original", { jianpu: { overrides: { [key]: v as Length | boolean } } });
+  }
+
   /** 往某一档的用户层写一条规则（限定相同的就地合并）。 */
   private _setStyle(mode: JianpuLayoutMode, set: DeepPartial<StyleSheet>): void {
     const theme = themeOfMode(mode);
@@ -555,6 +599,8 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     /** 五线谱/混排的谱表大小（mm）与歌词字号（pt）；null = 跟随文件 / 出厂。 */
     staffSize?: { mm?: number | null; lyricPt?: number | null };
     fontSize?: number; titleSize?: number; creditSize?: number; color?: number; bgColor?: number;
+    /** 原样档的风格、音符字体（`NOTE_FONTS` 的 id，空串 = 跟随风格）、和弦升降号写在前后（空串 = 照原文）。 */
+    printStyle?: PrintStyle; noteFont?: string; chordAccidental?: "" | "before" | "after";
   }): void {
     const mode = this.layoutMode;
     if (opts.pageW || opts.pageH) {
@@ -565,6 +611,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     if (opts.staffPaper && isPaper(opts.staffPaper)) this._userLayers.staff = upsertRule(this._userLayers.staff, undefined, { page: { paper: opts.staffPaper } });
     for (const [engine, choice] of Object.entries(opts.paper ?? {}) as [PaperEngine, PaperChoice][]) this._setPaper(engine, choice);
     if (opts.staffSize) this._setStaffSize(opts.staffSize);
+    if (opts.printStyle !== undefined) this.printStyle = opts.printStyle;
+    if (opts.noteFont !== undefined) this._setNoteFont(opts.noteFont);
+    if (opts.chordAccidental !== undefined) this._setPrintOverride("accidental-side", opts.chordAccidental || undefined);
     if (opts.color !== undefined) this._setStyle(mode, { page: { ink: opts.color } });
     if (opts.bgColor !== undefined) this._setStyle(mode, { page: { background: opts.bgColor } });
     this._applySizes(mode, opts);
@@ -592,6 +641,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   /** 恢复当前档的主题默认（清掉那一档的用户层）。 */
   resetRenderSettings(): void {
     this._userLayers[themeOfMode(this.layoutMode)] = [];
+    if (this.layoutMode === "original") this.printStyle = PRINT_STYLE_DEFAULT;
     this._applyPageBg();
     this.saveSettings();
     this.reload(this.getText());
@@ -627,6 +677,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
       staff: sanitizeLayer(layers.staff),
       header: sanitizeLayer(layers.header),
     };
+    if (isPrintStyle(s.printStyle)) this.printStyle = s.printStyle;
     if (s.zoom) this.zoom = s.zoom;
     if (s.jpProfile === "normal" || s.jpProfile === "pptx") this.jpProfile = s.jpProfile;
     if (s.originalProfile === "print" || s.originalProfile === "slide") this.originalProfile = s.originalProfile;
@@ -655,6 +706,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
       omrKind: this.omr.kind,
       jpProfile: this.jpProfile,
       originalProfile: this.originalProfile,
+      printStyle: this.printStyle,
       showFormatMarks: this.visual.showFormatMarks,
       beatCheck: this.visual.beatCheck,
       noteSound: this.visual.noteSound,

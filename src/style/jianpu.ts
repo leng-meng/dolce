@@ -190,6 +190,8 @@ export function jianpuStyleOf(sheet: StyleSheet): JianpuStyle {
       // 房号（一房、二房的括线与数字）：原样档按原谱排一遍，房号要印出来（展开档逐遍展开、不画）。字号同三连音数字（`tuplet` 角色）
       st.size.ending = role("tuplet", em * 0.65);
       st.size.sectionWord = role("sectionWord", st.size.chord);
+      // 页眉 TL/TR 与页脚
+      st.size.header = role("header", st.size.header);
     } else if (preset === "pptx") applyPptxPreset(st);
   }
   applyFonts(st, sheet);
