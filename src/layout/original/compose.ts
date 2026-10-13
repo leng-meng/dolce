@@ -28,6 +28,7 @@ import { sustainDash } from "../../engrave/dash";
 import { beamY, highDotY, lowDotY } from "../../engrave/stack";
 import { augDotCenter } from "../../engrave/augdot";
 import { AccidentalGlyph, type AccidentalKind } from "../../engrave/accidental";
+import { syllableRun } from "../../engrave/syllable";
 import { BarStyle } from "../../score/enums";
 import type { Metadata, NoteElement } from "../../pu/ast";
 import ORIGINAL_SS from "../../style/books/original.ss?raw";
@@ -1367,12 +1368,13 @@ function paintSyllables(c: OriginalCtx,
     const g = new Group();
     g.classes.add("lyric");
     g.data = syl;
-    // 音节按其**主体**（不含尾随标点）居中于音符锚点，标点自然挂在右边
-    const bodyWidth = font.measureText(syl.text);
-    g.add(text(str, x - bodyWidth / 2, voice.lyricY[verse]!, font, c.lyricInk));
-    if (rightEdge) {
-      rightEdge[verse] = Math.max(rightEdge[verse] ?? 0, x - bodyWidth / 2 + font.run(str).width);
-    }
+    // 音节按其**主体**居中于音符锚点，前后标点挂出去；量宽与笔位同一串挤压后的坐标（engrave/syllable.ts）
+    const run = syllableRun(str, font, m.look.punctCompress);
+    const x0 = x - run.lead - run.body / 2;
+    const t = text(str, x0, voice.lyricY[verse]!, font, c.lyricInk);
+    t.charXs = run.xs;
+    g.add(t);
+    if (rightEdge) rightEdge[verse] = Math.max(rightEdge[verse] ?? 0, x0 + run.width);
     root.add(g);
     const owner = c.doc?.syllableOwner.get(syl);
     if (owner !== undefined) c.syllableItems.set(`${owner}:${verse}`, { page: pageIndex, item: g });
@@ -1431,10 +1433,13 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   // 尾随标点挂右边。量墨迹而不是字面框：「声，」的全角逗号字面框右半边是空的，
   // 按字面框约束会把墨迹根本没碰到的行也撑开（《圣哉三一歌》长图就是这样被误伤的）。
   const lyricFont = new Font(m.font.text, m.size.lyric);
+  // 歌词避让量的是**画出来的**那串：与 paintSyllables 同一个居中点、同一串挤压后的宽
   const measure: LyricMeasure = (syl) => {
-    const half = lyricFont.measureText(syl.text) / 2;
-    const ink = lyricFont.charBound(syl.text + (syl.trailingPunctuation ?? ""));
-    return { left: half - ink.left, right: ink.right - half };
+    const str = syl.text + (syl.trailingPunctuation ?? "");
+    const run = syllableRun(str, lyricFont, m.look.punctCompress);
+    const ink = lyricFont.charBound(str);
+    const center = run.lead + run.body / 2;
+    return { left: center - ink.left, right: Math.min(run.width, ink.right) - center };
   };
   const placed = layoutDocument(doc.songs, m, headerBottoms, measure);
   c.placed = placed;

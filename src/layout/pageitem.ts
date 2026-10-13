@@ -5,7 +5,8 @@
 import { jpDot } from "../engrave/dot";
 import { Point, Rect, Matrix33, newMatrix, Colors } from "../common/geom";
 import { pathTightBounds } from "../common/measure";
-import { LYRIC_SPLIT_PUNCT, type CompressMode } from "../common/cjkpunct";
+import type { CompressMode } from "../common/cjkpunct";
+import { syllableRun } from "../engrave/syllable";
 import { Font } from "./font";
 import { MetaData } from "../smufl/smufl";
 import type { LayoutOptions } from "./options";
@@ -440,28 +441,13 @@ export class Lyric extends TextFrame {
     return Math.max(0, pen + this.font.charBound([...t][0]).left);
   }
   override update(): void {
-    // 切成「左标点 / 主体 / 右标点」三段。表在 common/cjkpunct.ts（含数字与半角冒号的
-    // 缘由写在那里）。**按码点切**，索引就是 `run()` 里 xs 的索引。
-    const chars = [...this.text];
-    let nl = 0, nc = chars.length;
-    if (chars.length > 1) {
-      const punct = LYRIC_SPLIT_PUNCT;
-      let pos = 0;
-      while (pos < chars.length && punct.includes(chars[pos])) pos++;
-      nl = pos;
-      while (pos < chars.length && !punct.includes(chars[pos])) pos++;
-      nc = pos - nl;
-    }
-    // 宽度取**挤压后**的笔位（`召：` 的冒号右半格、`“凡` 的引号左半格在这里就压掉了）。
-    // 三段宽按落笔点划分，段与段之间的挤压自然落在它该在的那一段里。
-    const { xs, width } = this.compress !== "none"
-      ? this.font.run(this.text, this.compress)
-      : { xs: chars.map((_, i) => this.font.measureText(chars.slice(0, i).join(""))), width: this.measureText() };
-    this.charXs = this.compress !== "none" && xs.length > 1 ? xs : null;
-    const at = (i: number): number => (i <= 0 ? 0 : i >= xs.length ? width : xs[i]);
-    this._widths[0] = at(nl);
-    this._widths[1] = at(nl + nc) - at(nl);
-    this._widths[2] = width - at(nl + nc);
+    // 「前标点 / 主体 / 后标点」三段与挤压后的逐字笔位走公共那一份（engrave/syllable.ts）
+    const run = syllableRun(this.text, this.font, this.compress);
+    const width = run.width;
+    this.charXs = run.xs;
+    this._widths[0] = run.lead;
+    this._widths[1] = run.body;
+    this._widths[2] = run.tail;
     this.width = width;
     this.height = this.font.size;
   }

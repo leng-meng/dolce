@@ -10,7 +10,8 @@ import { Fraction } from "../common/fraction";
 import { Point } from "../common/geom";
 import { Font } from "../layout/font";
 import { SlurTieBase, type SlurStyle } from "../layout/pageitem";
-import { MIXED_PUNCT, type CompressMode } from "../common/cjkpunct";
+import type { CompressMode } from "../common/cjkpunct";
+import { syllableRun } from "../engrave/syllable";
 import type { HarmonySeg } from "../engrave/chord";
 import type { AccidentalSide, AccidentalStyleKind } from "../engrave/spacing";
 import { STACK_GAP_DEFAULT } from "../engrave/stack";
@@ -972,7 +973,7 @@ export class LyricLayout {
   readonly chord: ChordLayout;
   offset = new Fraction(0);
   font!: Font;
-  /** 标点挤压档（`MixedOptions.lrcHWID` → 半身式）：量宽与绘制共用这一个，绝不能各走各的。 */
+  /** 标点挤压档（`MixedOptions.punctCompress`）：量宽与绘制共用这一个，绝不能各走各的。 */
   compress: CompressMode = "halfwidth";
   extend: Fraction | null = null;
 
@@ -1036,19 +1037,10 @@ export class LyricLayout {
   /** [前导非CJK宽, CJK段宽, 尾随非CJK宽]（Lyric::widthInfo 移植）。
    *  注意：前缀（段落号）不计入，由 drawLrc 单独按固定偏移摆放。 */
   widthInfo(): [number, number, number] {
-    const chars = [...this.text];
-    if (chars.length === 0) return [0, 0, 0];
-    const isCjk = (ch: string) => ch.charCodeAt(0) > 0x80 && !MIXED_PUNCT.includes(ch);
-    let first = 0;
-    let last = chars.length - 1;
-    for (let i = 0; i < chars.length; i++) if (isCjk(chars[i])) { first = i; break; }
-    for (let i = chars.length - 1; i >= 0; i--) if (isCjk(chars[i])) { last = i; break; }
-    // 宽度取**标点挤压后**的笔位（见 common/cjkpunct.ts）：居中的锚点跟着挪，绘制端拿的是同一串坐标。
-    // 档位照 `compress`——歌词走半身式（musicpp 的 `lrcHWID` → 歌词字体开 OpenType `halt`），
-    // 不是 `Font.run()` 缺省的全身式 `clreq`：两派压出来的总宽、居中偏移与逐字落点都不同。
-    const { xs, width } = this.font.run(this.text, this.compress);
-    const at = (i: number): number => (i <= 0 ? 0 : i >= xs.length ? width : xs[i]);
-    return [at(first), at(last + 1) - at(first), width - at(last + 1)];
+    if (this.text.length === 0) return [0, 0, 0];
+    // 三段切分与挤压后的笔位走公共那一份（engrave/syllable.ts），绘制端（drawLrc）拿的是同一串坐标
+    const r = syllableRun(this.text, this.font, this.compress);
+    return [r.lead, r.body, r.tail];
   }
 
   /** 解析后计算 xOffset/width（parser.cpp processLrc 尾部）。 */
@@ -3001,10 +2993,9 @@ export class MixedOptions {
   };
   barlineDist = 5;
   slurStemDy = 15;
-  /** 歌词字体开 hwid（→ OpenType `halt`，标点占半身）：歌本（`pdflayout/songbook.ts`）开，
-   *  对齐 util/pao.cpp:1002；编辑器视图不开（wasm.cpp:36 同样 false），歌词标点仍按全身式
-   *  上下文挤压（`clreq`）排。 */
-  lrcHWID = false;
+  /** 歌词标点挤压档（engrave/syllable.ts，样式键 `lrc-punct-compress`）。编辑器视图缺省全身式上下文挤压
+   *  （`clreq`，wasm.cpp:36 不开 hwid）；歌本（`pdflayout/songbook.ts`）照 util/pao.cpp:1002 开 hwid → 半身式。 */
+  punctCompress: CompressMode = "clreq";
   chineseHyphen = false;
   /** 只留旋律：读完整条（含弧/延音线配对与方向推断）之后删掉非旋律音，
    *  再按首音重猜符干方向并重排符杠（musicpp Part::removeNoneMelody → guessStemDir）。

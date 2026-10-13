@@ -54,6 +54,8 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "lyric-gap": { kind: "len", layout: "lyricGap", book: "metrics.lyricGapEm", original: "lyricSpacing.lyricGap" },
   "lyric-stack": { kind: "len", layout: "lyricStack", book: "metrics.lyricToLyricEm", original: "lyricSpacing.lyricStack" },
   "chord-gap": { kind: "len", layout: "chordGap", book: "metrics.chordToNoteEm" },
+  // 歌词标点挤压：halfwidth（半身式）/ clreq（全身式 + 上下文挤压）/ none
+  "lrc-punct-compress": { kind: "word", layout: "punctCompress", mixed: "punctCompress", original: "look.punctCompress" },
   "chord-plain": { kind: "bool", layout: "chordPlainText", mixed: "chordPlain", book: "metrics.chordPlain", original: "look.chordPlain" },
   // 调号、转调、和弦根音/低音的升降号写在字母前（before）还是后（after）；不写 = 各自原来的写法
   "accidental-side": { kind: "word", layout: "accidentalSide", mixed: "accidentalSide", book: "metrics.accidentalSide", original: "look.accidentalSide" },
@@ -82,7 +84,6 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "key-uses-full-font": { kind: "bool", mixed: "jpKeyJianpuFont", note: "纯简谱没有缩小的简谱层" },
   "legacy-time-sig": { kind: "bool", mixed: "musicppJpTimeSig", note: "旧版拍号笔位只在混排有" },
   "legacy-hwid-glyphs": { kind: "bool", mixed: "musicppHwidGlyphs", note: "同上" },
-  "lrc-half-punct": { kind: "bool", mixed: "lrcHWID", note: "纯简谱的歌词标点按上下文挤压" },
   "chinese-hyphen": { kind: "bool", mixed: "chineseHyphen", note: "纯简谱不画中文连字符" },
   // 以下只有原样文档布局（`layout/original/`）有：多声部、按实测落值的小节线与增时线
   "voice-gap": { kind: "len", original: "spacing.voiceGap", note: "只有原样文档布局排多声部" },

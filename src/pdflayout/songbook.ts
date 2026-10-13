@@ -115,7 +115,7 @@ function songLayout(xml: string, entry: ManifestSong, input: SongbookInput, meta
   options.textLineHeightBySize = true;
   options.jpKeyJianpuFont = true;
   // 歌词标点走半身式（util/pao.cpp:1002 `eng->lrcHWID = true` → 歌词字体开 hwid）
-  options.lrcHWID = true;
+  options.punctCompress = "halfwidth";
   // 和弦字体：musicpp Engraver::wordFont 缺省是思源黑体（model.hpp），成品和弦即此；编辑器视图沿用 Times New Roman。
   // 放在 `applyStaffStyle` **之前**：这是书的缺省，样式表里 `chord { font: … }` 要盖得住它。
   options.wordFont = BOOK_FALLBACK_FAMILY;

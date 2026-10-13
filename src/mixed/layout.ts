@@ -516,8 +516,8 @@ class DocPartLoader {
       lrc.font = lf?.family || lf?.size
         ? new Font(lf.family ?? this.score.defaults.lyricFont.family, lf.size ? lf.size / this.score.scaling : this.score.defaults.lyricFont.size)
         : this.score.defaults.lyricFont;
-      // parser.cpp:2576：lrcHWID 时歌词字体开 hwid（→ OpenType `halt`），标点占半身
-      lrc.compress = this.score.options.lrcHWID ? "halfwidth" : "clreq";
+      // 挤压档照样式（parser.cpp:2576：歌本开 hwid → 半身式）
+      lrc.compress = this.score.options.punctCompress;
 
       lrc.updateWidth(this.score.options.meta);
 

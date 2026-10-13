@@ -15,6 +15,7 @@ import type { HeaderFonts } from "../../style/header";
 import { SlurTieBase, type SlurStyle } from "../pageitem";
 import type { GraceMetrics, GraceNote } from "../../engrave/grace";
 import type { AccidentalSide, AccidentalStyleKind } from "../../engrave/spacing";
+import type { CompressMode } from "../../common/cjkpunct";
 import { STACK_GAP_DEFAULT, highDotY, lowDotY, type StackStyle } from "../../engrave/stack";
 import type { NoteElement } from "../../pu/ast";
 
@@ -153,6 +154,8 @@ export interface JianpuMetrics {
     accidentalScale: number;
     /** 数字上下叠层（八度点、减时线）的空 ÷ 数字墨迹高（engrave/stack.ts）。样式键 `stack-gap`。 */
     stackGap: number;
+    /** 歌词标点挤压档（engrave/syllable.ts）。样式键 `lrc-punct-compress`。 */
+    punctCompress: CompressMode;
   };
   /** 字体族，键是角色名；`text` 是各类文字的底。页眉各项（设置面板「页眉」一组）不给 = `text`。 */
   font: {
@@ -221,7 +224,7 @@ export const JIANPU_DEFAULTS: JianpuMetrics = {
     hairpinThickness: 1.3,
   },
   ratio: { graceScale: 0.5, cueScale: 0.72 },
-  look: { chordPlain: false, accidentalStyle: "csym", accidentalScale: 1, stackGap: STACK_GAP_DEFAULT },
+  look: { chordPlain: false, accidentalStyle: "csym", accidentalScale: 1, stackGap: STACK_GAP_DEFAULT, punctCompress: "clreq" },
   size: {
     // 原版量到数字墨迹高 17.9；苹方粗体「1」墨迹占字号 0.714，折成字号 25.07，落整数
     note: 25,
