@@ -15,7 +15,7 @@
 
 import { Font } from "../font";
 import { Matrix33, Point, type Rect } from "../../common/geom";
-import { GraphicLine, GraphicPath, Group, PageItem, type PathSeg, Slur, TextFrame } from "../pageitem";
+import { GraphicPath, Group, PageItem, type PathSeg, Slur, TextFrame } from "../pageitem";
 import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../../engrave/chord";
 import { BarlineGlyph, type BarlineSpec } from "../../engrave/barline";
 import { jpDot } from "../../engrave/dot";
@@ -29,6 +29,7 @@ import { beamY, highDotY, lowDotY } from "../../engrave/stack";
 import { augDotCenter } from "../../engrave/augdot";
 import { AccidentalGlyph, type AccidentalKind } from "../../engrave/accidental";
 import { syllableRun } from "../../engrave/syllable";
+import { hairpinPath } from "../../engrave/hairpin";
 import { BarStyle } from "../../score/enums";
 import type { Metadata, NoteElement } from "../../pu/ast";
 import ORIGINAL_SS from "../../style/books/original.ss?raw";
@@ -149,17 +150,6 @@ function stroke(color: number, width = 1.4): GraphicPath {
   p.strokeColor = color;
   p.strokeWidth = width;
   return p;
-}
-
-function line(color: number, x0: number, y0: number, x1: number, y1: number, width = 1.4): GraphicLine {
-  const l = new GraphicLine();
-  l.p0.x = x0;
-  l.p0.y = y0;
-  l.p1.x = x1;
-  l.p1.y = y1;
-  l.strokeColor = color;
-  l.strokeWidth = width;
-  return l;
 }
 
 /** SVG path 的 `d` → 我们的 PathSeg（只需要 m/l/h/v/c/s/z，字形里没有别的命令）。 */
@@ -890,10 +880,10 @@ function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, ba
       const y = baseline + m.note.hairpinY - (mk.level - 1) * m.note.levelStep;
       const half = m.note.hairpinOpening / 2;
       const open = mk.mark.type === "crescendo";
-      const tipX = open ? x0 : x1;
-      const mouthX = open ? x1 : x0;
-      root.add(line(c.ink, tipX, y, mouthX, y - half, m.stroke.hairpinThickness));
-      root.add(line(c.ink, tipX, y, mouthX, y + half, m.stroke.hairpinThickness));
+      // 画法走公共那一份（engrave/hairpin.ts，与五线谱同一笔）
+      root.add(hairpinPath({
+        x0, x1, y, half0: open ? 0 : half, half1: open ? half : 0, lineWidth: m.stroke.hairpinThickness, color: c.ink,
+      }));
       break;
     }
     case "volta": {

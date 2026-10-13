@@ -45,26 +45,6 @@ export function barGlyphFromStyle(style: string): BarGlyph | null {
   }
 }
 
-/** 力度元素名（如「mf」「sfz」）逐字母 → Bravura 力度字形串，对齐 loader.cpp::convertDynamicsStr。 */
-export function convertDynamicsStr(s: string): string {
-  const map: Record<string, string> = {
-    p: GlyphCodes.dynamicPiano,
-    m: GlyphCodes.dynamicMezzo,
-    f: GlyphCodes.dynamicForte,
-    r: GlyphCodes.dynamicRinforzando,
-    s: GlyphCodes.dynamicSforzando,
-    z: GlyphCodes.dynamicZ,
-    n: GlyphCodes.dynamicNiente,
-  };
-  let res = "";
-  for (const c of s) {
-    const g = map[c];
-    if (g === undefined) return ""; // 非标准力度名（musicpp 此处 assert），忽略
-    res += g;
-  }
-  return res;
-}
-
 /** <beat-unit> 音符类型 → 节拍记号字形，对齐 loader.cpp::makeMetronomeStr（仅四分音符）。 */
 export function metNoteGlyph(noteType: string): string {
   // musicpp 只实现了四分音符；其余暂以四分音符字形兜底。

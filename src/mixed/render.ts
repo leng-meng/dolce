@@ -45,6 +45,7 @@ import { Font } from "../layout/font";
 import { addEndingBracket } from "../engrave/ending";
 import { BarlineGlyph, type BarlineSpec } from "../engrave/barline";
 import { TupletGlyph } from "../engrave/tuplet";
+import { hairpinPath } from "../engrave/hairpin";
 import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../engrave/chord";
 import { addLine, addSmufl, addSmuflScaled, chordGroup, STAFF_SYSTEM, translated, type StaffLeafData, type StaffSystemData } from "./prims";
 import { drawJianpuOverlay } from "./jianpuoverlay";
@@ -597,17 +598,8 @@ function drawWedge(container: Group, obj: Wedge, sys: Sys): void {
   const hL = startInSys ? realL : h * BREAK_FRAC;
   const hR = endInSys ? realR : h * BREAK_FRAC;
 
-  const path = new GraphicPath();
-  path.fill = false;
-  path.stroke = true;
-  path.strokeColor = 0xff000000;
-  path.strokeWidth = 1;
-  // 上、下两条边各为独立线段；尖端处两端高度同为 0 自然汇于一点。
-  path.moveTo(xL, ypos + hL);
-  path.lineTo(xR, ypos + hR);
-  path.moveTo(xL, ypos - hL);
-  path.lineTo(xR, ypos - hR);
-  container.add(path);
+  // 画法走公共那一份（engrave/hairpin.ts，与原样文档同一笔）
+  container.add(hairpinPath({ x0: xL, x1: xR, y: ypos, half0: hL, half1: hR, lineWidth: 1, color: 0xff000000 }));
 }
 
 function drawPedalLine(container: Group, obj: PedalLine, sys: Sys): void {

@@ -4,6 +4,9 @@
 // （编辑工具会损坏这些字节）。这里不引用项目主谱面的 GlyphCodes，是因为文本谱要的
 // 记号集与它只有部分重叠，各自维护更清楚。
 
+import { dynamicGlyphs } from "../engrave/dynamics";
+import { articGlyph } from "../engrave/articulation";
+
 const C = (n: number): string => String.fromCharCode(n);
 
 /** 记号在音符的哪一侧。 */
@@ -21,14 +24,12 @@ export interface OrnamentGlyph {
 
 /** `&xx` 记号表。名称取符号中文名的拼音首字母（两种方言一致）。 */
 export const ORNAMENTS: Readonly<Record<string, OrnamentGlyph>> = {
-  yc: { glyph: C(0xe4c0), placement: "above", scale: 1.0, label: "延长记号" },
-  ycy: { glyph: C(0xe4c0), placement: "above", scale: 1.0, label: "延长记号" },
-  bc: { glyph: C(0xe4a4), placement: "above", scale: 0.9, label: "保持音" },
-  zy: { glyph: C(0xe4a0), placement: "above", scale: 0.9, label: "重音" },
-  // 顿音在简谱印刷体里是**实心倒三角** ▼（articStaccatissimoAbove），不是圆点：数字正上方的
-  // 圆点在简谱里已经是高八度点，用 articStaccatoAbove 画顿音两者分不开（1640《主要在中国掌权》
-  // 整首每音一个顿音，画成圆点满纸都像高八度）。
-  dy: { glyph: C(0xe4a6), placement: "above", scale: 0.9, label: "顿音" },
+  // 延长、保持、重音、顿音的字形走公共那一份（engrave/articulation.ts，简谱印法：顿音是实心倒三角 ▼）
+  yc: { glyph: articGlyph("fermata", true), placement: "above", scale: 1.0, label: "延长记号" },
+  ycy: { glyph: articGlyph("fermata", true), placement: "above", scale: 1.0, label: "延长记号" },
+  bc: { glyph: articGlyph("tenuto", true), placement: "above", scale: 0.9, label: "保持音" },
+  zy: { glyph: articGlyph("accent", true), placement: "above", scale: 0.9, label: "重音" },
+  dy: { glyph: articGlyph("staccato", true), placement: "above", scale: 0.9, label: "顿音" },
   hx: { glyph: C(0xe4ce), placement: "above", scale: 0.9, label: "呼吸记号" },
   shy: { glyph: C(0xe5d0), placement: "above", scale: 0.9, label: "上滑音" },
   xhy: { glyph: C(0xe5d3), placement: "above", scale: 0.9, label: "下滑音" },
@@ -38,31 +39,10 @@ export const ORNAMENTS: Readonly<Record<string, OrnamentGlyph>> = {
   tr: { glyph: C(0xe566), placement: "above", scale: 0.9, label: "颤音" },
 };
 
-/** 力度记号：由 Bravura 的单字母力度字形拼成（`mf` = mezzo + forte）。 */
-const DYN = {
-  p: C(0xe520),
-  m: C(0xe521),
-  f: C(0xe522),
-  r: C(0xe523),
-  s: C(0xe524),
-  z: C(0xe525),
-  n: C(0xe526),
-};
-
-export const DYNAMICS: Readonly<Record<string, string>> = {
-  ppp: DYN.p + DYN.p + DYN.p,
-  pp: DYN.p + DYN.p,
-  p: DYN.p,
-  mp: DYN.m + DYN.p,
-  mf: DYN.m + DYN.f,
-  f: DYN.f,
-  ff: DYN.f + DYN.f,
-  fff: DYN.f + DYN.f + DYN.f,
-  sf: DYN.s + DYN.f,
-  fp: DYN.f + DYN.p,
-  sfp: DYN.s + DYN.f + DYN.p,
-  sfz: DYN.s + DYN.f + DYN.z,
-};
+/** 文本谱认的力度名（语法表）；字形走公共那一份（engrave/dynamics.ts），与五线谱、简谱引擎同一套。 */
+export const DYNAMICS: Readonly<Record<string, string>> = Object.fromEntries(
+  ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sf", "fp", "sfp", "sfz"].map((n) => [n, dynamicGlyphs(n)]),
+);
 
 /** 术语类记号：直接排文字。 */
 export const TERMS: Readonly<Record<string, string>> = {

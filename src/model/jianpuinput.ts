@@ -11,6 +11,7 @@
 import { getMeta } from "./metakeys";
 import { Fraction } from "../common/fraction";
 import { BARLINE_MARKS, DYNAMICS, TERMS } from "../pu/glyph";
+import { dynamicGlyphs } from "../engrave/dynamics";
 import { GlyphCodes } from "../smufl/smufl";
 import { harmonyToText } from "../score/harmonyparse";
 import { SECTION_WORD_RE } from "../score/phraseinput";
@@ -504,7 +505,7 @@ function directionMarks(d: Direction): JDirection[] {
     } else if (it.type === "segno" || it.type === "coda") {
       res.push({ text: it.type === "segno" ? GlyphCodes.segno : GlyphCodes.coda, music: true, italic: false });
     } else if (it.type === "dynamics") {
-      const g = it.text ? DYNAMICS[it.text] : undefined;
+      const g = it.text ? dynamicGlyphs(it.text) : "";
       if (g) res.push({ text: g, music: true, italic: false });
     }
   }

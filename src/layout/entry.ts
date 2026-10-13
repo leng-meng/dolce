@@ -5,6 +5,7 @@ import { TimeSigGlyph } from "../engrave/timesig";
 import { KeyLabel, keyNameOfFifths } from "../engrave/keysig";
 import { beamY, highDotY, lowDotY, stackBottom, stackTop } from "../engrave/stack";
 import { augDotCenter } from "../engrave/augdot";
+import { articGlyph } from "../engrave/articulation";
 import { ACCIDENTAL_CLEARANCE, AccidentalGlyph, accidentalKindOf } from "../engrave/accidental";
 import { Point, Rect } from "../common/geom";
 import type { CompressMode } from "../common/cjkpunct";
@@ -511,7 +512,7 @@ export class NoteEntry extends Entry {
       const t = new SmuflText(options);
       t.color = options.color;
       t.classes.add("artic"); // line-check 的 V12 靠它认（见 browser.ts::CLS_TAGS）
-      t.text = GlyphCodes.fermataAbove;
+      t.text = articGlyph("fermata", true);
       // Same ladder as the octave dots / slur (musicpp render.cpp:349-355 uses
       // `y -= dot*7` plus a flat -10 over a slur; both collapse to one rung).
       // 压不压弧交给上方带堆叠统一算（Line.stackAbove）——从前这里自己按
@@ -528,7 +529,7 @@ export class NoteEntry extends Entry {
       const t = new SmuflText(options);
       t.color = options.color;
       t.classes.add("artic");
-      t.text = GlyphCodes.articAccentAbove;
+      t.text = articGlyph("accent", true);
       t.y = NoteEntry.notationTop(options, ent);
       t.x += ent.number!.x + ent.number!.cx;
       t.x -= t.bound.width / 2;

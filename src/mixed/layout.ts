@@ -25,6 +25,8 @@
 import { getMeta } from "../model/metakeys";
 import { Fraction } from "../common/fraction";
 import { Font } from "../layout/font";
+import { dynamicGlyphs } from "../engrave/dynamics";
+import { articGlyph } from "../engrave/articulation";
 import { EQ_PAD_EM } from "../engrave/spacing";
 import { GlyphCodes } from "../smufl/smufl";
 import type {
@@ -73,7 +75,6 @@ import {
 } from "./model";
 import {
   barGlyphFromStyle,
-  convertDynamicsStr,
   finishMixedScore,
   hasEmbeddedLayout,
   metNoteGlyph,
@@ -559,28 +560,12 @@ class DocPartLoader {
     // articulations（parser.cpp:1463）—— 重音/断奏/保持音/marcato/staccatissimo。
     // above/symbol 初始按上方字形，最终上下由 layoutNotations::setAbove 决定。
     for (const a of n?.articulations ?? []) {
+      // 字形走公共那一份（engrave/articulation.ts，五线谱的印法）；spiccato/stress/breath-mark/caesura 等 musicpp 未绘制，忽略
+      const symbol = articGlyph(a, false);
+      if (!symbol) continue;
       const item = new NotationItem();
-      switch (a) {
-        case "strong-accent":
-          item.above = true;
-          item.symbol = GlyphCodes.articMarcatoAbove;
-          break;
-        case "accent":
-          item.symbol = GlyphCodes.articAccentAbove;
-          break;
-        case "staccato":
-          item.symbol = GlyphCodes.articStaccatoAbove;
-          break;
-        case "tenuto":
-          item.symbol = GlyphCodes.articTenutoAbove;
-          break;
-        case "staccatissimo":
-          item.symbol = GlyphCodes.articStaccatissimoAbove;
-          break;
-        default:
-          // spiccato/stress/breath-mark/caesura 等：musicpp 未绘制，忽略。
-          continue;
-      }
+      if (a === "strong-accent") item.above = true;
+      item.symbol = symbol;
       ch.notations.push(item);
     }
     for (const mk of this.marksByEnd.get(src.id) ?? []) {
@@ -908,7 +893,7 @@ class DocPartLoader {
     const rx = pos?.relativeX;
     if (rx !== undefined) blk.x = rx;
     const font = new Font("Bravura", 16 / this.score.scaling);
-    const glyphs = dyn.text ? convertDynamicsStr(dyn.text) : "";
+    const glyphs = dyn.text ? dynamicGlyphs(dyn.text) : "";
     if (!glyphs) return false;
     blk.add(glyphs, font, true);
     return true;
