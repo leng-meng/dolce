@@ -11,7 +11,7 @@ import { highDotY, lowDotY } from "../../../engrave/stack";
 import { augDotCenter } from "../../../engrave/augdot";
 import { breathPath } from "../../../engrave/breath";
 import type { PlacedItem } from "../place/model";
-import { graceLayout, noteBeams, stackTop } from "../place/vertical";
+import { graceLayout, noteBeams, noteTextTop, stackTop } from "../place/vertical";
 import { type OriginalCtx, digitItem, digitOrigin, dot, octaveDot, rect, stroke, text } from "./ctx";
 
 /** 音符/增时线上方的和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）。 */
@@ -106,7 +106,7 @@ export function paintNote(c: OriginalCtx,
 
   // `&xx` 记号
   const before = g.children.length;
-  paintOrnaments(c, g, note.ornaments, x, baseline, stackTop(note, c.metrics));
+  paintOrnaments(c, g, note.ornaments, x, baseline, stackTop(note, c.metrics), undefined, noteTextTop(note, m, c.chordLane) ?? undefined);
   for (const it of g.children.slice(before)) it.ident = { kind: "deco" };
 
   root.add(g);
@@ -176,6 +176,8 @@ export function paintOrnaments(c: OriginalCtx,
   noteTop?: number,
   /** 挂在小节线上时，那条线的墨迹右缘与线顶（页坐标）：`Fine` / `D.S.` 照它右对齐、让开线头 */
   bar?: { right: number; top: number },
+  /** 音符头顶和弦/注释那行字的墨迹顶（相对基线）：有的话力度、术语摞到它之上，不压在和弦底下 */
+  textTop?: number,
 ): void {
   const top = noteTop ?? -c.metrics.ink.noteHeight / 2;
   if (ornaments.length === 0) return;
@@ -231,7 +233,8 @@ export function paintOrnaments(c: OriginalCtx,
       // 按**墨迹**贴着音符那一摞（含高八度点）往上一道空（同延长记号）——固定槽位 `ornamentY` 不随字号走，
       // 数字一大力度就压到数字顶上；小节线、增时线上的（不传 top）照旧走槽位
       const ab = font.charBound(dyn);
-      const dy = noteTop !== undefined && slot === 0 ? baseline + top - noteMarkGap(m) - ab.bottom : y;
+      const dy = textTop !== undefined ? baseline + textTop - noteMarkGap(m) - slot * m.ink.noteHeight - ab.bottom
+        : noteTop !== undefined && slot === 0 ? baseline + top - noteMarkGap(m) - ab.bottom : y;
       add(text(dyn, x - w / 2, dy, font, c.ink), "direction");
       slot += 1;
       continue;
@@ -240,7 +243,8 @@ export function paintOrnaments(c: OriginalCtx,
     const term = TERMS[orn.name];
     if (term) {
       const font = new Font(m.style.font.text.family, m.style.size.chord);
-      add(text(term, x - font.measureText(term) / 2, y, font, c.ink), "direction");
+      const ty = textTop !== undefined ? baseline + textTop - noteMarkGap(m) - slot * m.ink.noteHeight : y;
+      add(text(term, x - font.measureText(term) / 2, ty, font, c.ink), "direction");
       slot += 1;
       continue;
     }

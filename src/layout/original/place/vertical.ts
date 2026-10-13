@@ -55,13 +55,14 @@ export function graceTop(el: MusicElement, m: JianpuGrid): number | null {
 export function chordLane(voice: ScoreLine, m: JianpuGrid): number {
   let lane = m.note.chordY;
   // 力度记号按墨迹贴着音符那一摞往上一道空（compose/note.ts::paintOrnaments），术语走固定槽（`note.ornamentY`），
-  // 都在和弦那一槽底下：行里有和弦时，和弦整排抬到它们的墨迹顶之上（同倚音）
+  // 都在和弦那一槽底下：行里有和弦时，和弦整排抬到它们的墨迹顶之上（同倚音）。
+  // 音符自己带和弦/注释的不算：它的力度、术语摞到那行字之上（`expressionTop`，用户口径：力度不压在和弦底下）
   const hasChord = voice.elements.some((el) => (el.kind === "note" || el.kind === "sustain") && !!el.chord);
   for (const el of voice.elements) {
     const t = graceTop(el, m);
     // 净空按文字算（和弦是字，叠层那道空对字太紧，看着还是挨着）
     if (t !== null) lane = Math.min(lane, t - m.ink.noteHeight * 0.3);
-    if (hasChord && el.kind === "note" && el.ornaments.some((o) => DYNAMICS[o.name] || TERMS[o.name])) {
+    if (hasChord && el.kind === "note" && !el.chord && !el.annotation && el.ornaments.some((o) => DYNAMICS[o.name] || TERMS[o.name])) {
       // 力度字形的墨迹约高一个数字墨迹高的 0.75（Bravura 力度字母的 x 高）
       const base = Math.min(m.note.ornamentY, stackTop(el, m) - noteMarkGap(m));
       lane = Math.min(lane, base - m.ink.noteHeight * 0.75 - m.ink.noteHeight * 0.15);
@@ -106,6 +107,10 @@ export function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
       // 再往上让一个数字高：只让到墨迹顶是「不打架」，两组之间还得看得出是两组。
       const nt = el.kind === "note" ? noteTextTop(el, m, lane) : null;
       if (nt !== null) consider(nt - m.ink.noteHeight);
+      // 带和弦的音上的力度/术语摞在那行字之上（compose/note.ts::paintOrnaments 的 textTop）
+      if (nt !== null && el.kind === "note" && el.ornaments.some((o) => DYNAMICS[o.name] || TERMS[o.name])) {
+        consider(nt - noteMarkGap(m) - m.ink.noteHeight * 0.9 - m.ink.noteHeight);
+      }
       if (el.kind === "sustain" && el.chord) consider(annotationTop(m, lane) - m.ink.noteHeight);
       const gt = graceTop(el, m);
       if (gt !== null) consider(gt);
@@ -118,10 +123,15 @@ export function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
       }
     }
   }
-  if (group.texts.length > 0) consider(m.note.wordsY);
+  if (group.texts.length > 0) consider(m.note.wordsY - (group.texts.length - 1) * wordsLead(m));
   // 多声部的连谱号：上花头伸出首声部基线 `braceReach`（见 layoutSong 末尾、compose/brace.ts::paintBrace）
   if (group.voices.length > 1) consider(-braceReach(m));
   return -top;
+}
+
+/** 多条 `W:` 文字行的行距（compose/page.ts 逐行画，place/song.ts 让位，同此） */
+export function wordsLead(m: JianpuGrid): number {
+  return m.style.size.words * 1.35;
 }
 
 /** `{dsb}` 并排块里上行比主旋律抬高多少（下行主旋律同量下移）。 */

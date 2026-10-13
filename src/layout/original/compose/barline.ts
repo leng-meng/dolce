@@ -25,7 +25,7 @@ export function paintBarline(c: OriginalCtx,
   const m = c.metrics;
   const el = it.element;
   if (el.kind !== "barline") return null;
-  if (el.type === "hidden" || el.type === "invisible") {
+  if (el.type === "hidden" || el.type === "invisible" || it.noBarline) {
     // 线本身不画，但挂在它上面的记号与临时拍号仍要画
     if (el.ornaments.length > 0) {
       const g = new Group();

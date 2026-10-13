@@ -22,6 +22,8 @@ export interface PlacedItem {
   syllables: Array<LyricSyllable | null>;
   /** 纵向偏移：`{dsb}` 并排块里，主旋律这一段要下移半个行距 */
   dy?: number;
+  /** 小节线不画（分声部前的空声部，见 song.ts::hideEmptyBarlines）；占位照旧 */
+  noBarline?: true;
 }
 
 /** 一条跨若干符号的记号（弧线 / 多连音 / 跳房子 / 渐强渐弱），已换算成行内坐标。 */

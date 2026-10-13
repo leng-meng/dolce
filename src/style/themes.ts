@@ -92,6 +92,8 @@ const PRINT_JIANPU: Record<string, Length | boolean> = {
   "voice-gap": "1.5em",
   "lrc-punct-compress": "halfwidth" as Length,
   "grace-scale": 0.6,
+  // 音符的临时记号小一号（用户口径：照混排那个比例压过数字），同展开档、混排
+  "accidental-scale": 0.75,
 };
 
 /** 每首末页底下的页脚（文本谱的 BL / BC / BR；语料里 BL 常写 `-` 占位，视为空）：区域顶在本曲末页最低一行之下

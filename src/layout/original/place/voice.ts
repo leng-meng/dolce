@@ -1,5 +1,5 @@
 // 一行一个声部的符号序列：占位符号、拍位与拍组、减时线分段、歌词音节挂到跟词的符号上。
-import { elementQuarters, takesLyric, tupletRatios, type LyricLine, type Meter, type MusicElement, type ScoreLine } from "../../../pu/ast";
+import { elementQuarters, takesLyric, tupletRatios, type BarlineElement, type LyricLine, type Meter, type MusicElement, type ScoreLine } from "../../../pu/ast";
 import { jianpuGraceMetrics, jianpuGraceNotes, type JianpuGrid } from "../metrics";
 import { graceAdvance } from "../../../engrave/grace";
 import { ACCIDENTAL_CLEARANCE, accidentalLead, type AccidentalKind } from "../../../engrave/accidental";
@@ -43,9 +43,36 @@ export function layoutVoiceLine(
   ctx: BeatCtx = {},
 ): { items: PlacedItem[]; width: number; groups: number[]; tail: number; pad: number[] } {
   // 只有音符/增时线/小节线占位；`~`/`^` 与内联层不进步进序列。
-  const flat = voice.elements.filter(
+  const flat: MusicElement[] = voice.elements.filter(
     (el) => el.kind === "note" || el.kind === "sustain" || el.kind === "barline",
   );
+  // 换了样子的小节线（反复起点挪行）不在 voice.elements 里，记号坐标仍按原来那条算
+  const srcMap = new Map<MusicElement, number>();
+  const srcOf = (el: MusicElement): number => srcMap.get(el) ?? voice.elements.indexOf(el);
+  // 反复起点不留在行末（同简谱引擎在 `‖:` 前断行）：行末的 `|:` 画成普通线、`:|:` 画成 `:|`，
+  // `|:` 挪到下一行行首（`ctx.leadRepeat`，由 layoutSong 按上一行带过来）
+  const tailAt = flat.length - 1;
+  const tail0 = flat[tailAt];
+  if (tail0?.kind === "barline" && forwardRepeatAtEnd(tail0)) {
+    const type = tail0.type === "repeat-both" ? "repeat-end" : tail0.type === "repeat-start" ? "normal" : tail0.type;
+    const plain: BarlineElement = { ...tail0, type, repeatForwardAfter: false };
+    srcMap.set(plain, voice.elements.indexOf(tail0));
+    flat[tailAt] = plain;
+  }
+  if (ctx.leadRepeat) {
+    const head = flat[0];
+    if (head?.kind === "barline") {
+      if (head.type === "normal") {
+        const fwd: BarlineElement = { ...head, type: "repeat-start" };
+        srcMap.set(fwd, voice.elements.indexOf(head));
+        flat[0] = fwd;
+      }
+    } else {
+      // 占位序号、减时线的 `~`/`^` 坐标都按 flat 下标数，补的这条在 computeUnderlines 里扣掉（srcIndex −1）
+      flat.unshift({ kind: "barline", type: "repeat-start", ornaments: [], code: "|:", source: { line: 0, column: 0, offset: 0, length: 0 } });
+      srcMap.set(flat[0]!, -1);
+    }
+  }
   const ratios = tupletRatios(voice);
   // `{dsb}` 并排块的花括号要挤在前一个符号与并排段之间，得先给它让出位置；
   // 并排段**结束**那头还有一个右括号，同样要让
@@ -56,7 +83,7 @@ export function layoutVoiceLine(
     splitAt.add(i);
     let total = 0;
     for (const inner of el.elements) total += elementBeats(inner);
-    let at = flat.findIndex((f) => voice.elements.indexOf(f) > i);
+    let at = flat.findIndex((f) => srcOf(f) > i);
     if (at < 0) return;
     let acc = 0;
     for (; at < flat.length; at++) {
@@ -73,7 +100,7 @@ export function layoutVoiceLine(
   let beat = 0;
 
   flat.forEach((el, i) => {
-    const srcIndex = voice.elements.indexOf(el);
+    const srcIndex = srcOf(el);
     const r = ratios[srcIndex];
     const beats = elementBeats(el) * (r ? r.num / r.den : 1);
     items.push({
@@ -130,7 +157,7 @@ export function layoutVoiceLine(
     if (splitEnd.has(i)) pad[i]! += m.ink.noteHeight * 1.05;
     // 两个符号之间夹着并排块的话，中间要放得下一个花括号（原版给的间距比普通小节线宽 0.75）
     if (next !== undefined) {
-      const nextAt = voice.elements.indexOf(next);
+      const nextAt = srcOf(next);
       for (const at of splitAt) {
         if (at > srcIndex && at < nextAt) {
           pad[i]! += m.ink.noteHeight * 1.05;
@@ -156,6 +183,23 @@ export interface BeatCtx {
   songStart?: boolean;
   /** 整首的末一行——末小节不满不补（musicpp: `this == measures.back()`） */
   songEnd?: boolean;
+  /** 上一行以反复起点收尾（`forwardRepeatAtEnd`）：本行行首补一条 `|:` */
+  leadRepeat?: boolean;
+}
+
+/** 这条小节线带不带「下一小节起反复」（`|:`、`:|:`，或 123 / MusicXML 记在下一小节左线上的那种） */
+export function forwardRepeatAtEnd(el: BarlineElement): boolean {
+  return el.type === "repeat-start" || el.type === "repeat-both" || el.repeatForwardAfter === true;
+}
+
+/** 一行的末个占位符号是带反复起点的小节线 */
+export function lineEndsWithForwardRepeat(voice: ScoreLine): boolean {
+  for (let i = voice.elements.length - 1; i >= 0; i--) {
+    const el = voice.elements[i]!;
+    if (el.kind === "note" || el.kind === "sustain") return false;
+    if (el.kind === "barline") return forwardRepeatAtEnd(el);
+  }
+  return false;
 }
 
 /**
@@ -235,7 +279,8 @@ export function computeUnderlines(
   // 源码里的 `~`（强制连）/`^`（强制断）按它在元素序列里的位置生效
   const forceJoin = new Set<number>();
   const forceSplit = new Set<number>();
-  let seen = 0;
+  // 行首补的 `|:`（layoutVoiceLine 的 leadRepeat）不在 voice.elements 里，占位序号往后挪一格
+  let seen = items[0]?.srcIndex === -1 ? 1 : 0;
   for (const el of voice.elements) {
     if (el.kind === "note" || el.kind === "sustain" || el.kind === "barline") {
       seen += 1;

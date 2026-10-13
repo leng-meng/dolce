@@ -4,8 +4,8 @@ import { contentWidth, type JianpuGrid } from "../metrics";
 import { paginate, type SystemBlock } from "../../../jianpu/vertical";
 import type { InkMeasurer, PlacedGroup, PlacedPage, PlacedScore, PlacedVoice } from "./model";
 import { placeColumns } from "./spacing";
-import { type BeatCtx, assignLyrics, computeUnderlines, layoutVoiceLine } from "./voice";
-import { GROUP_CLEAR, braceReach, chordLane, groupHeadroom, lineInkBottom, stackTop, voiceHeadroom } from "./vertical";
+import { type BeatCtx, assignLyrics, computeUnderlines, layoutVoiceLine, lineEndsWithForwardRepeat } from "./voice";
+import { GROUP_CLEAR, braceReach, wordsLead, chordLane, groupHeadroom, lineInkBottom, stackTop, voiceHeadroom } from "./vertical";
 import { placeMarks } from "./marks";
 import { placeLayers } from "./layers";
 
@@ -27,6 +27,29 @@ function braceStartX(voices: readonly PlacedVoice[]): number | null {
     }
   }
   return best;
+}
+
+/**
+ * 分声部（`&sbf`）之前那几个小节，没分出来的声部只是占位（`8`）：谱面上那一截是空的，小节线也不画
+ * （`PlacedItem.noBarline`）。只管连谱号起点及以前、前面一整个小节都是隐藏音符的线。
+ */
+function hideEmptyBarlines(voices: readonly PlacedVoice[], braceFromX: number): void {
+  for (const v of voices) {
+    let empty = true;
+    let any = false;
+    for (const it of v.items) {
+      if (it.x > braceFromX + 1e-6) break;
+      const el = it.element;
+      if (el.kind === "barline") {
+        if (any && empty) it.noBarline = true;
+        empty = true;
+        any = false;
+      } else {
+        any = true;
+        if (!(el.kind === "note" && el.hidden)) empty = false;
+      }
+    }
+  }
 }
 
 /**
@@ -59,6 +82,8 @@ export function layoutSong(
   // 从前这里自己分页：整组挪下页时先把光标重置到页顶、再减位移，下一组被排到页顶之上
   //（日光之下展开档第 2 页第二组 y = −515），挪过去的那组也丢了头顶的让位。
   const blocks: Array<SystemBlock & { group: PlacedGroup }> = [];
+  // 各声部上一行是否以反复起点收尾：本行行首补 `|:`（见 voice.ts::layoutVoiceLine）
+  let leadRepeat: boolean[] = [];
   for (const [pageIdx, srcPage] of song.pages.entries()) {
     for (const [groupIdx, group] of srcPage.groups.entries()) {
       let y = 0;
@@ -71,8 +96,10 @@ export function layoutSong(
       // 只让到基线（textLineY）的话，字顶正落在上一组的组间距里——gapGroup 收到「只空一行」之后，
       // 上一组没有歌词时文字行就压到它的音符与小节线上（小兔子乖乖「前奏」压「引子」那行 16pt）。
       // 不改 groupHeadroom：首组离页首的「空一行」按文字行墨迹顶另算（layoutSong 的 firstTop），那边不该多出这一截。
+      // 多条 `W:` 各占一行（往上摞，末行贴音符那一槽），多出来的行整组下移让开
+      const textStack = Math.max(0, group.texts.length - 1) * wordsLead(m);
       if (group.texts.length > 0) {
-        y += Math.max(0, -(m.note.wordsY - m.style.size.words * 0.85) + m.ink.noteHeight - head);
+        y += Math.max(0, -(m.note.wordsY - textStack - m.style.size.words * 0.85) + m.ink.noteHeight - head);
       }
 
       const beatCtx: BeatCtx = {
@@ -86,7 +113,8 @@ export function layoutSong(
       for (const el of group.voices[0]?.elements ?? []) {
         if (el.kind === "barline" && el.temporaryMeter) meterCursor = el.temporaryMeter;
       }
-      const laidOut = group.voices.map((voice) => layoutVoiceLine(voice, m, beatCtx));
+      const laidOut = group.voices.map((voice, vi) => layoutVoiceLine(voice, m, { ...beatCtx, leadRepeat: leadRepeat[vi] === true }));
+      leadRepeat = group.voices.map(lineEndsWithForwardRepeat);
       carryCursor = laidOut[0]?.tail ?? 0;
       // 音节先挂上（只按序号对到跟词的符号上），列宽要看字宽
       laidOut.forEach((l, vi) => {
@@ -98,7 +126,7 @@ export function layoutSong(
       placeColumns(laidOut, m, ink, width);
 
       const voices: PlacedVoice[] = [];
-      let textY = y + m.note.wordsY;
+      let textY = y + m.note.wordsY - textStack;
       laidOut.forEach((l, vi) => {
         const voice = group.voices[vi]!;
         const underlines = computeUnderlines(voice, l.items, m, l.groups);
@@ -191,7 +219,10 @@ export function layoutSong(
       // `&sbf`（声部符）标在哪条小节线上，连谱号就从那里起——前半段还是单声部，
       // 不该被括进来（原版《同一首歌》第 3 个 system 就是这样：前 4 小节 `8` 占位）。
       const sbf = braceStartX(voices);
-      if (sbf !== null) placedGroup.braceFromX = sbf;
+      if (sbf !== null) {
+        placedGroup.braceFromX = sbf;
+        hideEmptyBarlines(voices, sbf);
+      }
       // 源里的 `[fenye]`：新的一页从这组起（长图里也分开，由 layoutDocument 接成一张时多留一段白）
       blocks.push({ group: placedGroup, top: 0, bottom: y, breakBefore: groupIdx === 0 && pageIdx > 0 });
     }

@@ -7,6 +7,7 @@ import { syllableRun } from "../../../engrave/syllable";
 import type { ElementId } from "../../../model/doc";
 import { addBarlineOwner } from "../../identity";
 import type { PlacedGroup, PlacedPage, PlacedVoice } from "../place/model";
+import { wordsLead } from "../place/vertical";
 import { type OriginalCtx, text } from "./ctx";
 import { paintHeader } from "./header";
 import { paintBrace } from "./brace";
@@ -111,7 +112,8 @@ export function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): 
     const texts = group.group.texts;
     if (texts.length > 0) {
       const font = new Font(m.style.font.text.family, m.style.size.words);
-      sys.add(text(texts.map((t) => t.text).join("  "), m.page.margin.left, group.textY, font, c.ink));
+      // 每条 `W:` 一行（行距见 place/vertical.ts::wordsLead）；拼成一行时第二条会压到第一条上
+      texts.forEach((t, i) => sys.add(text(t.text, m.page.margin.left, group.textY + i * wordsLead(m), font, c.ink)));
     }
     const { braceX, notesLeft } = systemMetrics(c, group, page);
     // `&sbf` 标了分声部位置就从那里起（前半段仍是单声部），否则从 system 左缘
