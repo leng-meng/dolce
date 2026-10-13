@@ -602,9 +602,13 @@ export function parseMusicLine(
       }
       const inner = src.slice(i + 1, end);
       const roleMatch = /^\s*(bz|dsb)/i.exec(inner);
+      // 不写 bz/dsb 的 `{…}` 按并排块读：番茄原谱《太阳出来喜洋洋》`{ | 6, - } 2, -` 与 `{dsb 6, - } 2 -` 印得一样
       const role: "accompaniment" | "voice" =
-        roleMatch && roleMatch[1]!.toLowerCase() === "dsb" ? "voice" : "accompaniment";
-      const bodyStart = roleMatch ? roleMatch[0].length : 0;
+        roleMatch && roleMatch[1]!.toLowerCase() === "bz" ? "accompaniment" : "voice";
+      let bodyStart = roleMatch ? roleMatch[0].length : 0;
+      // 层首的 `|` 就是层外前面那条小节线（原谱只印一条），不进层
+      const leadBar = /^\s*\|(?![:|/*])/.exec(inner.slice(bodyStart));
+      if (leadBar && lastAttachable(elements)?.kind === "barline") bodyStart += leadBar[0].length;
       const sub = parseMusicLine(ctx, src.slice(0, end), i + 1 + bodyStart);
       elements.push({
         kind: "inline-layer",

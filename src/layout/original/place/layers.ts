@@ -2,7 +2,7 @@
 import type { ScoreLine } from "../../../pu/ast";
 import type { JianpuGrid } from "../metrics";
 import type { PlacedItem, PlacedLayer, PlacedSplit } from "./model";
-import { type BeatCtx, computeUnderlines, layoutVoiceLine } from "./voice";
+import { type BeatCtx, SPLIT_BRACE_W, computeUnderlines, layoutVoiceLine } from "./voice";
 import { splitRise } from "./vertical";
 import { placeMarks } from "./marks";
 
@@ -109,6 +109,11 @@ export function placeLayers(
       let noteEnd = lastAt;
       while (noteEnd > hostAt && items[noteEnd]!.element.kind === "barline") noteEnd -= 1;
       placed.braceRightX = items[noteEnd]!.x + m.ink.noteHeight * 1.07;
+      // 后面紧跟小节线时以线为准往回让：括号右缘离线 0.48 个墨迹高（列宽按内容排，末音到线的距离不是定值）
+      const bar = items[noteEnd + 1];
+      if (bar?.element.kind === "barline") {
+        placed.braceRightX = Math.min(placed.braceRightX, bar.x - m.ink.noteHeight * 0.48 - SPLIT_BRACE_W);
+      }
     }
     out.push({ layer: el, items: laid.items, underlines, split: placed });
   });

@@ -195,7 +195,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     // 风格（设置面板选的）只归原样档：叠在主题之上、歌本样式表之下
     const style = theme === "print" ? printStyleLayer(this.printStyle) : [];
     return computeStyleForPaper(
-      [THEMES[theme], style, this._bookLayer, page, this._docHeaderLayer(theme === "print"), this._userLayers[theme], this._userLayers.header],
+      [THEMES[theme], style, this._bookLayer, page, this._docHeaderLayer(theme === "print", theme !== "print"), this._userLayers[theme], this._userLayers.header],
       { mode, engine: "jianpu" },
     );
   }
@@ -324,9 +324,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   }
 
   /** 曲内层的页眉字体：MusicXML `<credit-words>` 自带的、123/ABC 的 `I:meta font-*`（打开自动跟随）。 */
-  private _docHeaderLayer(sizes = true): StyleRule[] {
+  private _docHeaderLayer(sizes = true, titleFamily = true): StyleRule[] {
     if (!this.adapter.toScoreDoc) return [];
-    return headerLayerOfSong(this.currentScoreDoc()?.songs[0], { sizes });
+    return headerLayerOfSong(this.currentScoreDoc()?.songs[0], { sizes, titleFamily });
   }
 
   /** 页眉四项现在的字体：谱里自带的（「跟随文件」显示用）、用户设的、算出来实际用的（当前档）。 */

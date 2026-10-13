@@ -67,17 +67,27 @@ function keyLineInk(c: OriginalCtx, meta: Metadata): { top: number; bottom: numb
  */
 function keyLineY(c: OriginalCtx, meta: Metadata): number {
   const m = c.metrics;
-  const leftLines = Math.max(meta.topLeft.length, meta.authors.length);
+  const leftLines = Math.max(meta.topLeft.length, rightColumnLines(meta));
   if (leftLines > 0) return m.head.creditBaseline + leftLines * m.head.creditLineHeight + m.style.size.keyMeter * 0.6;
   if (meta.titles.length === 0) return m.head.keyMeterBaseline;
   return titleInkBottom(c, meta) + m.style.size.lyric - keyLineInk(c, meta).top;
 }
 
+/** 词曲署名逐行：一条署名里换了行（MusicXML `<creator>` 常把「作词：…\n作曲：…」写成一条）照原样分行，不并成一行 */
+function authorLines(meta: Metadata): string[] {
+  return meta.authors.flatMap((a) => a.split(/\r?\n/).map((l) => l.trim()).filter(Boolean));
+}
+
+/** 右侧那一列的行数：`TR:` 在上、`Z:` 词曲接在它下面（同落右侧，各排各的就叠在一起） */
+function rightColumnLines(meta: Metadata): number {
+  return meta.topRight.length + authorLines(meta).length;
+}
+
 /** 头部（标题/副标题/词曲/TL/TR/调号拍号）占到哪个 y——正文首行据此避让。 */
 export function headerBottom(c: OriginalCtx, meta: Metadata): number {
   const m = c.metrics;
-  const leftLines = Math.max(meta.topLeft.length, meta.authors.length);
-  const rightLines = meta.topRight.length;
+  const leftLines = Math.max(meta.topLeft.length, rightColumnLines(meta));
+  const rightLines = rightColumnLines(meta);
   // 只有真有左右文字块时才算它的底；没有时不能拿 authorY 一行兜底，否则调号贴上标题也白贴
   const lines = Math.max(leftLines, rightLines);
   const blockBottom = lines > 0 ? m.head.creditBaseline + (lines - 1) * m.head.creditLineHeight + m.style.header.credit.size * 0.2 : 0;
@@ -114,9 +124,10 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
   const right = c.pageWidth - m.page.margin.right - c._pageShiftX;
   const authorFont = new Font(m.style.header.credit.family ?? m.style.font.text.family, m.style.header.credit.size);
   // `Z:` 词曲作者靠右；`TL:`/`TR:` 是与标题同高的左右文字块（多行，允许空行占位）
-  meta.authors.forEach((a, i) => {
+  // 与 `TR:` 同在右侧：排成一列，TR 在上、词曲接在下面（rightColumnLines）
+  authorLines(meta).forEach((a, i) => {
     const w = authorFont.measureText(a);
-    root.add(text(a, right - w, m.head.creditBaseline + i * m.head.creditLineHeight, authorFont, c.ink));
+    root.add(text(a, right - w, m.head.creditBaseline + (meta.topRight.length + i) * m.head.creditLineHeight, authorFont, c.ink));
   });
   const topFont = new Font(m.style.font.text.family, m.style.size.header);
   meta.topLeft.forEach((t, i) => {

@@ -5,6 +5,10 @@ import { graceAdvance } from "../../../engrave/grace";
 import { ACCIDENTAL_CLEARANCE, accidentalLead, type AccidentalKind } from "../../../engrave/accidental";
 import { beatGroupIndex, beatGroupSize, pickupOffset } from "../../../engrave/beatgroup";
 import type { PlacedItem, PlacedUnderline } from "./model";
+import { BRACE_GLYPHS } from "../compose/braceglyphs";
+
+/** 并排块右花括号的字形宽（pt，只按高度缩放，宽不变） */
+export const SPLIT_BRACE_W = BRACE_GLYPHS.splitRight.box[2];
 
 /** 音符/增时线的时值（拍）。实现在 ast.ts::elementQuarters（与导出侧共用同一份精确算法）。 */
 export function elementBeats(el: MusicElement): number {
@@ -154,7 +158,9 @@ export function layoutVoiceLine(
     if (el.kind === "note" && el.graceAfter.length > 0) {
       advance += graceAdvance(jianpuGraceNotes(el.graceAfter), jianpuGraceMetrics(m));
     }
-    if (splitEnd.has(i)) pad[i]! += m.ink.noteHeight * 1.05;
+    // 右花括号（字形宽 `SPLIT_BRACE_W`，不随字号缩放）前后各要一道空：离末音 1.07、离小节线 0.48 个墨迹高（layers.ts）；
+    // 紧排本身已留出约 0.6 个墨迹高，差的补上——只按墨迹高让，小字号下括号就压到小节线上
+    if (splitEnd.has(i)) pad[i]! += SPLIT_BRACE_W + m.ink.noteHeight * 0.95;
     // 两个符号之间夹着并排块的话，中间要放得下一个花括号（原版给的间距比普通小节线宽 0.75）
     if (next !== undefined) {
       const nextAt = srcOf(next);

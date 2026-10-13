@@ -7,6 +7,8 @@ import { TupletGlyph } from "../../../engrave/tuplet";
 import { sustainDash } from "../../../engrave/dash";
 import { beamY, highDotY, lowDotY } from "../../../engrave/stack";
 import { hairpinPath } from "../../../engrave/hairpin";
+import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
+import { DYNAMICS } from "../../../pu/glyph";
 import { jianpuSlurStyle } from "../metrics";
 import type { PlacedLayer, PlacedMark } from "../place/model";
 import { chordLane, noteBeams } from "../place/vertical";
@@ -61,14 +63,24 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
       const y = mk.y !== undefined ? baseline + mk.y - half - m.style.stroke.hairpin / 2
         : baseline + m.note.hairpinY - (mk.level - 1) * m.note.levelStep;
       const open = mk.mark.type === "crescendo";
+      // 起点音上有力度（`9>&mf`）：松叶从力度字右边起（同原版 `mf>`），不从音符左边压过去
+      let hx0 = x0;
+      const st = mk.startEl;
+      const dyn = !mk.openLeft && st?.kind === "note" ? st.ornaments.find((o) => DYNAMICS[o.name]) : undefined;
+      if (dyn) {
+        const w = new Font("Bravura", c.digitFont.size * DYNAMIC_SIZE).measureText(DYNAMICS[dyn.name]!);
+        const noteX = x0 + m.ink.noteHeight * 0.55; // placeMarks 给松叶往外扩的那半个字宽
+        const after = noteX + w / 2 + m.ink.noteHeight * 0.25;
+        if (after < x1 - m.ink.noteHeight) hx0 = after;
+      }
       // 画法走公共那一份（engrave/hairpin.ts，与五线谱同一笔）
       root.add(hairpinPath({
-        x0, x1, y, half0: open ? 0 : half, half1: open ? half : 0, lineWidth: m.style.stroke.hairpin, color: c.ink,
+        x0: hx0, x1, y, half0: open ? 0 : half, half1: open ? half : 0, lineWidth: m.style.stroke.hairpin, color: c.ink,
       }));
       break;
     }
     case "volta": {
-      const y = baseline + m.note.voltaY - (mk.level - 1) * m.note.levelStep;
+      const y = baseline + (mk.y ?? m.note.voltaY - (mk.level - 1) * m.note.levelStep);
       // 画法走公共那一份（engrave/ending.ts，与简谱引擎、混排同一套）：比例照混排——
       // 竖脚与房号字号都是谱高的一半（谱高取小节线高），房号在左脚右侧、横线下方按墨迹定位。
       const H = m.style.vertical.barlineHeight;

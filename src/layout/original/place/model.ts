@@ -24,6 +24,8 @@ export interface PlacedItem {
   dy?: number;
   /** 小节线不画（分声部前的空声部，见 song.ts::hideEmptyBarlines）；占位照旧 */
   noBarline?: true;
+  /** 压在这个音上的弧那一截的墨迹顶（相对基线）：延长记号摞到它之上（song.ts::fermataOverArcs） */
+  fermataTop?: number;
 }
 
 /** 一条跨若干符号的记号（弧线 / 多连音 / 跳房子 / 渐强渐弱），已换算成行内坐标。 */
@@ -104,6 +106,8 @@ export interface PlacedGroup {
   hasBrace: boolean;
   /** `&sbf` 标出的分声部起点（行内 x）；没标就从 system 左缘起 */
   braceFromX?: number;
+  /** 属于第几首（连续长图把多首接成一页后，页脚按首找本曲最低一行） */
+  song: number;
 }
 
 export interface PlacedPage {
@@ -112,6 +116,8 @@ export interface PlacedPage {
   song: number;
   /** 是否是该首的首页——首页才画标题、作者、调号拍号 */
   firstOfSong: boolean;
+  /** 连续长图把多首接成一页时，后面各首的页眉整块下移多少（`place/song.ts::layoutDocument`）；首曲的页眉照 firstOfSong 画 */
+  headers?: Array<{ song: number; dy: number }>;
 }
 
 export interface PlacedScore {

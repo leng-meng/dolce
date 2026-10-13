@@ -3,7 +3,7 @@ import type { Mark, ScoreLine } from "../../../pu/ast";
 import { jianpuSlurRise, noteMarkGap, type JianpuGrid } from "../metrics";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, jpArcY } from "../../../engrave/arc";
 import type { PlacedItem, PlacedMark } from "./model";
-import { annotationTop, chordLane, noteTextTop, stackTop } from "./vertical";
+import { annotationTop, chordLane, noteTextTop, stackTop, voltaLineTop } from "./vertical";
 
 /** 把记号的元素下标区间换算成行内 x 区间。 */
 export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid): PlacedMark[] {
@@ -89,6 +89,9 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid)
       .map((q) => ({ x: (q.x0 + q.x1) / 2, y: q.y! - rise - m.style.stroke.slur }));
     outer.y = outer.y! + arcClearShift(outer.x0, outer.y!, outer.x1, outer.y!, rise, true, inner, m.ink.stack.gap);
   }
+  // **跳房子**：横线让开房内的和弦/注释（vertical.ts::voltaLineTop），一行同高
+  const voltaTop = voltaLineTop(voice, m);
+  for (const p of out) if (p.mark.type === "volta") p.y = voltaTop;
   // **渐强渐弱**：`y` 记松叶的**底边**。贴着跨度里音符那一摞（含延长记号、弧、三连音）之上一道空；
   // 跨度里有和弦/注释才抬到那一槽之上（从前一律抬到固定的 `hairpinY`，没和弦的行松叶悬在上一组歌词底下）
   const lane = chordLane(voice, m);

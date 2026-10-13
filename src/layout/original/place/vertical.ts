@@ -13,7 +13,7 @@ export function annotationTop(m: JianpuGrid, lane = m.note.chordY): number {
   return lane - m.style.size.chord * 0.9;
 }
 
-/** 音符头顶那一槽的墨迹顶：和弦/注释一行，转调标签（`keyLabel`）与它们同在时叠到上一行。没有字返回 null */
+/** 音符头顶那一槽的墨迹顶：和弦/注释一行，转调标签（`keyLabel`）与它们同在时它占贴音那一槽、和弦/注释叠到上一行。没有字返回 null */
 export function noteTextTop(el: NoteElement, m: JianpuGrid, lane = m.note.chordY): number | null {
   const rows = (el.chord || el.annotation ? 1 : 0) + (el.keyLabel ? 1 : 0);
   return rows === 0 ? null : annotationTop(m, lane) - (rows - 1) * m.style.size.chord * 1.2;
@@ -88,7 +88,7 @@ export function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
     const lane = chordLane(voice, m);
     for (const mark of voice.marks) {
       const level = Math.max(1, mark.level);
-      if (mark.type === "volta") consider(m.note.voltaY - (level - 1) * m.note.levelStep);
+      if (mark.type === "volta") consider(voltaLineTop(voice, m));
       else if (mark.type === "crescendo" || mark.type === "decrescendo") {
         consider(m.note.hairpinY - (level - 1) * m.note.levelStep - m.note.hairpinOpening / 2);
       } else {
@@ -107,6 +107,10 @@ export function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
       // 再往上让一个数字高：只让到墨迹顶是「不打架」，两组之间还得看得出是两组。
       const nt = el.kind === "note" ? noteTextTop(el, m, lane) : null;
       if (nt !== null) consider(nt - m.ink.noteHeight);
+      // 注释可能让邻音的和弦挤到上一行（compose/page.ts::liftedAnnotations）
+      if (el.kind === "note" && !el.chord && el.annotation && voice.elements.some((o) => (o.kind === "note" || o.kind === "sustain") && !!o.chord)) {
+        consider(annotationTop(m, lane) - m.style.size.chord * 1.2 - m.ink.noteHeight);
+      }
       // 带和弦的音上的力度/术语摞在那行字之上（compose/note.ts::paintOrnaments 的 textTop）
       if (nt !== null && el.kind === "note" && el.ornaments.some((o) => DYNAMICS[o.name] || TERMS[o.name])) {
         consider(nt - noteMarkGap(m) - m.ink.noteHeight * 0.9 - m.ink.noteHeight);
@@ -127,6 +131,28 @@ export function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
   // 多声部的连谱号：上花头伸出首声部基线 `braceReach`（见 layoutSong 末尾、compose/brace.ts::paintBrace）
   if (group.voices.length > 1) consider(-braceReach(m));
   return -top;
+}
+
+/**
+ * 一行跳房子横线的高度（相对基线，负为上）：缺省是固定槽位 `voltaY`；房内音符头顶有和弦/注释/转调字时，
+ * 整条抬到房号（线下半个小节线高）也让开那行字——房号与和弦不并排挤在同一高度（用户口径）。
+ * 一行里的房子同一高度（原版一房二房的横线是一条）。
+ */
+export function voltaLineTop(voice: ScoreLine, m: JianpuGrid): number {
+  let top = Infinity;
+  const lane = chordLane(voice, m);
+  for (const mark of voice.marks) {
+    if (mark.type !== "volta") continue;
+    const level = Math.max(1, mark.level);
+    let t = m.note.voltaY - (level - 1) * m.note.levelStep;
+    for (let i = Math.max(0, mark.start); i <= Math.min(mark.end, voice.elements.length - 1); i++) {
+      const el = voice.elements[i]!;
+      const nt = el.kind === "note" ? noteTextTop(el, m, lane) : el.kind === "sustain" && el.chord ? annotationTop(m, lane) : null;
+      if (nt !== null) t = Math.min(t, nt - noteMarkGap(m) - m.style.vertical.barlineHeight * 0.5);
+    }
+    top = Math.min(top, t);
+  }
+  return Number.isFinite(top) ? top : m.note.voltaY;
 }
 
 /** 多条 `W:` 文字行的行距（compose/page.ts 逐行画，place/song.ts 让位，同此） */
@@ -156,7 +182,7 @@ export function voiceHeadroom(voice: ScoreLine, m: JianpuGrid): number {
   };
   for (const mark of voice.marks) {
     const level = Math.max(1, mark.level);
-    if (mark.type === "volta") consider(m.note.voltaY - (level - 1) * m.note.levelStep);
+    if (mark.type === "volta") consider(voltaLineTop(voice, m));
     else if (mark.type === "crescendo" || mark.type === "decrescendo") {
       consider(m.note.hairpinY - (level - 1) * m.note.levelStep - m.note.hairpinOpening / 2);
     } else {
@@ -167,9 +193,12 @@ export function voiceHeadroom(voice: ScoreLine, m: JianpuGrid): number {
     }
   }
   const lane = chordLane(voice, m);
+  // 注释可能让邻音的和弦挤到上一行（compose/page.ts::liftedAnnotations）：行里和弦与注释同在就多留一行
+  const hasChord = voice.elements.some((el) => (el.kind === "note" || el.kind === "sustain") && !!el.chord);
   for (const el of voice.elements) {
     const nt = el.kind === "note" ? noteTextTop(el, m, lane) : null;
     if (nt !== null) consider(nt);
+    if (hasChord && el.kind === "note" && !el.chord && el.annotation) consider(annotationTop(m, lane) - m.style.size.chord * 1.2);
     if (el.kind === "sustain" && el.chord) consider(annotationTop(m, lane)); // 增时线上的和弦同样要留头顶
     const gt = graceTop(el, m);
     if (gt !== null) consider(gt);

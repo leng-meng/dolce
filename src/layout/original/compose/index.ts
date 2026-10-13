@@ -27,7 +27,7 @@ import { layoutDocument } from "../place/song";
 import { reflowLineStarts } from "../place/reflow";
 import type { OriginalCtx } from "./ctx";
 import { paintPage, systemLeft } from "./page";
-import { layoutFooters } from "./footer";
+import { footerSpan, layoutFooters } from "./footer";
 import { headerBottom } from "./header";
 
 /** 原样文档排版的外部配置：尺子（`style/jianpu.ts::jianpuStyleOf`，与简谱引擎同一份）、纸、页脚模板。 */
@@ -39,6 +39,10 @@ export interface OriginalDocumentConfig {
   readonly foot: Region | null;
   /** 已经按窄纸重新断过行（`reflowLineStarts`），不再断第二次 */
   readonly noReflow?: boolean;
+  /** 内部用：连谱号、段号伸出音符起点的那一截（pt），版心左缘让出这么多再排（见 layoutOriginalDocument 末尾） */
+  readonly leftIndent?: number;
+  /** 内部用：重断行之前的那份文档（缩进那一遍要从它重新断行） */
+  readonly reflowSource?: ScoreDoc;
 }
 
 /** 一份文档排好的原样页面与身份索引。 */
@@ -61,6 +65,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   const meta0 = doc.songs[0]?.metadata;
   const style = applyDocOptions(cfg.style, meta0?.fontSizes ?? [], meta0?.margins ?? [], cfg.userMargins);
   const m = gridOf(style, cfg.page);
+  if (cfg.leftIndent) m.page.margin.left += cfg.leftIndent;
   const c: OriginalCtx = {
     metrics: m,
     doc,
@@ -110,11 +115,24 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
         const ls = starts[i];
         if (ls && applyBreaks(song, ls.map((id) => ({ id: id as ElementId })), { mid: "source", pages: "keep" })) changed = true;
       });
-      if (changed) return layoutOriginalDocument(clone, { ...cfg, noReflow: true });
+      if (changed) return layoutOriginalDocument(clone, { ...cfg, noReflow: true, reflowSource: cfg.reflowSource ?? source });
     }
   }
-  const placed = layoutDocument(doc.songs, m, headerBottoms, ink);
+  const placed = layoutDocument(doc.songs, m, headerBottoms, ink, doc.songs.map((_, i) => footerSpan(c, i)));
   c.placed = placed;
+  // **连谱号、段号也在版心里**（用户定）：音符起点贴版心左缘时它们伸进左边距、左右留白不等。
+  // 量出最靠左的系统左缘（连谱号粗线另有半个线宽），版心左缘让出这一截、整份再排一遍（断行按变窄的版心重求）
+  if (cfg.leftIndent === undefined && placed.pages.length > 0) {
+    const thick = m.ink.noteHeight * 2.2 * 0.115; // compose/brace.ts::paintBrace 的粗线
+    const inkLeft = Math.min(...placed.pages.map((p) => systemLeft(c, p) - (p.groups.some((g) => g.hasBrace) ? thick / 2 : 0)));
+    const indent = m.page.margin.left - inkLeft;
+    if (indent > 0.01) {
+      const again = cfg.reflowSource
+        ? { ...cfg, noReflow: false, reflowSource: undefined, leftIndent: indent }
+        : { ...cfg, leftIndent: indent };
+      return layoutOriginalDocument(cfg.reflowSource ?? source, again);
+    }
+  }
   // 页脚（BL/BC/BR）：每首末页、最低一行之下。先排一遍拿到占高，连续长图的页高要把它算进去
   const footers = layoutFooters(c, 0);
   const footerBottom = Math.max(0, ...footers.map((f) => f.bottom));

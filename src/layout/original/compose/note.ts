@@ -14,6 +14,13 @@ import type { PlacedItem } from "../place/model";
 import { graceLayout, noteBeams, noteTextTop, stackTop } from "../place/vertical";
 import { type OriginalCtx, digitItem, digitOrigin, dot, octaveDot, rect, stroke, text } from "./ctx";
 
+/** 和弦画出来多宽（与 paintChord 同一套字体与分段）。 */
+export function chordWidth(c: OriginalCtx, chord: string): number {
+  const m = c.metrics;
+  const segs = chordTextSegs(chord, m.style.look.chordPlain, m.style.look.accidentalSide);
+  return harmonyWidth(segs, new Font(m.style.font.text.family, m.style.size.chord), new Font("Bravura", m.style.size.chord));
+}
+
 /** 音符/增时线上方的和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）。 */
 export function paintChord(c: OriginalCtx, g: Group, chord: string, x: number, baseline: number): void {
   const m = c.metrics;
@@ -78,23 +85,26 @@ export function paintNote(c: OriginalCtx,
     g.add(d);
   }
 
+  // 曲中转调标签与和弦/注释同在一个音上时，转调占贴音符那一槽（用户定：转调优先），和弦/注释让到上一行
+  // 注释横向压到邻音的和弦（`C` 旁边的「（副歌）」）也让到上一行（同简谱引擎段落词挂在和弦之上）
+  const textLift = (note.keyLabel && (note.chord || note.annotation)) || c.liftedAnnotations?.has(note) ? m.style.size.chord * 1.2 : 0;
   // 和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）
   if (note.chord) {
-    paintChord(c, g, note.chord, x, baseline);
+    paintChord(c, g, note.chord, x, baseline - textLift);
   } else if (note.annotation) {
     const font = new Font(m.style.font.text.family, m.style.size.chord);
     const a = note.annotation;
-    const t = text(a, x - font.measureText(a) / 2, baseline + c.chordLane, font, c.ink);
+    const t = text(a, x - font.measureText(a) / 2, baseline + c.chordLane - textLift, font, c.ink);
     t.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
     t.classes.add("section-word"); // 成书 line-check 认段落词（`pdflayout/browser.ts::CLS_TAGS`）
     t.ident = { kind: "annotation" };
     g.add(t);
   }
-  // 曲中转调标签：新调首音上方，与和弦/注释同一槽；那一槽已有字就再往上叠一行（`place/vertical.ts::noteTextTop`）。
+  // 曲中转调标签：新调首音上方，与和弦/注释同一槽；同在时它占这一槽、那两样叠到上一行（`place/vertical.ts::noteTextTop`）。
   // 左缘对齐数字左缘、往右写——居中的话行首那个会伸出左边距
   if (note.keyLabel) {
     const font = new Font(m.style.font.text.family, m.style.size.chord);
-    const y = baseline + c.chordLane - (note.chord || note.annotation ? m.style.size.chord * 1.2 : 0);
+    const y = baseline + c.chordLane;
     const t = text(note.keyLabel, x - m.ink.noteHeight * 0.35, y, font, c.ink); // 数字宽约墨迹高的 0.7
     t.classes.add("key-change");
     g.add(t);
@@ -106,7 +116,7 @@ export function paintNote(c: OriginalCtx,
 
   // `&xx` 记号
   const before = g.children.length;
-  paintOrnaments(c, g, note.ornaments, x, baseline, stackTop(note, c.metrics), undefined, noteTextTop(note, m, c.chordLane) ?? undefined);
+  paintOrnaments(c, g, note.ornaments, x, baseline, stackTop(note, c.metrics), undefined, noteTextTop(note, m, c.chordLane) ?? undefined, it.fermataTop);
   for (const it of g.children.slice(before)) it.ident = { kind: "deco" };
 
   root.add(g);
@@ -178,6 +188,8 @@ export function paintOrnaments(c: OriginalCtx,
   bar?: { right: number; top: number },
   /** 音符头顶和弦/注释那行字的墨迹顶（相对基线）：有的话力度、术语摞到它之上，不压在和弦底下 */
   textTop?: number,
+  /** 压在音上的弧那一截的墨迹顶（相对基线，`PlacedItem.fermataTop`）：延长记号摞到它之上 */
+  fermataTop?: number,
 ): void {
   const top = noteTop ?? -c.metrics.ink.noteHeight / 2;
   if (ornaments.length === 0) return;
@@ -218,7 +230,8 @@ export function paintOrnaments(c: OriginalCtx,
         // 延长记号按**墨迹**贴着音符堆叠顶（含高八度点）放，净距与减时线、八度点同一个值
         // （metrics.ts::alignNoteMarks）；走 laneOrnament 固定槽位离音符太远（用户口径）。
         const ab = font.charBound(glyph.glyph);
-        add(text(glyph.glyph, x - w / 2, baseline + top - noteMarkGap(m) - ab.bottom, font, c.ink), "artic");
+        const under = fermataTop !== undefined ? Math.min(top, fermataTop) : top;
+        add(text(glyph.glyph, x - w / 2, baseline + under - noteMarkGap(m) - ab.bottom, font, c.ink), "artic");
       } else {
         add(text(glyph.glyph, x - w / 2, y, font, c.ink), "artic");
       }

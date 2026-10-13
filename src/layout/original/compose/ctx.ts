@@ -18,6 +18,8 @@ export interface OriginalCtx {
   digitFont: Font;
   /** 正在画的这一行和弦/注释那一槽的基线（相对音符基线，place/vertical.ts::chordLane）。 */
   chordLane: number;
+  /** 正在画的这一行里，注释（`"副歌"` 等）横向压到别的音上的和弦、要抬到上一行的那些音（`page.ts::paintVoice` 先量） */
+  liftedAnnotations?: ReadonlySet<object>;
   pageWidth: number;
   pageHeight: number;
   /** 连续长图裁紧后，整页要平移多少（把墨迹推到左侧留白处） */

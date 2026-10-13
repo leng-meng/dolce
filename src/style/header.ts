@@ -39,13 +39,14 @@ export function headerFontsOf(sheet: StyleSheet): HeaderFonts {
 
 /** 曲内层：谱里写的页眉字体——MusicXML `<credit-words>`（同一角色取第一条，没写族退到 `<word-font>`），
  *  或 123/ABC 的 `I:meta font-<角色>`（`model/pagemeta.ts`）。
- *  `sizes: false`：只要族与字重（展开档是投影片，印刷纸上的字号搬过去就太小了）。 */
-export function headerLayerOfSong(song: Song | undefined, { sizes = true }: { sizes?: boolean } = {}): StyleRule[] {
+ *  `sizes: false`：只要族与字重（展开档是投影片，印刷纸上的字号搬过去就太小了）。
+ *  `titleFamily: false`：标题不跟谱里的字体族（原样档标题一律粗体，用户定；500 首 MusicXML 写的魏碑只有一种字重，加粗看不出来）。 */
+export function headerLayerOfSong(song: Song | undefined, { sizes = true, titleFamily = true }: { sizes?: boolean; titleFamily?: boolean } = {}): StyleRule[] {
   if (!song) return [];
   const roles: Partial<Record<HeaderRole, RoleDecl>> = {};
   for (const [role, f] of Object.entries(songHeaderFonts(song)) as [HeaderRole, HeaderFontSpec][]) {
     const d: RoleDecl = {};
-    if (f.family) d.family = f.family;
+    if (f.family && (titleFamily || role !== "title")) d.family = f.family;
     if (sizes && f.size) d.size = f.size;
     if (f.bold) d.weight = "bold";
     if (Object.keys(d).length) roles[role] = d;

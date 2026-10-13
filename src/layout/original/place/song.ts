@@ -1,12 +1,13 @@
 // 一首（及一份文档）的定位：逐组排声部、组间让位、分页，长图把各页接成一张。
 import type { Meter, PuSong } from "../../../pu/ast";
-import { contentWidth, type JianpuGrid } from "../metrics";
+import { contentWidth, jianpuSlurStyle, type JianpuGrid } from "../metrics";
 import { paginate, type SystemBlock } from "../../../jianpu/vertical";
-import type { InkMeasurer, PlacedGroup, PlacedPage, PlacedScore, PlacedVoice } from "./model";
+import type { InkMeasurer, PlacedGroup, PlacedItem, PlacedMark, PlacedPage, PlacedScore, PlacedVoice } from "./model";
 import { placeColumns } from "./spacing";
 import { type BeatCtx, assignLyrics, computeUnderlines, layoutVoiceLine, lineEndsWithForwardRepeat } from "./voice";
 import { GROUP_CLEAR, braceReach, wordsLead, chordLane, groupHeadroom, lineInkBottom, stackTop, voiceHeadroom } from "./vertical";
-import { placeMarks } from "./marks";
+import { isArcMark, placeMarks } from "./marks";
+import { arcHeight } from "../../../engrave/arc";
 import { placeLayers } from "./layers";
 
 /**
@@ -27,6 +28,33 @@ function braceStartX(voices: readonly PlacedVoice[]): number | null {
     }
   }
   return best;
+}
+
+/**
+ * 延长记号让弧（同简谱引擎上方带「点状标记让弧，不是弧让它」）：弧端或弧身压在带延长记号的音上时，
+ * 记下那一段弧的墨迹顶（`PlacedItem.fermataTop`），延长记号摞到它之上（compose/note.ts::paintOrnaments）。
+ * 弧身按抛物线近似（端点贴音、中点最高），量延长记号那一截宽。
+ */
+function fermataOverArcs(items: readonly PlacedItem[], marks: readonly PlacedMark[], m: JianpuGrid): void {
+  const style = jianpuSlurStyle(m, 0);
+  const half = m.ink.noteHeight * 0.5;
+  for (const it of items) {
+    const el = it.element;
+    if (el.kind !== "note" || !el.ornaments.some((o) => o.name === "yc" || o.name === "ycy")) continue;
+    let top = Infinity;
+    for (const mk of marks) {
+      if (mk.y === undefined || !isArcMark(mk.mark) || (mk.dy ?? 0) !== (it.dy ?? 0)) continue;
+      if (it.x + half < mk.x0 || it.x - half > mk.x1) continue;
+      const span = Math.max(1e-6, mk.x1 - mk.x0);
+      const rise = arcHeight(span, style);
+      const at = (x: number): number => {
+        const u = Math.min(1, Math.max(0, (x - mk.x0) / span));
+        return mk.y! - 4 * rise * u * (1 - u);
+      };
+      top = Math.min(top, at(it.x - half), at(it.x), at(it.x + half)) - m.style.stroke.slur;
+    }
+    if (Number.isFinite(top)) it.fermataTop = top;
+  }
 }
 
 /**
@@ -155,6 +183,7 @@ export function layoutSong(
           (_, li) => y + lyricY0 + splitDrop + li * m.style.vertical.lyricStack,
         );
         const marks = placeMarks(voice, l.items, m);
+        fermataOverArcs(l.items, marks, m);
         // 并排块的上行会顶到跳房子/记号的高度，跨过它的记号要整体抬到上行之上。
         // 跳房子还得**整行一起抬**——原版里一房二房的横线是同一条高度。
         let voltaLift = 0;
@@ -169,7 +198,7 @@ export function layoutSong(
           const need = innerTop - m.ink.noteHeight * 0.15;
           for (const mk of marks) {
             if (mk.dy !== undefined || mk.x1 < lx0 || mk.x0 > lx1) continue;
-            const lane = mk.mark.type === "volta" ? m.note.voltaY : (mk.y ?? m.note.slurY);
+            const lane = mk.y ?? (mk.mark.type === "volta" ? m.note.voltaY : m.note.slurY);
             const d = Math.min(0, need - lane);
             if (mk.mark.type === "volta") voltaLift = Math.min(voltaLift, d);
             else if (d < 0) mk.dy = d;
@@ -195,9 +224,11 @@ export function layoutSong(
         const isLast = vi === laidOut.length - 1;
         const hasLyrics = voice.lyrics.length > 0;
         // 并排块把主旋律压低了半个行距，下一声部要连这一段一起让开
+        // 没有歌词的声部按墨迹底让：低音点、减时线叠下来的那截照算；组末声部再加数字下半截，
+        // 组间那道空（下一组头顶的 GROUP_CLEAR）才是从墨迹底量起——只按基线让，两组谱几乎贴着（太阳出来喜洋洋 A4）
         const consumed = hasLyrics
           ? lyricY0 + splitDrop + (voice.lyrics.length - 1) * m.style.vertical.lyricStack
-          : splitDrop;
+          : splitDrop + Math.max(0, inkBottom - digitBottom) + (isLast ? digitBottom : 0);
         let after = isLast ? m.style.vertical.systemGap : hasLyrics ? m.style.vertical.voiceGap : m.style.vertical.voiceGap;
         // 下一声部头顶的弧线/记号也要让开，否则会画进上面的歌词或音符里
         const next = group.voices[vi + 1];
@@ -215,6 +246,7 @@ export function layoutSong(
         braceTop: voices[0]!.y,
         braceBottom: voices[voices.length - 1]!.y,
         hasBrace,
+        song: songIndex,
       };
       // `&sbf`（声部符）标在哪条小节线上，连谱号就从那里起——前半段还是单声部，
       // 不该被括进来（原版《同一首歌》第 3 个 system 就是这样：前 4 小节 `8` 占位）。
@@ -280,18 +312,32 @@ export function layoutDocument(
   m: JianpuGrid,
   headerBottoms: readonly number[] = [],
   ink: InkMeasurer,
+  /** 各首页脚（BL/BC/BR）从本曲最低一行往下占多高（compose/footer.ts::footerSpan）；连续长图接下一首时要让开 */
+  footerSpans: readonly number[] = [],
 ): PlacedScore {
   let pages: PlacedPage[] = [];
   songs.forEach((song, i) => pages.push(...layoutSong(song, m, i, headerBottoms[i] ?? 0, ink)));
 
-  // 连续长图：所有页面首尾相接成一张，源里的 `[fenye]` 只当作一段额外留白
+  // 连续长图：所有页面首尾相接成一张，源里的 `[fenye]` 只当作一段额外留白。
+  // 换曲时连页眉一起接：页眉整块下移（`PlacedPage.headers`），本曲的谱跟着同一个量走——layoutSong 已按页眉高排好首组
   if (m.page.longImage && pages.length > 1) {
-    const merged: PlacedPage = { groups: [], song: 0, firstOfSong: true };
-    let offset = 0;
+    const merged: PlacedPage = { groups: [], song: pages[0]!.song, firstOfSong: pages[0]!.firstOfSong, headers: [] };
     for (const [i, pg] of pages.entries()) {
       if (i > 0) {
-        const top = pg.groups[0]?.voices[0]?.y ?? 0;
-        offset = lowestOf(merged) + m.style.vertical.systemGap * 1.4 - top;
+        const prev = pages[i - 1]!;
+        const low = lowestOf(merged) + (pg.song !== prev.song ? footerSpans[prev.song] ?? 0 : 0);
+        let offset: number;
+        if (pg.firstOfSong) {
+          // 页眉墨迹顶约在标题基线上一个标题字号
+          const headTop = m.head.titleBaseline - m.style.header.title.size;
+          offset = low + m.style.vertical.systemGap * 2 - headTop;
+          merged.headers!.push({ song: pg.song, dy: offset });
+        } else {
+          const g0 = pg.groups[0];
+          let top = g0?.voices[0]?.y ?? 0;
+          if (g0 && g0.group.texts.length > 0) top = Math.min(top, g0.textY - m.style.size.words);
+          offset = low + m.style.vertical.systemGap * 1.4 - top;
+        }
         for (const g of pg.groups) shiftGroup(g, offset);
       }
       merged.groups.push(...pg.groups);
