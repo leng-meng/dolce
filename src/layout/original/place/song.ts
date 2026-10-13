@@ -31,6 +31,10 @@ function braceStartX(voices: readonly PlacedVoice[]): number | null {
   return best;
 }
 
+/** 组内相邻声部、上面那个没有歌词时，在声部间距之外再空的一道（÷ 音符字号）：只按 `voice-gap` 排两行数字之间
+ *  不到一个字高（太阳出来喜洋洋 A4 `0 0 | 0 0` 两行，用户定加一道空；原谱这里约 2 个字号） */
+const NO_LYRIC_VOICE_GAP_EM = 0.6;
+
 /**
  * 延长记号、力度让弧（同简谱引擎上方带「点状标记让弧，不是弧让它」）：弧端或弧身压在带这些记号的音上时，
  * 记下那一段弧的墨迹顶（`PlacedItem.arcTop`），记号摞到它之上（compose/note.ts::paintOrnaments）。
@@ -229,7 +233,7 @@ export function layoutSong(
         // 组间那道空（下一组头顶的 GROUP_CLEAR）才是从墨迹底量起——只按基线让，两组谱几乎贴着（太阳出来喜洋洋 A4）
         const consumed = hasLyrics
           ? lyricY0 + splitDrop + (voice.lyrics.length - 1) * m.style.vertical.lyricStack
-          : splitDrop + Math.max(0, inkBottom - digitBottom) + (isLast ? digitBottom : 0);
+          : splitDrop + Math.max(0, inkBottom - digitBottom) + (isLast ? digitBottom : NO_LYRIC_VOICE_GAP_EM * m.style.size.note);
         let after = isLast ? m.style.vertical.systemGap : hasLyrics ? m.style.vertical.voiceGap : m.style.vertical.voiceGap;
         // 下一声部头顶的弧线/记号也要让开，否则会画进上面的歌词或音符里
         const next = group.voices[vi + 1];
