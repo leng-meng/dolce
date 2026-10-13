@@ -13,7 +13,8 @@
 
 import type { HeaderFonts } from "../../style/header";
 import { SlurTieBase, type SlurStyle } from "../pageitem";
-import type { GraceMetrics, GraceNote } from "../../common/gracenote";
+import type { GraceMetrics, GraceNote } from "../../engrave/grace";
+import type { AccidentalSide, AccidentalStyleKind } from "../../engrave/spacing";
 import type { NoteElement } from "../../pu/ast";
 
 /**
@@ -63,9 +64,6 @@ export interface JianpuMetrics {
     beamDist: number;
     beamWidth: number;
     beamHalfSpan: number;
-    /** 增时线的线宽与半长 */
-    dashWidth: number;
-    dashHalfLength: number;
     barlineHeight: number;
     /** 弧线弧高（**弧顶**离端点多高）。既是纵向预留的高度，也反算成绘制时的弧高上限
      *  ——见 jianpuSlurStyle / jianpuSlurRise，两处同一个数。 */
@@ -99,8 +97,6 @@ export interface JianpuMetrics {
     /** 双线/反复线里两根竖线的间距 */
     doubleBarlineGap: number;
     repeatDotRadius: number;
-    /** 变音记号给后一个音符额外让出的宽度 */
-    accidentalSpace: number;
     /** 与 .jpwabc 谱面同值（layout.ts 的 slurTieThickness = 6） */
     slurThickness: number;
     hairpinThickness: number;
@@ -148,6 +144,15 @@ export interface JianpuMetrics {
     creditBaseline: number;
     creditLineHeight: number;
     keyMeterBaseline: number;
+  };
+  /** 写法上的开关（不是长度，不随字号缩放）。 */
+  look: {
+    /** 和弦排成简单文本（一行普通文字，不用 SMuFL 字形、不上标）。样式键 `chord-plain`。 */
+    chordPlain: boolean;
+    /** 调号、转调、和弦的升降号写在字母前还是后；不给 = 各自原来的写法。样式键 `accidental-side`。 */
+    accidentalSide?: AccidentalSide;
+    /** 临时记号的样子。样式键 `accidental-style`。 */
+    accidentalStyle: AccidentalStyleKind;
   };
   /** 字体族，键是角色名；`text` 是各类文字的底。页眉各项（设置面板「页眉」一组）不给 = `text`。 */
   font: {
@@ -199,8 +204,6 @@ export const JIANPU_DEFAULTS: JianpuMetrics = {
     beamDist: 4.5,
     beamWidth: 2,
     beamHalfSpan: 6,
-    dashWidth: 2,
-    dashHalfLength: 5.5,
     barlineHeight: 29,
     slurArc: 7,
     slurFlatSpan: 215, // ≈ 数字字号 25 × 8.6
@@ -220,11 +223,11 @@ export const JIANPU_DEFAULTS: JianpuMetrics = {
     barline: 1.5,
     doubleBarlineGap: 5,
     repeatDotRadius: 2,
-    accidentalSpace: 9,
     slurThickness: 6,
     hairpinThickness: 1.3,
   },
   ratio: { graceScale: 0.5, cueScale: 0.72 },
+  look: { chordPlain: false, accidentalStyle: "csym" },
   size: {
     // 原版量到数字墨迹高 17.9；苹方粗体「1」墨迹占字号 0.714，折成字号 25.07，落整数
     note: 25,
@@ -448,7 +451,7 @@ export function jianpuSlurRise(m: JianpuMetrics): number {
   return SlurTieBase.arcHeight(Infinity, jianpuSlurStyle(m, 0)) * 0.75;
 }
 
-/** 原样文档布局折算给公共倚音几何的度量（见 `src/common/gracenote.ts`）。
+/** 原样文档布局折算给公共倚音几何的度量（见 `engrave/grace.ts`）。
  *  painter 画倚音、layout 给倚音留位，用的必须是同一份。 */
 export function jianpuGraceMetrics(m: JianpuGrid): GraceMetrics {
   return {

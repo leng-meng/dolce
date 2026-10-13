@@ -90,7 +90,7 @@ export function inkBoxInPage(el: SVGGraphicsElement): { svg: SVGSVGElement; box:
 
 /** 音符 `<g>` 里**音乐那一部分**的包围盒：简谱引擎的音符格把各段歌词也收在同一个 `<g>` 里
  *  （第一个子节点是数字，后面是逐段歌词），整格的包围盒会一直拖到最后一段词。
- *  这里以第一个子节点（数字）为准，只并进顶端落在数字框之内的子节点（八度点、增时线、减时线）；
+ *  这里以第一个子节点（数字）为准，只并进顶端落在数字框之内的子节点（八度点、增时线、减时线、临时记号）；
  *  文字框本身带行距，第一段歌词的顶恰好贴着数字框的底（实测差 0.4），所以界线取在框底往上 5%。
  *  没有子节点时就是整个 `<g>`。 */
 export function musicBox(el: SVGGraphicsElement): { svg: SVGSVGElement; box: Box } | null {
@@ -102,13 +102,20 @@ export function musicBox(el: SVGGraphicsElement): { svg: SVGSVGElement; box: Box
   const limit = anchor.box.y + anchor.box.h * 0.95;
   let box = anchor.box;
   for (const k of kids.slice(1)) {
-    const b = boxInPage(k);
+    // 临时记号这类 SMuFL 字（Bravura）按墨迹量：整行字体盒约 4 em，会把框撑出好几行高
+    const b = isMusicText(k) ? inkBoxInPage(k) : boxInPage(k);
     if (!b || b.box.h <= 0 || b.box.y > limit) continue;
     const x = Math.min(box.x, b.box.x);
     const y = Math.min(box.y, b.box.y);
     box = { x, y, w: Math.max(box.x + box.w, b.box.x + b.box.w) - x, h: Math.max(box.y + box.h, b.box.y + b.box.h) - y };
   }
   return { svg: anchor.svg, box };
+}
+
+/** 这一项画的是不是 SMuFL 字（`<text>` 的字体是 Bravura）。 */
+function isMusicText(el: SVGGraphicsElement): boolean {
+  const t = el instanceof SVGTextElement ? el : el.querySelector("text");
+  return !!t && /bravura/i.test(t.getAttribute("font-family") ?? "");
 }
 
 /** 页面上一带（纵向区间）里实际画出的东西最右到哪。换行符要画在整行最后一个符号后面，

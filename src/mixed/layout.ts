@@ -25,6 +25,7 @@
 import { getMeta } from "../model/metakeys";
 import { Fraction } from "../common/fraction";
 import { Font } from "../layout/font";
+import { EQ_PAD_EM } from "../engrave/spacing";
 import { GlyphCodes } from "../smufl/smufl";
 import type {
   Barline,
@@ -927,9 +928,11 @@ class DocPartLoader {
     }
     const pm = met.tempo?.perMinuteText?.trim() ?? (met.tempo?.perMinute !== undefined ? String(met.tempo.perMinute) : undefined);
     if (pm !== undefined) {
-      // 「=」左边用不折叠空格：SVG 吞掉文本开头的普通空格（量宽也一样），「♩」与「=」就贴死了；
-      // 右边那个在字中间不会被吞，两边于是等宽
-      blk.add(any ? "\u00a0= " + pm : "= " + pm, wordFont);
+      // 「=」两侧的空与调号「1 = F」同一个（engrave/spacing.ts::EQ_PAD_EM），按字号算、不靠空格字形
+      // （空格宽随字体走，且 SVG 吞掉文本开头的普通空格）
+      const pad = wordFont.size * EQ_PAD_EM;
+      blk.add("=", wordFont, false, undefined, any ? pad : 0);
+      blk.add(pm, wordFont, false, undefined, pad);
       any = true;
     }
     return any;

@@ -1,14 +1,18 @@
-// 和弦符号的富文本分段与绘制——五线谱与文本谱共用。
+// 和弦符号的富文本分段与绘制——简谱引擎、原样文档、五线谱/混排共用。
+//
+// 两种风格：SMuFL 和弦（缺省，下面这套分段）与**简单文本**（`chordTextSegs(text, true)`：整串原文一段，
+// 原书就是一行普通文字）。三路都由样式键 `chord-plain` 选（`style/keys.ts`）。
 //
 // 和弦符号不是一串普通文字：根音的升降号要用 SMuFL 的 csym 小号字形，后缀（7 / maj7 /
 // sus4 …）要上标，`m` 留在基线，低音 `/G` 跟在后面。五线谱那侧原本把这套排版逻辑
 // 内联在 drawHarmony 里，这里抽出来，文本谱直接复用同一套，两边观感才一致。
 
 import { GlyphCodes } from "../smufl/smufl";
-import { Font } from "./font";
-import { Group, TextFrame } from "./pageitem";
+import { Font } from "../layout/font";
+import { Group, TextFrame } from "../layout/pageitem";
 import { Matrix33 } from "../common/geom";
 import { chordStepAlter } from "../score/harmonyparse";
+import type { AccidentalSide } from "./spacing";
 
 /** 和弦符号的一段：文字或 SMuFL 字形，可上标（1）/下标（-1）。 */
 export interface HarmonySeg {
@@ -21,16 +25,22 @@ export interface HarmonySeg {
   scale?: number;
 }
 
-/** 分段总宽（未缩放的 advance 之和，与居中口径一致）。 */
+/** 一段的缩放：上/下标 0.75，否则就地缩放 `scale`（缺省 1）。排版与量宽同一口径。 */
+function segScale(s: HarmonySeg): number {
+  return s.superscript === 1 || s.superscript === -1 ? 0.75 : (s.scale ?? 1);
+}
+
+/** 分段总宽：各段 advance × 各自缩放（上/下标 0.75），**就是 `layoutHarmonySegs` 的笔位终点**。
+ *  居中按它算——按未缩放算的话 A(sus4) 这类长上标的和弦会整体左偏（KL2020《基督是锚》第 9 小节偏 18 tenths）。 */
 export function harmonyWidth(segs: readonly HarmonySeg[], wordFont: Font, musicFont: Font): number {
   let w = 0;
-  for (const s of segs) w += (s.music ? musicFont : wordFont).measureText(s.text) * (s.scale ?? 1);
+  for (const s of segs) w += (s.music ? musicFont : wordFont).measureText(s.text) * segScale(s);
   return w;
 }
 
 /**
  * 把分段排成一个 Group（原点在左侧基线）。上标缩到 75% 并上移 1/4 字号。
- * 由 mixed/render.ts::drawHarmony 与文本谱共用。
+ * 简谱引擎、原样文档、五线谱/混排三路共用。
  */
 export function layoutHarmonySegs(
   segs: readonly HarmonySeg[],
@@ -52,9 +62,8 @@ export function layoutHarmonySegs(
     t.text = s.text;
     t.font = font;
     t.color = color;
-    let scl = 1;
-    if (s.superscript === 1 || s.superscript === -1 || (s.scale ?? 1) !== 1) {
-      scl = s.superscript === 0 ? s.scale! : 0.75;
+    const scl = segScale(s);
+    if (scl !== 1) {
       const dy = s.superscript === 1 ? -font.size / 4 : s.superscript === -1 ? font.size / 4 : 0;
       const g = new Group();
       const m = new Matrix33();
@@ -99,13 +108,14 @@ const QUALITY_SYMBOL: ReadonlyArray<[RegExp, string]> = [
 /**
  * 把和弦**文字**（`Cm`、`B♭7`、`C♯m`、`Fm/A♭`、`Cadd9`）解析成分段。
  *
- * `plain` 为真时不分段、整串原文一段（见函数体开头的注释）。
+ * `plain` 为真时排成简单文本（见函数体开头的注释）。
+ * `side`：根音/低音的升降号写在字母前还是后（样式键 `accidental-side`）；不给 = 富文本照原文、简单文本写在前。
  *
  * 文本谱里和弦本来就是写死的字符串（`"hx:C♯m"` 或不带引号的 `Dm`），没有 MusicXML
  * 那样的 kind/degree 结构，所以按写法拆：根音 → 质量后缀 → `/低音`。
  * 认不出来的整段按原文排，不猜。
  */
-export function chordTextSegs(text: string, plain = false): HarmonySeg[] {
+export function chordTextSegs(text: string, plain = false, side?: AccidentalSide): HarmonySeg[] {
   const segs: HarmonySeg[] = [];
   const src = text.trim();
   if (plain) {
@@ -127,8 +137,10 @@ export function chordTextSegs(text: string, plain = false): HarmonySeg[] {
         emit(str);
         return "";
       }
-      if (m.acc) emit(SHARP_CHARS.includes(m.acc) ? "#" : "b", true);
+      const acc = m.acc ? (SHARP_CHARS.includes(m.acc) ? "#" : "b") : "";
+      if (acc && side !== "after") emit(acc, true);
       emit(m.step);
+      if (acc && side === "after") emit(acc, true);
       return str.slice(m.len);
     };
     let rest = emitRoot(src);
@@ -157,7 +169,7 @@ export function chordTextSegs(text: string, plain = false): HarmonySeg[] {
     // 不是「字母打头」的和弦（例如汉字注记），原样排
     return [{ text: src, music: false, superscript: 0, dy: 0 }];
   }
-  pushStepAlter(segs, root.step, root.acc, root.left);
+  pushStepAlter(segs, root.step, root.acc, side ? side === "before" : root.left);
   let rest = src.slice(root.len);
 
   // 低音：`/G`、`/A♭`
@@ -200,7 +212,7 @@ export function chordTextSegs(text: string, plain = false): HarmonySeg[] {
   if (bass) {
     segs.push({ text: "/", music: false, superscript: 0, dy: 0 });
     const b = chordStepAlter(bass);
-    if (b) pushStepAlter(segs, b.step, b.acc, b.left);
+    if (b) pushStepAlter(segs, b.step, b.acc, side ? side === "before" : b.left);
     else segs.push({ text: bass, music: false, superscript: 0, dy: 0 });
   }
   return segs;

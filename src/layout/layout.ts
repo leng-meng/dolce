@@ -5,13 +5,13 @@ import { paginate } from "../jianpu/vertical";
 import { identityPlan, walkPlay } from "../jianpu/expand";
 import { Fraction } from "../common/fraction";
 import { Point } from "../common/geom";
-import { GlyphCodes } from "../smufl/smufl";
 import { BandItem, bandTop, stackUpperBand } from "./upperband";
 import { BarStyle, StartStopDiscontinue } from "../score/enums";
-import { addEndingBracket, labelBaseline } from "./ending";
+import { addEndingBracket, labelBaseline } from "../engrave/ending";
+import { TupletGlyph } from "../engrave/tuplet";
 import type { Font } from "./font";
 import { measureDuration, type JChord, type JMeasure, type JNote, type JScore } from "./input";
-import { getOrNull, PageItem, GraphicPath, Group, TextFrame, SmuflText, JpNumber, Lyric, Tie, Slur, slurStyleOf, type SlurStyle, type SlurTieBase } from "./pageitem";
+import { getOrNull, PageItem, Group, TextFrame, SmuflText, JpNumber, Lyric, Tie, slurStyleOf, type SlurStyle, type SlurTieBase } from "./pageitem";
 import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, BeamLine, EntryItemInfo, entryBounds, normalizeEntryX, placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "./entry";
 import { LayoutOptions } from "./options";
 
@@ -36,7 +36,7 @@ export class Line {
   /** Arcs drawn on this line, in line coordinates (see clipBarlinesUnderSlurs). */
   slurTies: SlurTieBase[] = [];
   /** 三连音括线的**墨迹盒**（绝对，相对 `Line.group`）。`addTuplet` 现画现记：
-   *  括线是 GraphicPath + SmuflText 拼的，事后从 bound 反推不如画的时候顺手记准。
+   *  括线是 GraphicPath + SMuFL 数字拼的（engrave/tuplet.ts），事后从 bound 反推不如画的时候顺手记准。
    *  上方带堆叠（`stackAbove`）与房号车道都读它。 */
   tupletBoxes: {
     key: object; x0: number; x1: number; top: number; bottom: number;
@@ -92,7 +92,9 @@ export class Line {
       const smallDist = e instanceof NoteEntry && !(next instanceof Barline);
       const it = new EntryItemInfo();
       it.entry = e;
-      it.dist = dist;
+      // 后一个想多空一截（临时记号，`Entry.leadWant`）：当作这道空档更窄，水位法就先把它填起来，
+      // 填满后它比别的空档宽出正好那一截；余量不够时按比例少给，不会把行撑出版心
+      it.dist = dist - next.leadWant;
       it.rate = smallDist ? 2 : 1;
       if (next instanceof TimeSig) it.rate = 0.1;
       infos.push(it);
@@ -714,15 +716,14 @@ export class Line {
     // 表情/跳转记号**不在这里**：它们的纵向位置是堆叠之后才定的（`placeDirections`
     // 要跟被弧抬过的和弦排齐），这会儿的盒子还是错的。定完之后由 `placeDirections`
     // 自己追加进 `bandBoxes`，房号的车道照样算得到它们。
-    // layer 2：转调标记（144 首）。**判避让要用 `TextFrame.bound`**——`y` 是基线，
-    // `bound.top` 才是墨迹上缘；`KeySig` 构造里已经调过 `update()`，宽高是准的。
+    // layer 2：转调标记（144 首）。盒子取 `KeySig.labelBox`（entry 组坐标，跟着 `Group.update` 的平移走）。
     for (const e of this.entries) {
       if (!(e instanceof KeySig)) continue;
-      const tf = e.label;
+      const b = e.labelBox;
       items.push({
         key: e.group,
-        x0: e.group.x + tf.x, x1: e.group.x + tf.x + tf.width,
-        top: e.group.y + tf.y + tf.bound.top, bottom: e.group.y + tf.y + tf.bound.bottom,
+        x0: e.group.x + b.left, x1: e.group.x + b.right,
+        top: e.group.y + b.top, bottom: e.group.y + b.bottom,
         layer: 2, kind: "key",
       });
     }
@@ -1362,61 +1363,25 @@ export class Line {
       const tupGrp = new Group();
       tupGrp.x = left;
       tupGrp.y = ypos;
-      const path = new GraphicPath();
-      path.classes.add("tuplet-line"); // line-check 的 V12 靠它认（见 browser.ts::CLS_TAGS）
-      // 线宽与「脚」长与房号括线同源（原书量的 bracket 那一类）
-      path.strokeWidth = opt.bracketWidth > 0 ? opt.bracketWidth : 1;
-      path.fill = false;
-      path.stroke = true;
-      path.strokeColor = opt.color;
-      const txt = new SmuflText(opt);
-      txt.color = opt.color;
-      txt.text = GlyphCodes.tuplet3;
-      // 数字要**按墨迹**与横线上下、左右都居中。这里自己拿 SMuFL 元数据算，
-      // **不走 SmuflText.bound**：那个 bound 是从元数据直接换算的，y 轴还是 SMuFL 的
-      // 「上为正」，与页面坐标反号（top/bottom 也因此对调）。拿它算墨迹中心会把数字
-      // 往上推整整一倍墨迹高的一半（看着就是“飘在括线上方”）。
-      // 按字号估偏移（0.28em 那种）同样不准——Bravura 的 tuplet 字形墨迹只占 em 的一小截。
-      const box = opt.smuflMeta.getBBox(GlyphCodes.tuplet3);
-      if (!box) throw new Error("no smufl bbox: tuplet3");
-      const sp = txt.font.size / 4; // SMuFL：字号 = 4 个 staff space
-      const inkCx = ((box.bBoxSW[0] + box.bBoxNE[0]) / 2) * sp;
-      const inkCy = -((box.bBoxSW[1] + box.bBoxNE[1]) / 2) * sp; // 页面坐标上为负
-      const inkHalfW = ((box.bBoxNE[0] - box.bBoxSW[0]) / 2) * sp;
-      txt.x = width / 2 - inkCx;
-      txt.y = y - inkCy;
-      // 缺口按数字的**墨迹宽**开（原先写死的 numberSize/3 与字形无关，
-      // 书级重排那一路的小字号下会宽出一大截空），两边各留一道约 0.15em 的气。
-      const halfGap = inkHalfW + txt.font.size * 0.15;
-      const inkHalfH = ((box.bBoxNE[1] - box.bBoxSW[1]) / 2) * sp;
-      // 线那一截的顶（相对 tupGrp，负 = 上方）：括线是横线那条，两段弧是弧顶
-      let lineTop = y - path.strokeWidth / 2;
-      let numY = y; // 数字墨迹中心落的高度
-      if (opt.tupletStyle === "arc") {
-        // **两段弧**：同页 slur 那条月牙从中间挖掉数字那一截（`SlurStyle.gap`），
-        // 两端照样收尖、断口处是弧中段的厚度；弧高、厚度、描边全随 `slurStyleOf`。
-        const arc = new Slur();
-        arc.init(new Point(0, 0), new Point(width, 0), {
-          ...slurStyleOf(opt),
-          gap: { x0: width / 2 - halfGap, x1: width / 2 + halfGap },
-        });
-        arc.update();
-        arc.classes.add("tuplet-arc");
-        tupGrp.add(arc);
-        lineTop = arc.y;
-        // 数字骑在弧顶那条线上（弧在断口处已接近顶点，取包围盒顶再往下半个厚度）
-        numY = arc.y + opt.slurTieThickness / 4;
-        txt.y = numY - inkCy;
-      } else {
-        path.moveTo(0, 0);
-        path.lineTo(0, y);
-        path.lineTo(width / 2 - halfGap, y);
-        path.moveTo(width, 0);
-        path.lineTo(width, y);
-        path.lineTo(width / 2 + halfGap, y);
-        tupGrp.add(path);
-      }
-      tupGrp.add(txt);
+      // 画法走公共那一份（engrave/tuplet.ts）：括号与五线谱同一套，两段弧与同页 slur 同一条月牙；
+      // 数字是 SMuFL 的 tuplet 字形，按**墨迹**居中在横线/弧顶上，断口按数字墨迹宽开。
+      // 线宽与「脚」长与房号括线同源（原书量的 bracket 那一类）。
+      const arcStyle = opt.tupletStyle === "arc";
+      const tg = new TupletGlyph(
+        arcStyle ? new Point(0, 0) : new Point(0, y),
+        arcStyle ? new Point(width, 0) : new Point(width, y),
+        3,
+        {
+          kind: arcStyle ? "arc" : "bracket",
+          color: opt.color,
+          music: opt.smuflFont,
+          meta: opt.smuflMeta,
+          lineWidth: opt.bracketWidth > 0 ? opt.bracketWidth : 1,
+          foot: -y,
+          arc: slurStyleOf(opt),
+        },
+      );
+      for (const it of tg.items) tupGrp.add(it);
       this.group.add(tupGrp);
       // 墨迹盒现画现记（见 `Line.tupletBoxes`）：横线在 `y`（负 = 上方），竖脚落到 0，
       // 数字骑在横线上、上下各半个墨迹高。
@@ -1428,11 +1393,11 @@ export class Line {
         key: tupGrp,
         x0: left,
         x1: left + width,
-        top: ypos + lineTop,
+        top: ypos + tg.lineTop,
         bottom: ypos,
-        numX0: left + width / 2 - halfGap,
-        numX1: left + width / 2 + halfGap,
-        numTop: ypos + numY - inkHalfH,
+        numX0: left + width / 2 - tg.halfGap,
+        numX1: left + width / 2 + tg.halfGap,
+        numTop: ypos + tg.numBox.top,
       });
     }
   }

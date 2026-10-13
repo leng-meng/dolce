@@ -212,7 +212,7 @@ function shapeVisitor(font: opentype.Font, out: Shape[]): ItemVisitor<void> {
     },
     text: (item) => {
       // SMuFL **转曲**：PPT 里不能指望装了 Bravura，字形拆成 custGeom 路径
-      if (item instanceof SmuflText) {
+      if (item instanceof SmuflText || item.classes.has("smufl")) {
         const pp = item.pos(null);
         const size = item.font.size * item.matrix.scaleY;
         const scale = size / font.unitsPerEm;

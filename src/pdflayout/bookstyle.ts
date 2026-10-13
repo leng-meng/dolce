@@ -55,6 +55,10 @@ export interface BookMetrics {
   chordToNoteEm: number; // 和弦 baseline → 音符墨迹上缘
   /** 和弦排成纯文本（原书就是一行普通文字，没有 SMuFL 字形）。见 LayoutOptions.chordPlainText。 */
   chordPlain?: boolean;
+  /** 升降号写在字母前/后（见 LayoutOptions.accidentalSide）。 */
+  accidentalSide?: "before" | "after";
+  /** 临时记号的样子；不给 = `classic`（照原书）。见 LayoutOptions.accidentalStyle。 */
+  accidentalStyle?: "csym" | "classic";
   lyricToLyricEm: number; // 相邻歌词行 baseline 差
 
   // —— 线与弧 ——
@@ -382,7 +386,7 @@ export function validateBookStyle(s: unknown): { style: BookStyle; errors: strin
   if (!(style.page.w > 0 && style.page.h > 0)) errors.push("页面尺寸无效");
   const m = style.metrics;
   for (const [k, v] of Object.entries(m)) {
-    if (typeof v === "boolean") continue; // chordPlain 这类开关
+    if (typeof v === "boolean" || typeof v === "string") continue; // chordPlain、accidentalStyle 这类开关
     if (typeof v !== "number" || !Number.isFinite(v)) errors.push(`metrics.${k} 无效：${v}`);
   }
   return { style, errors };

@@ -81,7 +81,7 @@
   `repeat-dot-diameter`）写裸数 pt。例：`@jianpu { system-gap: 0.8575em; beam-top: 0.1393em; verse-numbers: auto; }`。
   数值原样存进字段、不在读样式表时乘字号，所以重排结果逐位不变。
 - **原样文档布局**（文本谱、MusicXML、多声部 123/ABC 的原样档）也读 `@jianpu`：`keys.ts` 的 `original` 一列，只给内置方言表用到的键配了
-  （`beam-width` `lyric-gap` `lyric-stack` `system-gap`，及只有这一路有的 `voice-gap` `barline-height` `double-barline-gap` `dash-width` `dash-half-length`）。
+  （`beam-width` `lyric-gap` `lyric-stack` `system-gap`，及只有这一路有的 `voice-gap` `barline-height` `double-barline-gap`）。
   裸数 pt，`em` = 音符字号。字号字体照常写在角色上（`note { size; family }`、`lyric` `verseNum` `chord { size }`…）。以前的 `@pu` 块已删。
 
 ### 2.2 `@media` 维度

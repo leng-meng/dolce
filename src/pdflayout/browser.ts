@@ -57,8 +57,8 @@ function dashInkShift(opt: LayoutOptions): number {
 const CLS_TAGS = ["ending", "ending-line", "section-word", "key-change", "chord", "direction", "tuplet-line", "grace", "grace-line", "artic"];
 
 function roleOfItem(it: TextFrame, opt: LayoutOptions): StyleRole {
-  // 和弦是 layout/harmony.ts 造的普通 TextFrame，只有 classes 认得出来（见那边的注释）
-  if (it.classes.has("chord-music")) return "smufl";
+  // 和弦是 engrave/chord.ts 造的普通 TextFrame，只有 classes 认得出来（见那边的注释）
+  if (it.classes.has("chord-music") || it.classes.has("smufl")) return "smufl";
   if (it.classes.has("chord")) return "chord";
   // 表情/跳转记号：力度记号走乐谱字体；**中文记号**（「结束句」）走歌词那档的报宋
   //（和弦那档是 Times，中文字会一路回退到魏碑上去）；西文的 `rit.`/`Fine` 仍随和弦。

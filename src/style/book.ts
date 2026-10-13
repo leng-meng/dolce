@@ -107,8 +107,11 @@ export function applyBookPreset(opt: LayoutOptions, s: BookStyle): void {
   opt.verseNumbers = s.layout.verseNumbers ?? "auto";
   opt.bracketFoot = m.bracketFootEm && m.bracketFootEm > 0 ? em(m.bracketFootEm) : 0;
   opt.chordGap = em(m.chordToNoteEm);
-  // 原书的和弦是纯文本（见 layout/harmony.ts）；样式表没写 `chord-plain` 时缺省即为真
+  // 原书的和弦是纯文本（见 engrave/chord.ts）；样式表没写 `chord-plain` 时缺省即为真
   opt.chordPlainText = m.chordPlain !== false;
+  // 临时记号照原书的样子（五线谱升降号挂在数字左上），样式表没写 `accidental-style` 时缺省即为 classic
+  opt.accidentalStyle = m.accidentalStyle ?? "classic";
+  opt.accidentalSide = m.accidentalSide;
   opt.sectionWordSize = s.roles.sectionWord.size;
   opt.pageFurniture = "none";
 }

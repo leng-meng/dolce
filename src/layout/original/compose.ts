@@ -14,12 +14,19 @@
 // 由 ScorePainter 直接按 id 取用，不必反查 SVG，也不依赖对象身份（重新解析一遍 id 不变）。
 
 import { Font } from "../font";
-import { graceGeometry } from "../../common/gracenote";
+import { graceGeometry } from "../../engrave/grace";
 import { Matrix33, Point, type Rect } from "../../common/geom";
 import { GraphicLine, GraphicPath, Group, PageItem, type PathSeg, Slur, TextFrame } from "../pageitem";
-import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../harmony";
-import { jpBarlineItems, jpDot, jpTimeSigItems } from "../jpglyph";
-import type { BarlineSpec } from "../entry";
+import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../../engrave/chord";
+import { BarlineGlyph, type BarlineSpec } from "../../engrave/barline";
+import { jpDot } from "../../engrave/dot";
+import { TimeSigGlyph } from "../../engrave/timesig";
+import { KeyLabel, keyNameOf } from "../../engrave/keysig";
+import { EQ_PAD_EM } from "../../engrave/spacing";
+import { addEndingBracket } from "../../engrave/ending";
+import { TupletGlyph } from "../../engrave/tuplet";
+import { sustainDash } from "../../engrave/dash";
+import { AccidentalGlyph, type AccidentalKind } from "../../engrave/accidental";
 import { BarStyle } from "../../score/enums";
 import type { Metadata, NoteElement } from "../../pu/ast";
 import ORIGINAL_SS from "../../style/books/original.ss?raw";
@@ -71,7 +78,6 @@ interface OriginalCtx {
   doc: DocView;
   placed: PlacedScore | null;
   digitFont: Font;
-  _accFont: Font | null;
   pageWidth: number;
   pageHeight: number;
   /** 连续长图裁紧后，整页要平移多少（把墨迹推到左侧留白处） */
@@ -114,7 +120,7 @@ function barlineBlocks(voices: readonly PlacedVoice[]): PlacedVoice[][] {
   return blocks.filter((b) => b.length > 0);
 }
 
-/** 实心圆。谱面/混排/文本谱共用一份（`jpglyph.ts::jpDot`，四段贝塞尔的标准正圆）。
+/** 实心圆。谱面/混排/文本谱共用一份（`engrave/dot.ts::jpDot`，四段贝塞尔的标准正圆）。
  *  这里原先是两段近似（控制点 1.34r），腰部比正圆略胖。 */
 const dot = (color: number, cx: number, cy: number, r: number): GraphicPath =>
   jpDot(cx, cy, r, color);
@@ -325,18 +331,6 @@ function digitOrigin(c: OriginalCtx, ch: string): { dx: number; dy: number; b: R
     dy: -(b.top + b.bottom) / 2,
     b,
   };
-}
-
-/** 升降号用的 Bravura 字号：让 ♯ 的墨迹高与数字墨迹高相当。 */
-function accidentalFont(c: OriginalCtx): Font {
-  if (!c._accFont) {
-    const probe = new Font("Bravura", 100);
-    const pb = probe.charBound(ACCIDENTAL_GLYPH.sharp!);
-    const inkAt100 = Math.abs(pb.bottom - pb.top) || 68;
-    // jpwabc 那边升降号字号 = 数字字号×0.8，换算成墨迹约为数字墨迹的 0.75
-    c._accFont = new Font("Bravura", (c.metrics.ink.noteHeight * 0.78 * 100) / inkAt100);
-  }
-  return c._accFont;
 }
 
 /**
@@ -576,13 +570,12 @@ function keyLineInk(c: OriginalCtx, meta: Metadata): { top: number; bottom: numb
   if (mt) {
     const eq = headFont.charBound("=");
     const meterY = (eq.top + eq.bottom) / 2 + m.note.beamWidth / 2;
-    const r = jpTimeSigItems(mt.numerator, mt.denominator, {
+    const r = new TimeSigGlyph(mt.numerator, mt.denominator, {
       height: m.note.barlineHeight, centerY: 0, ruleWidth: m.note.beamWidth, color: c.ink, font: headFont,
     });
-    const up = r.items[0] as TextFrame;
-    const lo = r.items[1] as TextFrame;
-    top = Math.min(top, meterY + up.y + up.font.charBound(up.text).top);
-    bottom = Math.max(bottom, meterY + lo.y + lo.font.charBound(lo.text).bottom);
+    const ink = r.box();
+    top = Math.min(top, meterY + ink.top);
+    bottom = Math.max(bottom, meterY + ink.bottom);
   }
   return { top, bottom };
 }
@@ -662,29 +655,38 @@ function paintHeaderItems(c: OriginalCtx, root: Group, songIndex: number, system
 
   const headFont = new Font(m.font.text, m.size.keyMeter);
   const tonic = meta.tonic ?? "1";
-  // 调号里的升降号用真符号，且按惯例写在字母**前**（`bE` → `1=♭E`）
-  const modeText = meta.mode
-    ? meta.mode.replace(/^([A-G])([b#$♭♯])$/, "$2$1").replace(/b/g, "\u266D").replace(/#/g, "\u266F")
-    : "";
   let x = systemLeft;
-  const keyFrom = root.children.length;
-  if (modeText) {
-    // `=` 两侧各让一点（连写「1=F」挤成一团，用户口径），三段分开画
-    const eqPad = m.size.keyMeter * 0.2;
-    const eqX = x + headFont.measureText(tonic) + eqPad;
-    const modeX = eqX + headFont.measureText("=") + eqPad;
-    root.add(text(tonic, x, keyY, headFont, c.ink));
-    root.add(text("=", eqX, keyY, headFont, c.ink));
-    root.add(text(modeText, modeX, keyY, headFont, c.ink));
-    for (const it of root.children.slice(keyFrom)) it.classes.add("hdr-keysig");
+  // 调号走公共那一份（engrave/keysig.ts）：升降号是 SMuFL csym 字形并抬高，`=` 两侧各让一点。
+  const keyName = meta.mode ? keyNameOf(meta.mode) : null;
+  if (keyName) {
+    const k = new KeyLabel(tonic, keyName, {
+      font: headFont,
+      music: new Font("Bravura", headFont.size),
+      color: c.ink,
+      side: m.look.accidentalSide,
+      classes: ["hdr-keysig"],
+    });
+    for (const it of k.items) {
+      it.x += x;
+      it.y += keyY;
+      root.add(it);
+    }
     // 调号 → 拍号的**墨迹**间距 = 「=」→ 调号的墨迹间距（用户口径）；分数线左端就是拍号墨迹左缘
-    const eqInk = headFont.charBound("=");
-    const modeInk = headFont.charBound(modeText);
-    const inkGap = modeX + modeInk.left - (eqX + eqInk.right);
-    x = modeX + modeInk.right + inkGap;
+    x += k.inkRight + (k.nameInkLeft - k.eqInkRight);
+  } else if (meta.mode) {
+    // 认不出的调名（不是「字母 + 升降」）照原文写，`=` 两侧照样让空
+    const pad = headFont.size * EQ_PAD_EM;
+    for (const [i, part] of [tonic, "=", meta.mode].entries()) {
+      if (i > 0) x += pad;
+      const t = text(part, x, keyY, headFont, c.ink);
+      t.classes.add("hdr-keysig");
+      root.add(t);
+      x += headFont.measureText(part);
+    }
+    x += pad;
   }
   // 拍号的分数线与调号的「=」**视觉居中**：按「=」墨迹的竖直中心定分数线（用户口径）。
-  // jpTimeSigItems 把分数线描边中心放在 centerY − ruleWidth/2，这里补回那半个线宽。
+  // TimeSigGlyph 把分数线描边中心放在 centerY − ruleWidth/2，这里补回那半个线宽。
   const eq = headFont.charBound("=");
   const meterY = keyY + (eq.top + eq.bottom) / 2 + m.note.beamWidth / 2;
   const meterFrom = root.children.length;
@@ -723,10 +725,10 @@ function paintMeter(c: OriginalCtx,
   meter: { numerator: number; denominator: number },
   font: Font,
 ): number {
-  // 尺寸走公共那一份：**一切长度都是小节线高度的比例**（jpglyph.ts::jpTimeSigItems），
+  // 尺寸走公共那一份：**一切长度都是小节线高度的比例**（engrave/timesig.ts::TimeSigGlyph），
   // 两个数字横向居中于分数线。原先这里各按 `font.size` 的 0.42/0.62/0.1 给，
   // 与谱面、混排三处口径各不相同。
-  const r = jpTimeSigItems(meter.numerator, meter.denominator, {
+  const r = new TimeSigGlyph(meter.numerator, meter.denominator, {
     height: c.metrics.note.barlineHeight,
     centerY: 0,
     ruleWidth: c.metrics.note.beamWidth, // 分数线与减时线同粗（用户口径）
@@ -798,15 +800,9 @@ function paintVoice(c: OriginalCtx,
       continue;
     }
     if (it.element.kind === "sustain") {
-      // 增时线：与数字等高处的一条横线
-      const line = new GraphicLine();
-      // 数字是按墨迹居中于 baseline 画的，增时线也要落在同一条中线上
-      line.p0.x = x - m.note.dashHalfLength;
-      line.p0.y = base;
-      line.p1.x = x + m.note.dashHalfLength;
-      line.p1.y = base;
-      line.strokeColor = c.ink;
-      line.strokeWidth = m.note.dashWidth;
+      // 增时线：数字字体的「-」（engrave/dash.ts，与混排、简谱引擎同一个字形）。
+      // 数字是按墨迹居中于 baseline 画的，增时线的墨心也落在同一条中线上
+      const line = sustainDash(x, base, { font: c.digitFont, color: c.ink });
       root.add(line);
       // 增时线有自己的 id（`Chord.sustains[]` 各带一个），可视化编辑按它点选这一条
       const sid = c.doc?.idOf.get(it.element);
@@ -852,15 +848,6 @@ function paintArc(c: OriginalCtx, root: Group, x0: number, x1: number, y: number
   return arc;
 }
 
-/** 多连音弧线的半段：从端点 (x, y) 弯到中间断口 (xMid, apex)。 */
-function paintTupletHalf(c: OriginalCtx, root: Group, x: number, y: number, xMid: number, apex: number): void {
-  const p = stroke(c.ink, 1.3);
-  p.moveTo(x, y);
-  const c1x = x + (xMid - x) * 0.45;
-  p.cubicTo(c1x, apex + (y - apex) * 0.15, xMid - (xMid - x) * 0.18, apex, xMid, apex);
-  root.add(p);
-}
-
 function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, baseline: number, pageIndex: number): void {
   const m = c.metrics;
   const x0 = left + mk.x0;
@@ -877,18 +864,18 @@ function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, ba
       break;
     }
     case "tuplet": {
-      // 多连音：弧线在正中**被连音数字断开**（原版如此），左右各画半段
+      // 多连音：弧线在正中**被连音数字断开**（原版如此）。画法走公共那一份（engrave/tuplet.ts）：
+      // 与同页 slur 同一条月牙挖掉数字那一截，数字是 SMuFL 的 tuplet 字形、按墨迹坐在弧顶。
       const y = baseline + (mk.y ?? m.note.slurY - (mk.level - 1) * m.note.slurLevelStep);
-      const n = mk.mark.end - mk.mark.start + 1;
-      const font = new Font(m.font.text, m.size.chord);
-      const label = String(n);
-      const w = font.measureText(label);
-      const cx = (x0 + x1) / 2;
-      const half = w / 2 + m.ink.noteHeight * 0.16; // 数字两侧的留白
-      const apex = y - m.note.slurArc;
-      paintTupletHalf(c, root, x0, y, cx - half, apex);
-      paintTupletHalf(c, root, x1, y, cx + half, apex);
-      root.add(text(label, cx - w / 2, apex + m.size.chord * 0.36, font, c.ink));
+      // 连音数取模型里的实际数（`caption` = tupletActual），没有才按跨了几个符号数
+      const n = Number(mk.mark.caption) || mk.mark.end - mk.mark.start + 1;
+      const tg = new TupletGlyph(new Point(x0, y), new Point(x1, y), n, {
+        kind: "arc",
+        color: c.ink,
+        music: new Font("Bravura", c.digitFont.size),
+        arc: jianpuSlurStyle(m, c.ink),
+      });
+      for (const it of tg.items) root.add(it);
       break;
     }
     case "crescendo":
@@ -904,19 +891,21 @@ function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, ba
     }
     case "volta": {
       const y = baseline + m.note.voltaY - (mk.level - 1) * m.note.levelStep;
-      const drop = m.ink.noteHeight * 0.59;
-      root.add(line(c.ink, x0, y, x1, y, 1.4));
-      if (!mk.openLeft) root.add(line(c.ink, x0, y, x0, y + drop, 1.4));
-      // `]/`（诗歌本）与 `[…/`（番茄）表示右端不封口
-      if (!mk.openRight && mk.mark.openEnd !== true) root.add(line(c.ink, x1, y, x1, y + drop, 1.4));
-      // 跨行续过来的房子不再重复房号
-      if (mk.mark.caption && !mk.openLeft) {
-        // 房号在钩的**下方**（原版基线落在钩底再往下 4/1000 版面），压在线上会糊成一团
-        const font = new Font(m.font.text, m.size.chord * 0.9);
-        root.add(
-          text(mk.mark.caption, x0 + m.ink.noteHeight * 0.18, y + drop + m.ink.noteHeight * 0.24, font, c.ink),
-        );
-      }
+      // 画法走公共那一份（engrave/ending.ts，与简谱引擎、混排同一套）：比例照混排——
+      // 竖脚与房号字号都是谱高的一半（谱高取小节线高），房号在左脚右侧、横线下方按墨迹定位。
+      const H = m.note.barlineHeight;
+      const size = H * 0.5;
+      const lw = m.stroke.barline;
+      const showLabel = !!mk.mark.caption && !mk.openLeft; // 跨行续过来的房子不再重复房号
+      addEndingBracket(root, {
+        x0, x1, top: y, drop: H * 0.5,
+        leftFoot: !mk.openLeft,
+        // `]/`（诗歌本）与 `[…/`（番茄）表示右端不封口
+        rightFoot: !mk.openRight && mk.mark.openEnd !== true,
+        lineWidth: lw, color: c.ink,
+        label: showLabel ? { text: mk.mark.caption!, font: c.digitFont.makeWithSize(size), dx: lw + size * 0.4 } : undefined,
+        classes: { line: "ending-line", label: "ending" },
+      });
       break;
     }
   }
@@ -967,7 +956,7 @@ function paintLayer(c: OriginalCtx,
       continue;
     }
     if (it.element.kind === "sustain") {
-      root.add(line(c.ink, x - 8, y - 5, x + 8, y - 5, 1.6));
+      root.add(sustainDash(x, y, { font, color: c.ink }));
       continue;
     }
     if (it.element.kind !== "note" || it.element.hidden) continue;
@@ -1001,7 +990,7 @@ function paintChord(c: OriginalCtx, g: Group, chord: string, x: number, baseline
   const m = c.metrics;
   const wordFont = new Font(m.font.text, m.size.chord);
   const musicFont = new Font("Bravura", m.size.chord);
-  const segs = chordTextSegs(chord);
+  const segs = chordTextSegs(chord, m.look.chordPlain, m.look.accidentalSide);
   const grp = layoutHarmonySegs(segs, wordFont, musicFont, c.ink);
   grp.x = x - harmonyWidth(segs, wordFont, musicFont) / 2;
   grp.y = baseline + m.note.chordY;
@@ -1023,28 +1012,14 @@ function paintNote(c: OriginalCtx,
 
   if (!note.hidden) {
     const ch = note.sound === "rhythm" ? "X" : String(note.pitch);
-    const { dx, dy, b } = digitOrigin(c, ch);
+    const { dx, dy } = digitOrigin(c, ch);
     g.add(text(ch, x + dx, baseline + dy, c.digitFont, c.ink));
 
-    // 变音记号：用 Bravura 的 SMuFL 字形，按**墨迹**定位——字号取到墨迹高与数字相当，
-    // 再把墨迹右缘贴到数字墨迹左缘、墨迹竖向中心对齐数字中心（降号略下移）。
-    // 靠固定偏移放会随字体不同而漂，测量最可靠。
-    const acc = note.accidental ? ACCIDENTAL_GLYPH[note.accidental] : undefined;
-    if (acc) {
-      const accFont = accidentalFont(c);
-      const ab = accFont.charBound(acc);
-      const inkW = ab.right - ab.left;
-      const inkCx = (ab.left + ab.right) / 2;
-      const inkCy = (ab.top + ab.bottom) / 2;
-      const digitInkLeft = x + dx + b.left;
-      const gap = m.ink.noteHeight * 0.1;
-      const cx = digitInkLeft - gap - inkW / 2;
-      // 竖向：墨迹中心落在数字墨迹顶稍下（照 jpwabc 的 numBnd.top 口径），降号再低一点
-      const cy =
-        baseline -
-        m.ink.noteHeight * 0.34 +
-        (note.accidental!.includes("flat") ? m.ink.noteHeight * 0.08 : 0);
-      g.add(text(acc, cx - inkCx, cy - inkCy, accFont, c.ink));
+    // 变音记号：画法与定位走公共那一份（engrave/accidental.ts，照混排：csym 字形、按数字墨迹盒定位）
+    const kind = note.accidental as AccidentalKind | undefined;
+    if (kind && ACCIDENTAL_GLYPH[kind]) {
+      const digit = { font: c.digitFont, text: ch, x: x + dx, y: baseline + dy };
+      g.add(new AccidentalGlyph(kind, digit, { music: new Font("Bravura", 20), color: c.ink, kind: m.look.accidentalStyle }).item);
     }
 
     // 八度点：高音在上、低音在下，同侧多点向外叠。
@@ -1107,7 +1082,7 @@ function paintNote(c: OriginalCtx,
 /**
  * 倚音：dir=-1 前倚音（画在左），dir=1 后倚音（画在右）。
  *
- * **几何走公共那一份**（`src/common/gracenote.ts`），简谱排版引擎那条路
+ * **几何走公共那一份**（`engrave/grace.ts`），简谱排版引擎那条路
  * （`layout.ts::addGraceNotes`）用的是同一套比例——两边各自落笔，坐标只算一次。
  */
 function paintGrace(c: OriginalCtx,
@@ -1280,7 +1255,7 @@ function paintBarline(c: OriginalCtx,
     paintMeter(c, root, x + m.stroke.doubleBarlineGap, baseline, el.temporaryMeter, font);
   }
 
-  // 粗细组合、反复点、线间距**全部走谱面那一路的画法**（jpglyph.ts::jpBarlineItems）。
+  // 粗细组合、反复点、线间距**全部走谱面那一路的画法**（engrave/barline.ts::BarlineGlyph）。
   // 原先这里是自成一套：填充 rect 而不是 GraphicLine、粗线 ×2.6、线距 barlineDoubleGap、
   // 反复点在 ±0.18H 且离线 6px——同一件事两种写法，改一处忘一处。
   // 纵向范围仍是文本谱自己的（`barlineHeight` 居中于基线、再加 spanHeight），
@@ -1288,7 +1263,7 @@ function paintBarline(c: OriginalCtx,
   const half = m.note.barlineHeight * 0.5;
   const spec = PU_BARLINE_SPEC[el.type];
   if (!spec) return null;
-  const r = jpBarlineItems(spec, el.type === "end", {
+  const r = new BarlineGlyph(spec, el.type === "end", {
     top: -half,
     bot: half + spanHeight,
     light: m.stroke.barline,
@@ -1296,7 +1271,7 @@ function paintBarline(c: OriginalCtx,
     dotRadius: m.stroke.repeatDotRadius,
     color: c.ink,
   });
-  // jpBarlineItems 的 x 从 0 起；文本谱的小节线是**居中于锚点**的
+  // BarlineGlyph 的 x 从 0 起；文本谱的小节线是**居中于锚点**的
   const ox = x - r.width / 2;
   const g = new Group();
   for (const item of r.items) {
@@ -1433,7 +1408,6 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     doc,
     placed: null,
     digitFont: new Font(m.font.note, m.size.note, m.font.noteBold),
-    _accFont: null,
     pageWidth: m.page.width,
     pageHeight: m.page.height,
     _pageShiftX: 0,

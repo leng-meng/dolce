@@ -1,13 +1,15 @@
 // 简谱谱行里的格位（Entry 层）与段落词落位；排版算法在 layout.ts 的 Line。
 
-import { jpBarlineItems, jpTimeSigItems } from "./jpglyph";
-import { Point } from "../common/geom";
+import { BarlineGlyph, type BarlineSpec } from "../engrave/barline";
+import { TimeSigGlyph } from "../engrave/timesig";
+import { KeyLabel, keyNameOfFifths } from "../engrave/keysig";
+import { ACCIDENTAL_CLEARANCE, AccidentalGlyph, accidentalKindOf } from "../engrave/accidental";
+import { Point, Rect } from "../common/geom";
 import type { CompressMode } from "../common/cjkpunct";
 import { Font } from "./font";
 import { GlyphCodes } from "../smufl/smufl";
-import { chordTextSegs, layoutHarmonySegs } from "./harmony";
-import { GraceAlter, GraceMetrics, GraceNote, graceAdvance, graceBottom, graceGeometry } from "../common/gracenote";
-import type { BarStyle } from "../score/enums";
+import { chordTextSegs, layoutHarmonySegs } from "../engrave/chord";
+import { GraceAlter, GraceMetrics, GraceNote, graceAdvance, graceBottom, graceGeometry } from "../engrave/grace";
 import type { JChord, JKey, JTime } from "./input";
 import { PageItem, GraphicPath, Group, TextFrame, GraphicLine, SmuflText, JpOctaveDot, JpNumber, Lyric } from "./pageitem";
 import type { LayoutOptions } from "./options";
@@ -23,6 +25,8 @@ export abstract class Entry {
    *  `calcXPos` 在给条目定位之前先把游标推过它——不这么做的话，
    *  倚音会贴着主音符往左伸，正好压在前一个音符上。 */
   leadSpace = 0;
+  /** 前面**想**多空出的宽（临时记号伸到数字左边那一截）：不占排版宽度，两端对齐时先填给它，见 `Line.adjust`。 */
+  leadWant = 0;
   constructor() {
     this.group.classes.add("entry");
   }
@@ -36,26 +40,39 @@ export abstract class Entry {
 }
 
 export class KeySig extends Entry {
-  /** 转调标记那个文本框。`liftOverChords` 要按它的墨迹框判避让，故留住引用。 */
-  readonly label: TextFrame;
+  /** 转调标记（「转1=♭B」）的第一个图元：`Group.update` 会把子级整体平移，盒子跟着它走。 */
+  private readonly anchor: TextFrame;
+  private readonly anchorX: number;
+  private readonly anchorY: number;
+  /** 建好时的占位盒（文字按字体盒、升降号按墨迹，见 `engrave/keysig.ts`），entry 组坐标。 */
+  private readonly box0: Rect;
   constructor(key: JKey, opt: LayoutOptions) {
     super();
-    const names = ["Cb", "Gb", "Db", "Ab", "Eb", "Bb", "F", "C", "G", "D", "A", "E", "B", "F#", "C#"];
-    const name = names[key.fifths + 7];
-    const tf = new TextFrame();
-    tf.classes.add("key-change"); // 见 browser.ts::roleOfItem —— line-check 的 L12 靠它认
-    tf.color = opt.color;
-    tf.y = -opt.numberSize;
-    tf.text = `转1=${name}`;
-    tf.font = opt.lrcFont.scaled(0.6);
-    const w = tf.measureText();
-    tf.x = -w / 2;
-    // `liftKeySigOverChords` 要按 width/bound 判避让，这里就把尺寸算出来
-    //（`Line.load` 之后到 `group.update()` 之间还隔着好几步）。
-    tf.update();
-    this.label = tf;
-    this.group.add(tf);
+    const k = new KeyLabel("1", keyNameOfFifths(key.fifths), {
+      font: opt.lrcFont.scaled(0.6),
+      music: opt.smuflFont,
+      color: opt.color,
+      prefix: "转",
+      side: opt.accidentalSide,
+      classes: ["key-change"], // 见 browser.ts::roleOfItem —— line-check 的 L12 靠它认
+    });
+    const dx = -k.width / 2;
+    const dy = -opt.numberSize;
+    for (const it of k.items) {
+      it.x += dx;
+      it.y += dy;
+      it.update();
+      this.group.add(it);
+    }
+    this.anchor = k.items[0] as TextFrame;
+    this.anchorX = this.anchor.x;
+    this.anchorY = this.anchor.y;
+    this.box0 = k.box().offset(dx, dy);
     this.group.data = this;
+  }
+  /** 转调标记的占位盒，entry 组坐标（上方带堆叠按它判避让）。 */
+  get labelBox(): Rect {
+    return this.box0.offset(this.anchor.x - this.anchorX, this.anchor.y - this.anchorY);
   }
   entryItem(): PageItem | null {
     return null;
@@ -89,8 +106,8 @@ export class TimeSig extends Entry {
   layout(opt: LayoutOptions): void {
     const top = opt.jpStaffTop;
     const bot = opt.jpStaffBottom;
-    // 尺寸一律按**小节线高度**的比例（见 jpglyph.ts::jpTimeSigItems），三条简谱路同一份。
-    const r = jpTimeSigItems(this.beats, this.beatType, {
+    // 尺寸一律按**小节线高度**的比例（见 engrave/timesig.ts::TimeSigGlyph），三条简谱路同一份。
+    const r = new TimeSigGlyph(this.beats, this.beatType, {
       height: bot - top,
       centerY: (bot + top) / 2,
       // 分数线的粗细：原书量到的才 0.3pt（比小节线 1.0 还细一半多），
@@ -100,8 +117,8 @@ export class TimeSig extends Entry {
       // **与音符同一份字体**（用户口径）。原先 `withBold()`：同一个字族但字重不同，
       // 导出到 .pptx 里就是 YaHei Bold 对 YaHei Regular，一眼看得出拍号比音符黑一档。
       font: opt.numberFont,
-      // 0 = 让 jpTimeSigItems 用它自己的默认比例（编辑器/成书两条路不变）。
-      // 竖向不在这里给：它只认拍值字号（jpglyph.ts::TIME_SIG_GAP_EM）。
+      // 0 = 让 TimeSigGlyph 用它自己的默认比例（编辑器/成书两条路不变）。
+      // 竖向不在这里给：它只认拍值字号（engrave/timesig.ts::TIME_SIG_GAP_EM）。
       digitRatio: opt.timeSigDigitRatio > 0 ? opt.timeSigDigitRatio : undefined,
       ruleLengthRatio: opt.timeSigRuleLenRatio > 0 ? opt.timeSigRuleLenRatio : undefined,
     });
@@ -179,7 +196,7 @@ const GRACE_ALTER_GLYPH: Record<GraceAlter, string | undefined> = {
   "double-flat": undefined,
 };
 
-/** 简谱这一路的倚音度量——折算成公共几何要的那几个数（见 common/gracenote.ts）。 */
+/** 简谱这一路的倚音度量——折算成公共几何要的那几个数（见 engrave/grace.ts）。 */
 function graceMetricsOf(opt: LayoutOptions): GraceMetrics {
   const bnd = opt.numberBound("1");
   return {
@@ -217,12 +234,12 @@ export class NoteEntry extends Entry {
     return this.number!.numberPos;
   }
   /** 和弦符号：排在音符正上方（以数字墨迹中心对齐）。
-   *  富文本分段（根音升降号走 SMuFL、后缀上标）复用 layout/harmony.ts，与五线谱、文本谱同一套。 */
+   *  富文本分段（根音升降号走 SMuFL、后缀上标）复用 engrave/chord.ts，与五线谱、文本谱同一套。 */
   static addHarmony(ch: JChord, opt: LayoutOptions, ent: NoteEntry, num: JpNumber, text = ch.harmony): void {
     if (!text || opt.chordSize <= 0) return;
     const wordFont = opt.numberFont.makeWithSize(opt.chordSize);
     const musicFont = opt.smuflFont.makeWithSize(opt.chordSize);
-    const g = layoutHarmonySegs(chordTextSegs(text, opt.chordPlainText), wordFont, musicFont, opt.color);
+    const g = layoutHarmonySegs(chordTextSegs(text, opt.chordPlainText, opt.accidentalSide), wordFont, musicFont, opt.color);
     g.classes.add("chord-group"); // 段落词要按它的位置让路，见 Line.addSectionWords
     g.update();
     g.x = num.x + num.cx - g.width / 2;
@@ -339,30 +356,23 @@ export class NoteEntry extends Entry {
     return above + options.jpBelowGap + (-oct - 1) * options.jpLowDotRung + 2 * options.jpDotRadius;
   }
 
+  /** 临时记号：画法与定位走公共那一份（engrave/accidental.ts，样子由 `accidentalStyle` 选）。
+   *  这会儿数字在条目组里还在原点（笔位 0、基线 0）。 */
   static addAccidental(it: JpNumber, options: LayoutOptions, ch: JChord, ent: NoteEntry): void {
-    const alt = ch.notes[0].jpAlter;
-    if (alt !== " ") {
-      const tf = new SmuflText(options);
-      tf.color = options.color;
-      if (options.smuflAsPath) tf.asPath = true;
-      let smufl: string;
-      switch (alt) {
-        case "b": smufl = GlyphCodes.accidentalFlat; break;
-        case "#": smufl = GlyphCodes.accidentalSharp; break;
-        case "n": smufl = GlyphCodes.accidentalNatural; break;
-        default: throw new Error("");
-      }
-      const yOffset = alt === "b" ? 0.1 : 0; // 简谱中降号下移
-      tf.text = smufl;
-      const kernMap: Record<string, number> = { "4": 0.1, "2": -0.07, "1": -0.07 };
-      let xx = -tf.font.size * 0.2;
-      xx += (kernMap[it.text[0]] ?? 0) * tf.font.size;
-      const numBnd = options.numberBound("1");
-      let yy = numBnd.top;
-      yy += options.smuflFont.size * yOffset;
-      const sc = 0.8;
-      tf.matrix.setAffine([sc, 0, 0, sc, xx * sc, yy]);
-      ent.addAccidental(tf);
+    const kind = accidentalKindOf(ch.notes[0].jpAlter);
+    if (!kind) return;
+    const acc = new AccidentalGlyph(kind, { font: options.noteFont, text: it.text, x: it.x, y: it.y }, {
+      music: options.smuflFont,
+      color: options.color,
+      meta: options.smuflMeta,
+      kind: options.accidentalStyle,
+    });
+    ent.addAccidental(acc.item);
+    // 给它让位要「软」的（`Entry.leadWant`）：升降号伸出数字笔位左边多少、再多留一道空，由 `Line.adjust`
+    // 两端对齐时**先**填给它；行已排满就不硬挤——`.jpwabc` 的行是原文定死的，硬让会把行末挤到下一行去。
+    // `classic`（成书照原书）原先就不让位，保持原样。
+    if (options.accidentalStyle !== "classic") {
+      ent.leadWant = Math.max(0, it.x - acc.box.left) + options.numberBound("1").height * ACCIDENTAL_CLEARANCE;
     }
   }
   /**
@@ -438,7 +448,7 @@ export class NoteEntry extends Entry {
   /**
    * **倚音**（`Chord.graceNotes`）：主音符左边的小号数字 + 减时线 + 连接钩。
    *
-   * **几何走公共那一份**（`src/common/gracenote.ts`）——文本谱那条路
+   * **几何走公共那一份**（`engrave/grace.ts`）——文本谱那条路
    * （`layout/original/compose.ts::paintGrace`）用的是同一套比例（照原版矢量量的），两边各自落笔。
    * 占位走 `Entry.leadSpace`：倚音在拍点**之前**唱，位置也该在主音符之前，
    * 直接往左伸会压住上一个音符。
@@ -584,7 +594,7 @@ export class NoteEntry extends Entry {
     }
   }
   /**
-   * 附点 —— **一个实心矢量圆**（三条简谱路统一，见 `jpglyph.ts`；八度点、反复点同理）。
+   * 附点 —— **一个实心矢量圆**（三条简谱路统一，见 `engrave/dot.ts`；八度点、反复点同理）。
    * 大小默认照字体里那个 `·`（`jpAugDotRadius`），展开档把它与八度点设成同一个值。
    *
    * **advance 照旧留给附点**（`JpNumber.augDotAdvance`）：横向间距走 `JpNumber.right`，
@@ -658,15 +668,6 @@ export class NoteEntry extends Entry {
 }
 
 /** 小节线的样子：粗细组合 + 反复点。与五线谱同一套画法（`‖:` 点在右、`:‖` 点在左）。 */
-export interface BarlineSpec {
-  /** MusicXML 的 bar-style。null = 普通细线。 */
-  style?: BarStyle | null;
-  /** `:‖`（反复回到前面）——两点画在左侧。 */
-  repeatBackward?: boolean;
-  /** `‖:`（反复段起点）——两点画在右侧。 */
-  repeatForward?: boolean;
-}
-
 export class Barline extends Entry {
   /** The vertical strokes, kept so `clipBarlinesUnderSlurs` can shorten them. */
   readonly lines: GraphicLine[] = [];
@@ -694,8 +695,8 @@ export class Barline extends Entry {
     const bot = opt.jpStaffBottom;
     this.defaultTop = top;
     this.bot = bot;
-    // 粗细组合、反复点、间距一律走公共那一份（jpglyph.ts）——文本谱也用它。
-    const r = jpBarlineItems(spec, final, {
+    // 粗细组合、反复点、间距一律走公共那一份（engrave/barline.ts）——文本谱也用它。
+    const r = new BarlineGlyph(spec, final, {
       top,
       bot,
       light: opt.barlineWidth, // musicpp lineWidths.lightBarline (pptutil.cpp:139)
@@ -762,7 +763,7 @@ export class Barline extends Entry {
   }
   entryItem(): PageItem | null {
     // **可能一个子级都没有**：`<bar-style>none</bar-style>` 的小节线什么也不画
-    //（见 jpglyph.ts::jpBarlineWidths），`children[0]` 就是 undefined——
+    //（见 engrave/barline.ts::barlineWidths），`children[0]` 就是 undefined——
     // 不收成 null 的话 `calcXPos` 里那句 `if (it !== null) x = it.x` 会直接崩。
     return this.group.children[0] ?? null;
   }

@@ -10,6 +10,7 @@ import { Matrix33, Point } from "../common/geom";
 // layout.ts 里的是**画出来的那条弧**，所以起个别名区分。
 import { GraphicPath, Group, Slur as SlurArc, TextFrame } from "../layout/pageitem";
 import { GlyphCodes } from "../smufl/smufl";
+import { BarStyle } from "../score/enums";
 import {
   BarGlyph,
   BeamVal,
@@ -35,16 +36,16 @@ import {
   mixedSlurStyle,
   fGe,
   fLt,
-  smuflBottom,
-  smuflTop,
   smuflWidth,
   slurEnds,
   tiedEnds,
   harmonyBand,
 } from "./model";
 import { Font } from "../layout/font";
-import { addEndingBracket } from "../layout/ending";
-import { layoutHarmonySegs } from "../layout/harmony";
+import { addEndingBracket } from "../engrave/ending";
+import { BarlineGlyph, type BarlineSpec } from "../engrave/barline";
+import { TupletGlyph } from "../engrave/tuplet";
+import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../engrave/chord";
 import { addLine, addSmufl, addSmuflScaled, chordGroup, STAFF_SYSTEM, translated, type StaffLeafData, type StaffSystemData } from "./prims";
 import { drawJianpuOverlay } from "./jianpuoverlay";
 
@@ -443,6 +444,7 @@ function drawTuplet(eng: MixedOptions, container: Group, obj: Tuplet): void {
   let pry = 0;
 
   const sign = above ? 1 : -1;
+  let bracket = false;
 
   if (nota === Notation.JianPu) {
     const ntl = chl.notes[0];
@@ -459,43 +461,26 @@ function drawTuplet(eng: MixedOptions, container: Group, obj: Tuplet): void {
     ply = pry = dot > 0 ? -4 : 3;
   } else {
     // determine bracket: use when stem direction matches above or no beams
-    let bracket = true;
+    bracket = true;
     if (obj.bracket !== null) {
       bracket = obj.bracket;
     } else if (above === chl.stemUp) {
       bracket = chl.beams.length === 0;
     }
-
     [ply, pry] = obj.staffEnds();
-
-    const hlen = 10;
-    if (bracket) {
-      const k = prx !== plx ? (pry - ply) / (prx - plx) : 0;
-      const dx = (prx - plx - 20) / 2;
-      const bpath = new GraphicPath();
-      bpath.fill = false;
-      bpath.stroke = true;
-      bpath.strokeColor = 0xff000000;
-      bpath.strokeWidth = 1;
-      bpath.moveTo(plx, ply + sign * hlen);
-      bpath.lineTo(plx, ply);
-      bpath.lineTo(plx + dx, ply + dx * k);
-      bpath.moveTo(prx, pry + sign * hlen);
-      bpath.lineTo(prx, pry);
-      bpath.lineTo(prx - dx, pry - dx * k);
-      container.add(bpath);
-    }
   }
 
-  const cx = (plx + prx) / 2;
-  const cy = (ply + pry) / 2;
-  const numStr = Tuplet.makeNumber(obj.timeModification.denominator);
-  const fsScale = eng.musicFont.size / 40;
-  const numW = TimeSig.width(eng.meta, obj.timeModification.denominator) * fsScale;
-  // 数字垂直居中：cy + 字形高/2（render.cpp:1455-1457 txt->height/2）。
-  const g0 = numStr[0] ?? "";
-  const numH = (smuflTop(eng.meta, g0) - smuflBottom(eng.meta, g0)) * fsScale;
-  addSmufl(container, numStr, cx - numW / 2, cy + numH / 2, eng.musicFont.size);
+  // 画法走公共那一份（engrave/tuplet.ts）：括号（横线 + 竖脚，数字坐在断口里）与简谱引擎同一套，
+  // 数字是 SMuFL 的 tuplet 字形、按墨迹居中。
+  const tg = new TupletGlyph(new Point(plx, ply), new Point(prx, pry), obj.timeModification.denominator, {
+    kind: bracket ? "bracket" : "number",
+    color: 0xff000000,
+    music: eng.musicFont,
+    meta: eng.meta,
+    lineWidth: 1,
+    foot: sign * 10,
+  });
+  for (const it of tg.items) container.add(it);
 }
 
 // -----------------------------------------------------------------------
@@ -742,12 +727,9 @@ export function drawHarmony(
     if (h.staff !== subStaff) continue;
     const mixedOffsetForRest =
       measureRest && h.offset.compareTo(new Fraction(0)) === 0 ? 15 : 0;
-    const segs = h.asText();
-
-    // 总宽照 musicpp TextBlock::width：上/下标按 0.75 缩放后的 advance。按未缩放算，A(sus4) 这类
-    // 长上标的和弦会整体左偏（KL2020《基督是锚》第 9 小节偏 18 tenths）
-    const width = segs.reduce((w, s) => w + (s.music ? musicFont : wordFont).measureText(s.text) * (s.superscript ? 0.75 : 1), 0);
-    // 分段排版与文本谱共用（src/layout/harmony.ts）
+    const segs = eng.chordPlain ? chordTextSegs(h.asPlainText(eng.accidentalSide), true, eng.accidentalSide) : h.asText(eng.accidentalSide);
+    // 分段排版与量宽走公共那一份（engrave/chord.ts）：总宽照 musicpp TextBlock::width，上/下标按 0.75 缩放
+    const width = harmonyWidth(segs, wordFont, musicFont);
     const grp = layoutHarmonySegs(segs, wordFont, musicFont, 0xff000000);
 
     const m = new Matrix33();
@@ -782,7 +764,7 @@ function drawTextBlock(container: Group, t: MeasureText): void {
       h = 0;
       continue;
     }
-    w += it.font.measureText(it.text);
+    w += (it.padBefore ?? 0) + it.font.measureText(it.text);
     // 行高与谱行包围盒（model.ts::tightLineHeights）同一口径：歌本按字号（musicpp Font::height()），
     // 否则多行文字块画得比包围盒高，压进下面的简谱与歌词（《那一天正来临》开头的楷体引言）
     const fm = it.font.metrics;
@@ -810,6 +792,7 @@ function drawTextBlock(container: Group, t: MeasureText): void {
     first = false;
     if (content === "\n") continue;
 
+    xpos += it.padBefore ?? 0;
     const tf = new TextFrame();
     tf.text = content;
     tf.font = it.font;
@@ -1043,38 +1026,42 @@ function drawBarlineItem(
   tag: StaffLeafData | null = null,
 ): number {
   // 整组小节线右缘对齐到 x（向左生长），与谱线右端接齐（render.cpp drawBarlineItem）。
+  // 粗细组合与线距走公共那一份（engrave/barline.ts）；反复点按谱表间位另画（drawRepeatDots）。
   const lw = eng.lineWidths;
-  const light = lw.lightBarline;
-  const thick = lw.heavyBarline;
-  const dist = eng.barlineDist;
-  const widths: number[] = [];
-  if (repForBack) {
-    // 反复结束/双向反复：light-heavy-light（与左侧 Final 合并的情况）。
-    widths.push(light, thick, light);
-  } else {
-    switch (style) {
-      case BarGlyph.Single: widths.push(light); break;
-      case BarGlyph.Double: widths.push(light, light); break;
-      case BarGlyph.HeavyHeavy: widths.push(thick, thick); break;
-      case BarGlyph.Final: widths.push(light, thick); break;
-      case BarGlyph.ReverseFinal: widths.push(thick, light); break;
-      case BarGlyph.None:
-      default:
-        return 0;
-    }
-  }
-  let w = 0;
-  for (const ww of widths) w += ww;
-  w += (widths.length - 1) * dist;
-  let xx = x - w;
-  for (const ww of widths) {
-    const cx = xx + ww / 2;
-    const l = addLine(container, cx, top, cx, bot, ww);
+  const spec = repForBack ? { repeatBackward: true, repeatForward: true } : BAR_GLYPH_SPEC[style];
+  const bar = new BarlineGlyph(spec, false, {
+    top,
+    bot,
+    light: lw.lightBarline,
+    heavy: lw.heavyBarline,
+    gap: eng.barlineDist,
+    dots: false,
+    color: 0xff000000,
+  });
+  if (bar.lines.length === 0) return 0;
+  const w = bar.inkRight - bar.inkLeft;
+  const dx = x - w - bar.inkLeft;
+  for (const l of bar.lines) {
+    // 混排的线一律写绝对端点（x = 0），页面树与原先逐字节一致
+    const cx = l.x + dx;
+    l.x = 0;
+    l.p0 = new Point(cx, l.p0.y);
+    l.p1 = new Point(cx, l.p1.y);
     if (tag) l.data = tag;
-    xx += dist + ww;
+    container.add(l);
   }
   return w;
 }
+
+/** 五线谱的小节线样式 → 公共小节线的 spec。 */
+const BAR_GLYPH_SPEC: Record<BarGlyph, BarlineSpec> = {
+  [BarGlyph.Single]: {},
+  [BarGlyph.Double]: { style: BarStyle.LIGHT_LIGHT },
+  [BarGlyph.HeavyHeavy]: { style: BarStyle.HEAVY_HEAVY },
+  [BarGlyph.Final]: { style: BarStyle.LIGHT_HEAVY },
+  [BarGlyph.ReverseFinal]: { style: BarStyle.HEAVY_LIGHT },
+  [BarGlyph.None]: { style: BarStyle.NONE },
+};
 
 /** 反复双点。主谱画两个 repeatDot（第 2、3 间），混排谱在上方简谱层再画一组缩小版。
  *  对齐 render.cpp::drawRepeatDots（mixStaves 分支）。 */

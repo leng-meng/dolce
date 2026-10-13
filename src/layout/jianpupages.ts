@@ -8,16 +8,15 @@
 import { Font } from "./font";
 import { Group, PageItem, TextFrame } from "./pageitem";
 import type { Layout } from "./layout";
-import { MusicCommon } from "../score/jppitch";
 import type { JScore } from "./input";
-import { jpTimeSigItems } from "./jpglyph";
+import { TimeSigGlyph } from "../engrave/timesig";
+import { KeyLabel, keyNameOfFifths } from "../engrave/keysig";
+import { headerRoleFont } from "../engrave/header";
 import type { HeaderRole } from "../style/header";
 
 /** 页眉某一项的字：设置里给了族/粗体就用（`LayoutOptions.headerFonts`），否则沿用歌词字体（出厂观感）。 */
 function headerFont(opt: Layout["options"], role: HeaderRole, size: number): Font {
-  const hf = opt.headerFonts[role];
-  if (!hf?.family && !hf?.bold) return opt.lrcFont.makeWithSize(size);
-  return new Font(hf.family ?? opt.lrcFont.family, size, hf.bold ?? false);
+  return headerRoleFont(opt.headerFonts[role], size, opt.lrcFont);
 }
 
 /** 副标题、经文的字号：给了就用，缺省同词曲。 */
@@ -272,9 +271,9 @@ function bookHead(layout: Layout, score: JScore, w: number): Group {
 /**
  * 「1=♭B ⁴⁄₄」——调号 + 上下叠排的拍号（成书 `bookparts.ts::keyMeterItems` 的观感）。
  *
- * 两处照成书：**升降号提到音名之前**、比音名小一号并抬高（连成一串画的话 ♭ 会跟音名
- * 同基线同字号，位置就塌了）；拍号**上下叠排**、分数线与音名的墨迹中心齐平。
- * 拍号本身仍走公共那一份 `jpglyph.ts::jpTimeSigItems`（三条简谱路共用），
+ * 调号走公共那一份 `engrave/keysig.ts::KeyLabel`（升降号是 csym 字形、提到音名之前并抬高）；
+ * 拍号**上下叠排**、分数线与音名的墨迹中心齐平（照成书）。
+ * 拍号本身仍走公共那一份 `engrave/timesig.ts::TimeSigGlyph`（三条简谱路共用），
  * 尺寸与曲中的转拍号同一把尺子（`TimeSig.layout`），不另立一套。
  */
 function keyMeter(layout: Layout, score: JScore, x: number, baseline: number): Group | null {
@@ -282,38 +281,25 @@ function keyMeter(layout: Layout, score: JScore, x: number, baseline: number): G
   const m0 = score.parts[0]?.measures[0];
   if (!m0) return null;
   const g = new Group();
-  // 升降号写在音名**之前**（`MusicCommon.keys` 就是这个写法，成书亦然：`♭B` / `#F`），
-  // 与曲中的「转1=Bb」不同——那一处是既有观感，不在这里改。
-  const name = MusicCommon.keys[m0.key.fifths + 7] ?? "C";
-  const acc = /^([b#])(.+)$/.exec(name);
-  const font = opt.numberFont;
+  // 「1=♭B」走公共那一份（engrave/keysig.ts）：升降号是 SMuFL csym 字形、写在音名之前并抬高。
   const ink = opt.numberBound("1").height;
-
-  let cur = x;
-  const put = (text: string, f: Font, y: number): number => {
-    const tf = new TextFrame();
-    tf.font = f;
-    tf.color = opt.color;
-    tf.text = text;
-    tf.x = cur;
-    tf.y = y;
-    tf.classes.add("hdr-keysig"); // 可视化编辑认页眉的调号（`headerParts`）
-    g.add(tf);
-    return tf.measureText();
-  };
-  cur += put("1=", font, baseline);
-  if (acc) {
-    // 成书实测：升降号 0.72 个音名字号、墨迹顶高出音名 0.69 个音名墨迹高
-    cur += put(acc[1], font.makeWithSize(font.size * 0.72), baseline - ink * 0.69) * 1.05;
-    cur += put(acc[2], font, baseline);
-  } else {
-    cur += put(name, font, baseline);
+  const k = new KeyLabel("1", keyNameOfFifths(m0.key.fifths), {
+    font: opt.numberFont,
+    music: opt.smuflFont,
+    color: opt.color,
+    side: opt.accidentalSide,
+    classes: ["hdr-keysig"], // 可视化编辑认页眉的调号（`headerParts`）
+  });
+  for (const it of k.items) {
+    it.x += x;
+    it.y += baseline;
+    g.add(it);
   }
-
+  let cur = x + k.width;
   cur += ink * 0.37;
   const top = opt.jpStaffTop;
   const bot = opt.jpStaffBottom;
-  const r = jpTimeSigItems(m0.time.beats, m0.time.beatType, {
+  const r = new TimeSigGlyph(m0.time.beats, m0.time.beatType, {
     height: bot - top,
     centerY: 0,
     // 成书这一处的拍值与音名同大小（`roles.keyMeter` 一个字号管两者），

@@ -11,6 +11,8 @@ import { Point } from "../common/geom";
 import { Font } from "../layout/font";
 import { SlurTieBase, type SlurStyle } from "../layout/pageitem";
 import { MIXED_PUNCT, type CompressMode } from "../common/cjkpunct";
+import type { HarmonySeg } from "../engrave/chord";
+import type { AccidentalSide, AccidentalStyleKind } from "../engrave/spacing";
 import { MetaData, GlyphCodes } from "../smufl/smufl";
 import type { Chord as DocChord, Direction as DocDirection, Harmony as DocHarmony, Lyric as DocLyric, Mark as DocMark, Note as DocNote, Song } from "../model/doc";
 import { beamCount } from "../model/jianpu";
@@ -1120,27 +1122,29 @@ export class HarmonyLayout {
   }
 
   /** 纯文本形式（仅用于 calcMixedStaffY 的宽度粗估）。 */
-  asPlainText(): string {
+  asPlainText(side?: AccidentalSide): string {
     const acc = (alter: number): string => (alter === 1 ? "#" : alter === -1 ? "b" : "");
-    let res = this.root.alterLeft ? acc(this.root.alter) + this.root.step : this.root.step + acc(this.root.alter);
+    const left = (sa: HarmonyStepAlter): boolean => (side ? side === "before" : !!sa.alterLeft);
+    let res = left(this.root) ? acc(this.root.alter) + this.root.step : this.root.step + acc(this.root.alter);
     res += harmonyKindSuffix(this.kind, this.kindText);
     for (const d of this.degree) {
       if (d.type === HarmonyDegreeType.Add) res += "add" + d.value;
     }
     if (this.bass) {
-      res += "/" + (this.bass.alterLeft ? acc(this.bass.alter) + this.bass.step : this.bass.step + acc(this.bass.alter));
+      res += "/" + (left(this.bass) ? acc(this.bass.alter) + this.bass.step : this.bass.step + acc(this.bass.alter));
     }
     return res;
   }
 
   /** 富文本分段（Harmony::asText 移植）：升降号用 SMuFL csym 字形，后缀上标。 */
-  asText(): HarmonySeg[] {
+  asText(side?: AccidentalSide): HarmonySeg[] {
     const segs: HarmonySeg[] = [];
     const stepAlter = (sa: HarmonyStepAlter) => {
       const glyph = sa.alter === 1 ? GlyphCodes.csymAccidentalSharp : sa.alter === -1 ? GlyphCodes.csymAccidentalFlat : "";
-      if (glyph && sa.alterLeft) segs.push({ text: glyph, music: true, superscript: 0, dy: 0 });
+      const left = side ? side === "before" : !!sa.alterLeft;
+      if (glyph && left) segs.push({ text: glyph, music: true, superscript: 0, dy: 0 });
       segs.push({ text: sa.step, music: false, superscript: 0, dy: 0 });
-      if (glyph && !sa.alterLeft) segs.push({ text: glyph, music: true, superscript: 0, dy: 0 });
+      if (glyph && !left) segs.push({ text: glyph, music: true, superscript: 0, dy: 0 });
     };
     stepAlter(this.root);
 
@@ -1235,14 +1239,6 @@ export class HarmonyLayout {
   }
 }
 
-/** Harmony 文本分段：music=用 SMuFL 字形；superscript=±1 上/下标；dy=基线偏移。 */
-export interface HarmonySeg {
-  text: string;
-  music: boolean;
-  superscript: number;
-  dy: number;
-}
-
 /** MusicXML kind → 缩写（Harmony::abbrKindText 移植）。 */
 function abbrKindText(kind: string): string {
   switch (kind) {
@@ -1323,6 +1319,8 @@ export interface TextBlockItem {
   superscript: number;
   /** 原程序里这项的字号（换了字体、画的字号跟着换算时记下原值；歌本按字号算行高用它） */
   nominalSize?: number;
+  /** 这项之前额外空出的宽（速度标记「♩ = 120」里「=」两侧的空，见 `engrave/spacing.ts::EQ_PAD_EM`）。 */
+  padBefore?: number;
 }
 
 export class TextBlock {
@@ -1333,10 +1331,14 @@ export class TextBlock {
   title = false;
 
   /** 文字里的换行拆成「项 + 换行项」（TextBlock::add 的 boost::split）：`<words>` 原文带换行就是多行 */
-  add(text: string, font: Font, music = false, nominalSize?: number): void {
+  add(text: string, font: Font, music = false, nominalSize?: number, padBefore?: number): void {
     text.split("\n").forEach((s, i) => {
       if (i > 0) this.data.push({ font, text: "\n", dy: 0, music, superscript: 0 });
-      if (s) this.data.push({ font, text: s, dy: 0, music, superscript: 0, ...(nominalSize !== undefined ? { nominalSize } : {}) });
+      if (s) this.data.push({
+        font, text: s, dy: 0, music, superscript: 0,
+        ...(nominalSize !== undefined ? { nominalSize } : {}),
+        ...(i === 0 && padBefore ? { padBefore } : {}),
+      });
     });
   }
 
@@ -1344,7 +1346,7 @@ export class TextBlock {
     let res = 0;
     for (const it of this.data) {
       if (it.text === "\n") continue;
-      res += it.font.measureText(it.text);
+      res += (it.padBefore ?? 0) + it.font.measureText(it.text);
     }
     return res;
   }
@@ -2999,6 +3001,12 @@ export class MixedOptions {
   /** 谱行包围盒里文字的行高按字号算（原排版程序口径，歌本 `pdflayout/songbook.ts` 开）；缺省按字体 ascent−descent */
   textLineHeightBySize = false;
   harmonySize = 9;
+  /** 和弦排成简单文本（一行普通文字，不用 SMuFL 字形、不上标）。样式键 `chord-plain`。 */
+  chordPlain = false;
+  /** 调号、转调、和弦根音/低音的升降号写在字母前还是后；undefined = 各自原来的写法。样式键 `accidental-side`。 */
+  accidentalSide: AccidentalSide | undefined = undefined;
+  /** 简谱层临时记号的样子（`engrave/spacing.ts::AccidentalStyleKind`）。样式键 `accidental-style`。 */
+  accidentalStyle: AccidentalStyleKind = "csym";
   /** 谱里没写 `<page-layout>` 时用的纸（pt，编辑器设置里那张）；`heightPt` 为 null 是长图（不分页）。
    *  不给就用 `MixedDefaults`（A4）。写了 `<page-layout>` 的谱（歌本、第三方）照用自己的，
    *  除非 `override`（用户在设置里明确换了纸/方向/边距）：那时连谱里的版面坐标一起不用，按新纸自动铺排。

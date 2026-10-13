@@ -76,7 +76,7 @@ export function applyJianpuStyle(opt: LayoutOptions, sheet: StyleSheet): void {
       opt.chordGap = opt.numberSize * 0.25;
       opt.sectionWordSize = opt.chordSize;
       // 房号（一房、二房的括线与数字）：原样档按原谱排一遍，房号要印出来；展开档逐遍展开、不画（pptx 预设不设）。
-      // 比例照五线谱（`mixed/render.ts::drawEnding`，两边共用 `layout/ending.ts` 的画法）：房号字号约为谱高的一半，
+      // 比例照五线谱（`mixed/render.ts::drawEnding`，两边共用 `engrave/ending.ts` 的画法）：房号字号约为谱高的一半，
       // 简谱的「谱高」取小节线高（≈ 4/3 字号）
       opt.endingSize = opt.numberSize * 0.65;
     }

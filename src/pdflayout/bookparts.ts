@@ -12,6 +12,7 @@ import type { StyleRole } from "../style/sheet";
 import type { DrawItem, DrawPage, DrawText } from "./drawlist";
 import { pageMargins } from "./bookstyle";
 import { NO_LINE_START } from "../common/cjkpunct";
+import { EQ_PAD_EM } from "../engrave/spacing";
 
 export type Measure = (role: StyleRole, text: string, size: number) => number;
 
@@ -65,23 +66,26 @@ export function keyMeterItems(style: BookStyle, km: KeyMeterSpec, x: number, bas
    */
   const putTonic = (prefix: string, tonic: string, suffix: string, x0: number): number => {
     const acc = /^([♭♯])(.+)$/.exec(tonic);
-    if (!acc) {
-      const t = `${prefix}${tonic}${suffix}`;
-      items.push(textItem(t, "keyMeter", sz, x0, baseline));
-      return measure("keyMeter", t, sz);
-    }
     let cur = x0;
-    if (prefix) {
-      items.push(textItem(prefix, "keyMeter", sz, cur, baseline));
-      cur += measure("keyMeter", prefix, sz);
+    // 前缀（`1=` / `(1=`）的「=」两侧各让一点，与各排版引擎的调号、速度标记同一个空（engrave/spacing.ts::EQ_PAD_EM）
+    const eq = prefix.indexOf("=");
+    const pad = sz * EQ_PAD_EM;
+    const put = (t: string, s = sz, y = baseline): number => {
+      items.push(textItem(t, "keyMeter", s, cur, y));
+      return measure("keyMeter", t, s);
+    };
+    if (eq >= 0) {
+      cur += put(prefix.slice(0, eq)) + pad;
+      cur += put("=") + pad;
+    } else if (prefix) cur += put(prefix);
+    if (!acc) {
+      cur += put(`${tonic}${suffix}`);
+      return cur - x0;
     }
     const accSz = sz * KEY_ACC_SIZE;
     const accCh = acc[1] === "♯" ? "#" : acc[1] === "♭" ? "b" : acc[1];
-    items.push(textItem(accCh, "keyMeter", accSz, cur, baseline - em * KEY_ACC_RISE));
-    cur += measure("keyMeter", accCh, accSz) * 1.05;
-    const tail = `${acc[2]}${suffix}`;
-    items.push(textItem(tail, "keyMeter", sz, cur, baseline));
-    cur += measure("keyMeter", tail, sz);
+    cur += put(accCh, accSz, baseline - em * KEY_ACC_RISE) * 1.05;
+    cur += put(`${acc[2]}${suffix}`);
     return cur - x0;
   };
   let cx = x + putTonic("1=", km.tonic, "", x) + em * 0.25;

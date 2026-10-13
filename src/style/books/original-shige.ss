@@ -29,8 +29,6 @@ chord { size: 19pt; }
   barline-height: 34;
   double-barline-gap: 3.5;
   beam-width: 1.5; /* 减时线更细 */
-  dash-width: 3; /* 增时线反过来更粗更长 */
-  dash-half-length: 4;
   /* 纵向：由「小节线段的竖直中心」反推——比按墨迹带估行距可靠得多 */
   lyric-gap: 44; /* 歌词字块比数字高，不多让就会顶到低八度点 */
   lyric-stack: 35;

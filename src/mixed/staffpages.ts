@@ -4,6 +4,7 @@
 // 从 musicpp util/pao.cpp 移植（formatScorePAO + paoSingleScore，不含 fixPaoScore 逐曲 hack）。
 
 import { headerRoleOfCredit } from "../style/header";
+import { headerRoleFont } from "../engrave/header";
 import { Fraction } from "../common/fraction";
 import { Matrix33 } from "../common/geom";
 import { Font } from "../layout/font";
@@ -197,8 +198,8 @@ function drawFrames(
       const role = headerRoleOfCredit(cr.type ?? undefined, justify, maxCreditSize > 0 && cr.fontSize === maxCreditSize);
       const hf = role ? score.options.headerFonts[role] : undefined;
       const fntSz = hf?.size ? hf.size / score.scaling : cr.fontSize > 0 ? cr.fontSize / score.scaling : 20;
-      const family = hf?.family ?? cr.family ?? (cr.fontSize > 0 ? score.defaults.lyricFont.family : "PingFang SC");
-      const font = new Font(family, fntSz, hf?.bold ?? cr.bold ?? false);
+      const base = new Font(cr.family ?? (cr.fontSize > 0 ? score.defaults.lyricFont.family : "PingFang SC"), fntSz, cr.bold ?? false);
+      const font = headerRoleFont(hf, fntSz, base);
       const anchorX = cr.x > 0 ? cr.x : pageWidthTenths / 2;
       // MusicXML y from page bottom → SVG top-down；Sibelius bug 时改以页首为锚。
       const baseY = reanchorTop

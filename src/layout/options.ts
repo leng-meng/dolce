@@ -3,6 +3,7 @@ import { Font } from "./font";
 import { MetaData } from "../smufl/smufl";
 import { Rect, Colors } from "../common/geom";
 import type { CompressMode } from "../common/cjkpunct";
+import type { AccidentalSide, AccidentalStyleKind } from "../engrave/spacing";
 
 /** 「原样」档多段歌词叠排时的段间行距 ÷ 歌词字号。原书量到的是 1.3 上下。 */
 export const LYRIC_STACK_RATIO = 1.35;
@@ -51,8 +52,12 @@ export class LayoutOptions {
   augDotRadius = 0;
   /** 和弦排成**纯文本**（升降号不换 SMuFL 的 csym 字形、后缀不上标）。
    *  原书 500 首就是这么印的，成书重排由 `style/book.ts::applyBookPreset` 打开；
-   *  编辑器 / 五线谱 / 文本谱三路维持富文本排法。见 layout/harmony.ts。 */
+   *  编辑器 / 五线谱 / 文本谱三路维持富文本排法。见 engrave/chord.ts。 */
   chordPlainText = false;
+  /** 调号、转调、和弦根音/低音的升降号写在字母前还是后；undefined = 各自原来的写法。样式键 `accidental-side`。 */
+  accidentalSide: AccidentalSide | undefined = undefined;
+  /** 临时记号的样子（`engrave/spacing.ts::AccidentalStyleKind`）。样式键 `accidental-style`；成书缺省 `classic`。 */
+  accidentalStyle: AccidentalStyleKind = "csym";
   /** 房号（1./2.）的字号。0 = 不画房号（展开档：反复已逐遍展开）。原样档与成书由样式层给值。 */
   endingSize = 0;
   /** 歌词段号（行首的 `1.` `2.`）标不标：
@@ -63,10 +68,10 @@ export class LayoutOptions {
   verseNumberAutoMin = 3;
   /** 转拍号那条分数线的粗细。0 = 用引擎默认的 1.5（编辑器那条路不变）。 */
   timeSigRuleWidth = 0;
-  /** 拍号的两个比例（都是 ÷ 小节线高度 H）。0 = 用 `jpglyph.ts::TIME_SIG_DEFAULTS`。
+  /** 拍号的两个比例（都是 ÷ 小节线高度 H）。0 = 用 `engrave/timesig.ts::TIME_SIG_DEFAULTS`。
    *  单独提出来是因为 H 一变（见 `jpStaffTopOverride`），照默认比例算出来的拍号会跟着
    *  整体缩放。**竖向没有旋钮**：上下两个数字各离分数线一格「减时线与音符」的距离，
-   *  只认拍值字号（`jpglyph.ts::TIME_SIG_GAP_EM`）。 */
+   *  只认拍值字号（`engrave/timesig.ts::TIME_SIG_GAP_EM`）。 */
   timeSigDigitRatio = 0;
   timeSigRuleLenRatio = 0;
   /** 房号/三连音括线的线宽与「脚」（下垂那一小段）的长度。0 = 按字号推算。 */

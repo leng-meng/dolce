@@ -54,7 +54,11 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "lyric-gap": { kind: "len", layout: "lyricGap", book: "metrics.lyricGapEm", original: "lyricSpacing.lyricGap" },
   "lyric-stack": { kind: "len", layout: "lyricStack", book: "metrics.lyricToLyricEm", original: "lyricSpacing.lyricStack" },
   "chord-gap": { kind: "len", layout: "chordGap", book: "metrics.chordToNoteEm" },
-  "chord-plain": { kind: "bool", layout: "chordPlainText", book: "metrics.chordPlain" },
+  "chord-plain": { kind: "bool", layout: "chordPlainText", mixed: "chordPlain", book: "metrics.chordPlain", original: "look.chordPlain" },
+  // 调号、转调、和弦根音/低音的升降号写在字母前（before）还是后（after）；不写 = 各自原来的写法
+  "accidental-side": { kind: "word", layout: "accidentalSide", mixed: "accidentalSide", book: "metrics.accidentalSide", original: "look.accidentalSide" },
+  // 临时记号的样子：csym（照混排）/ classic（原先简谱引擎的，成书缺省）
+  "accidental-style": { kind: "word", layout: "accidentalStyle", mixed: "accidentalStyle", book: "metrics.accidentalStyle", original: "look.accidentalStyle" },
   "bracket-width": { kind: "len", layout: "bracketWidth", book: "metrics.bracketWidth" },
   "bracket-foot": { kind: "len", layout: "bracketFoot", book: "metrics.bracketFootEm" },
   "tuplet-style": { kind: "word", layout: "tupletStyle", note: "取 bracket（括线）/ arc（两段弧）；成书与混排不支持" },
@@ -88,8 +92,6 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "voice-gap": { kind: "len", original: "spacing.voiceGap", note: "只有原样文档布局排多声部" },
   "barline-height": { kind: "len", original: "note.barlineHeight", note: "只有原样文档布局单给小节线高" },
   "double-barline-gap": { kind: "len", original: "stroke.doubleBarlineGap", note: "同上" },
-  "dash-width": { kind: "len", original: "note.dashWidth", note: "只有原样文档布局单给增时线尺寸" },
-  "dash-half-length": { kind: "len", original: "note.dashHalfLength", note: "同上" },
 };
 
 /** `@staff`：五线谱内容。纯简谱那几档整块不适用（简谱的小节线宽写在 `@jianpu` 的 `barline`）。 */

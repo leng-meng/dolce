@@ -92,7 +92,7 @@ export function splitChordTokens(s: string, xAt?: (i: number) => number): { tok:
 }
 
 /** OCR 形态归一：根音大写、性质符大小写规整、全角升降号折成 ASCII、去空白。
- *  归一后的形式要同时被 layout/harmony.ts 的 chordTextSegs 与 score/harmonyxml.ts 的
+ *  归一后的形式要同时被 engrave/chord.ts 的 chordTextSegs 与 score/harmonyxml.ts 的
  *  harmonyXml 接受——两者都认 `#`/`b`（前置后置都认），故统一吐 ASCII 最稳；升降号的前后位置照源图不动。 */
 export function normalizeChord(tok: string): string {
   let s = tok.replace(/\s/g, "").replace(/♯/g, "#").replace(/♭/g, "b");

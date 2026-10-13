@@ -2,7 +2,7 @@
 // painter.ts. Skija Path/Canvas/Font replaced by GraphicPath command lists,
 // the common geom types, and the Font abstraction (measurement via SVG/canvas).
 
-import { jpDot } from "./jpglyph";
+import { jpDot } from "../engrave/dot";
 import { Point, Rect, Matrix33, newMatrix, Colors } from "../common/geom";
 import { pathTightBounds } from "../common/measure";
 import { LYRIC_SPLIT_PUNCT, type CompressMode } from "../common/cjkpunct";
@@ -238,7 +238,7 @@ export class TextFrame extends PageItem {
   /** 用**紧包围盒**而不是字体的全局 ascent/descent 来算 bound。
    *  给 SMuFL 那类字体用：Bravura 的 ascent−descent 是 4.02 em，一个和弦里夹一个升号，
    *  这一行就凭空高出四个字号——行距全乱。SmuflText 自己重写了 bound，
-   *  但 layout/harmony.ts 里的音乐段是普通 TextFrame，靠这个开关。 */
+   *  但 engrave/chord.ts 里的音乐段是普通 TextFrame，靠这个开关。 */
   inkBound = false;
   /** 逐字笔位（相对本 item 的 x，按码点）。null = 连排，由字体的 advance 说了算。
    *  标点挤压后的歌词用它——测量与绘制拿同一串坐标，`<text>` 的 `x` 直接吃它，
@@ -322,7 +322,7 @@ export class SmuflText extends TextFrame {
 /**
  * 八度点 —— **一个实心矢量圆**，不是字体里的 `.` 字形。
  *
- * 三条简谱路统一走 `jpglyph.ts::jpDot`（文本谱本来就是自绘的，谱面与混排原先用
+ * 三条简谱路统一走 `engrave/dot.ts::jpDot`（文本谱本来就是自绘的，谱面与混排原先用
  * `.`／`·` 字形——同一个点三种画法，还得各自补一道「按墨迹而非 advance 居中」的修正）。
  * 圆没有这个问题：局部包围盒恒为 (0,0)–(2r,2r)，调用点照旧 `x − width/2` 居中即可。
  *

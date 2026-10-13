@@ -51,7 +51,8 @@ export function jianpuMetricsOf(sheet: StyleSheet): JianpuMetrics {
     const path = JIANPU_KEYS[key]?.original;
     if (!path) continue; // 别的排版器才读的键
     const [group, field] = path.split(".") as [keyof JianpuMetrics, string];
-    const val = typeof v === "boolean" ? v : resolveLength(v, { em, sp: em / 3 });
+    const def = JIANPU_KEYS[key]!;
+    const val = typeof v === "boolean" || def.kind === "word" ? v : resolveLength(v, { em, sp: em / 3 });
     if (val === null) continue;
     (m[group] as unknown as Record<string, unknown>)[field] = val;
   }

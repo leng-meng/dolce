@@ -21,7 +21,8 @@ import type {
   VoiceGroup,
 } from "../../pu/ast";
 import { contentWidth, jianpuGraceMetrics, jianpuGraceNotes, jianpuSlurRise, type JianpuGrid } from "./metrics";
-import { graceAdvance } from "../../common/gracenote";
+import { graceAdvance } from "../../engrave/grace";
+import { ACCIDENTAL_CLEARANCE, accidentalLead, accidentalRise, type AccidentalKind } from "../../engrave/accidental";
 import { elementQuarters, takesLyric, tupletRatios } from "../../pu/ast";
 import { paginate, type SystemBlock } from "../../jianpu/vertical";
 
@@ -383,7 +384,10 @@ function layoutVoiceLine(
       advance += m.ink.noteHeight * 1.5;
     }
     // 变音记号写在数字前，得给它让出位置
-    if (next?.kind === "note" && next.accidental !== undefined) advance += m.stroke.accidentalSpace;
+    // 让出的宽 = 升降号墨迹宽 + 它与数字的空 + 与前一个音之间的空（engrave/accidental.ts，与画法、简谱引擎同一份比例）
+    if (next?.kind === "note" && next.accidental !== undefined) {
+      advance += accidentalLead(next.accidental as AccidentalKind, m.ink.noteHeight) + m.ink.noteHeight * ACCIDENTAL_CLEARANCE;
+    }
     // 前倚音也排在数字左边，同样要让位——不让的话倚音会挤在前后两个音符正中间，
     // 看起来像挂在了左边那个音符上（原版给它让出的正是这么多）
     // 宽度走公共那一份（带升降号的倚音要多占一截，不是「颗数 × 常数」）
@@ -645,8 +649,11 @@ function voiceHeadroom(voice: ScoreLine, m: JianpuGrid): number {
  */
 export function stackTop(el: MusicElement | undefined, m: JianpuGrid): number {
   const inkTop = -m.ink.noteHeight / 2;
-  if (el?.kind !== "note" || el.octave <= 0) return inkTop;
-  return m.ink.octaveUpY - (el.octave - 1) * m.note.octaveDotDist - m.note.dotRadius;
+  if (el?.kind !== "note") return inkTop;
+  // 临时记号比数字高出一截（engrave/accidental.ts），弧与连音要让开它
+  const accTop = el.accidental !== undefined ? inkTop - accidentalRise(el.accidental as AccidentalKind, m.ink.noteHeight) : inkTop;
+  if (el.octave <= 0) return accTop;
+  return Math.min(accTop, m.ink.octaveUpY - (el.octave - 1) * m.note.octaveDotDist - m.note.dotRadius);
 }
 
 
@@ -762,8 +769,13 @@ function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid): Place
       endEl: b.element,
     };
     if (mark.type === "slur" || mark.type === "tuplet") {
-      // 取两端里更高的那个堆叠顶，再让开一个 stackGap；嵌套层按 level 继续上移
-      const top = Math.min(stackTop(a.element, m), stackTop(b.element, m));
+      // 取**跨度里所有音符**最高的那个堆叠顶（不只两端：中间那个带临时记号或高音点的也得让开，
+      // 与简谱引擎 `Line.addTuplet` 同一口径），再让开一个 stackGap；嵌套层按 level 继续上移
+      let top = Math.min(stackTop(a.element, m), stackTop(b.element, m));
+      for (let k = Math.min(a.index, b.index); k <= Math.max(a.index, b.index); k++) {
+        const it = items[k];
+        if (it) top = Math.min(top, stackTop(it.element, m));
+      }
       placed.y = top - m.note.slurGap - (level - 1) * m.note.slurLevelStep;
     }
     // 只有**两端都**落在并排块的下行里，这个记号才跟着下移；跨过并排块的（比如
