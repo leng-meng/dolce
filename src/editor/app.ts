@@ -76,6 +76,16 @@ export type ViewMode = JianpuLayoutMode | "staff" | "mixed";
 
 /** 文本谱的扩展名。`.txt` 太泛，靠 sniffDialect 兜底，认不出就不动。 */
 
+/** 开发开关（简谱合并成一个引擎期间，见 docs/架构.md §6.2）：原样档的单声部 123 / ABC 与 `.jpwabc` 也交给原样文档引擎排，
+ *  供横向排法与旧引擎逐音比对（`dev/scripts/xpos-compare.mjs`）。不进界面、不进设置；切路由之后删掉。 */
+function oneEngineDev(): boolean {
+  try {
+    return localStorage.getItem("dolce-dev-one-engine") === "1";
+  } catch {
+    return false;
+  }
+}
+
 export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost, FileSwitchHost, VisualHost {
   /** 预览排版器（唯一的 `ScorePainter`）：简谱原样 / 展开档、原样文档（文本谱与多声部）、五线谱 / 混排档
    *  都由它排、铺页、高亮。 */
@@ -921,7 +931,8 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     const breakDesc = f.getSection(LayoutSection)?.desc ?? null;
     this._breakDesc = breakDesc; // 导出 PPTX 时另排一遍要用同一份分页描述
     try {
-      this._layoutScore(score, breakDesc);
+      if (this.layoutMode === "original" && oneEngineDev()) this.painter.loadSync({ view: "original", doc, style: this.styleOf("original") });
+      else this._layoutScore(score, breakDesc);
     } catch (e) {
       console.error("layout failed", e);
       return false;
@@ -972,7 +983,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   /** 原样档这一份 `ScoreDoc` 走不走简谱引擎布局：格式说走（`caps.originalLayout`），
    *  且投影出来只有一条旋律——引擎只排 `parts[0]`，多声部的曲子仍回落原样文档布局。 */
   private _originalOnJianpu(): boolean {
-    if (this.adapter.caps.originalLayout !== "jianpu" || this.layoutMode !== "original") return false;
+    if (this.adapter.caps.originalLayout !== "jianpu" || this.layoutMode !== "original" || oneEngineDev()) return false;
     const score = this.puScore(false);
     return score !== null && score.parts.length === 1;
   }

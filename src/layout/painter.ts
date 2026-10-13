@@ -76,6 +76,8 @@ export interface DocumentPaintRequest {
   readonly doc: ScoreDoc;
   /** computed 样式表（原样档那份，与简谱引擎同一份）。null = print 主题出厂。 */
   readonly style: StyleSheet | null;
+  /** 照文档里的换行排，不按窄纸重新断行（断点已由调用方写进文档时用）。 */
+  readonly noReflow?: boolean;
 }
 
 export type PaintRequest = JianpuPaintRequest | DocumentPaintRequest | StaffPaintRequest;
@@ -315,6 +317,7 @@ export class ScorePainter {
       page: paper ? { width: paper.w, height: paper.h, continuous: false } : { width: LONG_IMAGE_WIDTH, height: LONG_IMAGE_WIDTH, continuous: true },
       userMargins: pageMargins(sheet.page) !== undefined,
       foot: (sheet.template?.regions?.["song-foot"] as Region | undefined) ?? null,
+      noReflow: req.noReflow,
     });
     const result: LayoutResult = {
       title: r.view.songs[0]?.metadata.titles[0] ?? "",
