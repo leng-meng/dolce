@@ -3426,13 +3426,15 @@ export function slurEnds(
     const inner: ArcObstacle[] = [];
     const part = chr.measure.part;
     const within = (a: Fraction, b: Fraction): boolean => !fLt(a, slur.startTick) && !fGt(b, slur.endTick);
+    // 只认简谱层上真画出来的延音线（同谱表、旋律音，与 `render.ts` 画简谱层延音线同一条件）：
+    // 别的谱表、别的声部的延音线不在这一层，当障碍会把弧无故抬高
     for (const t of part.tied) {
-      if (!t.startNote || !within(t.startTick, t.endTick)) continue;
+      if (!t.startNote || !t.startNote.jpMelody || t.startNote.staff !== slur.startNote.staff || !within(t.startTick, t.endTick)) continue;
       const te = tiedEnds(sys, eng, t, Notation.JianPu);
       if (te) inner.push({ x: (te.plx + te.prx) / 2, y: arcExtent(te)[0] });
     }
     for (const o of part.slurs) {
-      if (o === slur || !o.startNote || o.startNote.staff !== slur.startNote.staff || !within(o.startTick, o.endTick)) continue;
+      if (o === slur || !o.startNote || !o.startNote.jpMelody || o.startNote.staff !== slur.startNote.staff || !within(o.startTick, o.endTick)) continue;
       if (fEq(o.startTick, slur.startTick) && fEq(o.endTick, slur.endTick)) continue;
       const oe = slurEnds(sys, eng, o, Notation.JianPu);
       if (oe) inner.push({ x: (oe.plx + oe.prx) / 2, y: arcExtent(oe)[0] });

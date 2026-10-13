@@ -1,7 +1,7 @@
 // 样式表对外的名字 → 各把尺子的内部字段（`layout` 简谱引擎、`mixed` 混排、`book` 成书、`original` 原样文档布局）。
 //
 // `.ss` 里只见**逻辑键**（kebab-case，按谱面内容分），`LayoutOptions` / `MixedOptions`
-// 的字段名（`jpBeamTopY`、`lineWidths.stem`、`musicppJpTimeSig`…）不外露：
+// 的字段名（`jpStackGap`、`lineWidths.stem`、`musicppJpTimeSig`…）不外露：
 //
 //   `@jianpu` = 简谱内容（各模式通用）：纯简谱落 `LayoutOptions`，混排落 `MixedOptions` 的简谱层字段
 //   `@staff`  = 五线谱内容：只在 `mode: staff / mixed` 有效，落 `MixedOptions`

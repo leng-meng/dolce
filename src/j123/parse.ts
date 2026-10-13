@@ -411,6 +411,8 @@ interface OpenMark {
   /** 三连音还差几个音符收尾（ABC §4.13：`(3` 作用于随后 3 个音符，不需要显式收尾）。
    *  123 的多连音由 `)` 收（`ParseDialect.tupletClose`），不用它 */
   remaining?: number;
+  /** 渐强渐弱是 ABC 装饰写的（`!crescendo(!`），配不上对时报 ABC 的写法而不是 Muse 的 `(<` */
+  abcDeco?: boolean;
   /** `(` 在原文里的位置（见 `Mark.openSource`） */
   openSource?: SourceSpan;
   /** 渐强渐弱（`type === "wedge"`） */
@@ -780,7 +782,7 @@ function buildMusicLine(
         const wedge = /^(crescendo|<|diminuendo|decrescendo|>)([()])$/.exec(deco);
         if (wedge) {
           const type = wedge[1] === "crescendo" || wedge[1] === "<" ? "crescendo" : "diminuendo";
-          if (wedge[2] === "(") pb.openWedges.push({ type: "wedge", start: 0, level: 0, wedgeType: type, openSource: t.source });
+          if (wedge[2] === "(") pb.openWedges.push({ type: "wedge", start: 0, level: 0, wedgeType: type, openSource: t.source, abcDeco: true });
           else pb.wedgeCloseNext.push({ type, source: t.source });
           break;
         }
@@ -1297,8 +1299,11 @@ export function parseAbcFamily(
         report(ctx, "orphan-arc-next", "`~` 后面没有音符", b.arcNext.source);
         b.arcNext = null;
       }
-      for (const w of b.openWedges) report(ctx, "unmatched-wedge", tr("diag.jcx.wedge"), w.openSource!);
+      for (const w of b.openWedges) report(ctx, "unmatched-wedge", tr(w.abcDeco ? "diag.abc.wedge" : "diag.jcx.wedge"), w.openSource!);
       b.openWedges.length = 0;
+      // 写在最后、后面再没有音符可挂的收尾装饰（`!crescendo)!`）
+      for (const w of b.wedgeCloseNext) report(ctx, "unmatched-wedge", tr("diag.abc.wedge"), w.source);
+      b.wedgeCloseNext = [];
       closeMeasure(ctx, b);
       markLastEndings(b.part);
       if (b.block && b.block.end === undefined) b.block.end = slotCount(b, ctx.d.lyricSlotRule);

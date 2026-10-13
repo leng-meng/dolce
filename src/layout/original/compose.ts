@@ -287,8 +287,6 @@ function docMetricsOf(view: DocView): JianpuMetrics {
   return applyDocOptions(m, meta0?.fontSizes ?? [], meta0?.margins ?? []);
 }
 
-/** 面板给的是**字号（pt）**，metrics 那层认的是缩放——在这里换算：
- *  拿「这套版式（含谱面自带的 FontSize 指令）原本多少 pt」当分母。 */
 /**
  * 页眉字号（谱里 `<credit-words>` 的、面板上设的，都是**印刷 pt**）换成本页单位的倍数。
  * 选了纸时页宽就是 pt，倍数 1；连续长图的页宽是 1000（不是 pt），要按「印刷页宽 → 1000」等比换算——
@@ -305,6 +303,8 @@ function headerPtScale(source: ScoreDoc, docMetrics: JianpuMetrics, o: JianpuUse
 
 const A4_WIDTH_PT = 595.28;
 
+/** 面板给的是**字号（pt）**，metrics 那层认的是缩放——在这里换算：
+ *  拿「这套版式（含谱面自带的 FontSize 指令）原本多少 pt」当分母。 */
 function resolveScale(o: JianpuUserOptions | null, docMetrics: JianpuMetrics): JianpuUserOptions | null {
   if (!o?.digitFontSize) return o;
   const base = docMetrics.size.note;

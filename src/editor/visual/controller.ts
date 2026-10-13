@@ -2136,9 +2136,9 @@ function textShift(disp: string, src: string): number | null {
   return null;
 }
 
-/** 谱面上的升降号字形 → 原文里可能的写法（123 / `.jpwabc` / 文本谱写 `b` `#` `n`，也有人写 `♭♯♮`）。 */
+/** 谱面上的升降号字形 → 原文里可能的写法（123 / `.jpwabc` 写 `b` `#` `n`，文本谱的降号写 `$`，也有人写 `♭♯♮`）。 */
 const ACCIDENTAL_SPELLINGS: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
-  ...[GlyphCodes.csymAccidentalFlat, GlyphCodes.accidentalFlat, "♭"].map((g) => [g, ["b", "♭"]] as [string, string[]]),
+  ...[GlyphCodes.csymAccidentalFlat, GlyphCodes.accidentalFlat, "♭"].map((g) => [g, ["b", "$", "♭"]] as [string, string[]]),
   ...[GlyphCodes.csymAccidentalSharp, GlyphCodes.accidentalSharp, "♯"].map((g) => [g, ["#", "♯"]] as [string, string[]]),
   ...[GlyphCodes.csymAccidentalNatural, GlyphCodes.accidentalNatural, "♮"].map((g) => [g, ["n", "♮"]] as [string, string[]]),
 ]);

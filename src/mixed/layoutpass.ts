@@ -13,6 +13,7 @@ import {
   LCR,
   ChordLayout,
   LyricLayout,
+  type PartLayout,
   StaffLayout,
   MPage,
   Notation,
@@ -443,24 +444,28 @@ function autoPlaceLyricsY(score: StaffLayout): void {
  */
 function clearLyricsBelowNotes(score: StaffLayout): void {
   const ascent = -score.defaults.lyricFont.metrics.ascent;
+  // **逐声部**算：各声部的谱表各自一行，一个声部的低音只该推它自己的歌词（合唱谱分 SATB 几个声部时）
   for (const sys of score.systems) {
-    const lyrics = systemLyrics(score, sys);
-    if (lyrics.length === 0) continue;
-    // 首行歌词字顶（cy 向下为正；lrc.y 是负的，越负越往下）
-    let top = Infinity;
-    for (const lrc of lyrics) top = Math.min(top, -lrc.y - ascent);
-    const need = systemLowest(score, sys) + AUTO_LYRIC_GAP;
-    if (top >= need) continue;
-    const dy = need - top;
-    for (const lrc of lyrics) lrc.y -= dy;
+    for (const part of score.parts) {
+      // 只挪第一谱表的：`systemLowest` 量的是第一谱表，别的谱表的歌词坐标相对它自己的谱表
+      const lyrics = systemLyrics(score, sys, [part]).filter((l) => l.staff === 0);
+      if (lyrics.length === 0) continue;
+      // 首行歌词字顶（cy 向下为正；lrc.y 是负的，越负越往下）
+      let top = Infinity;
+      for (const lrc of lyrics) top = Math.min(top, -lrc.y - ascent);
+      const need = systemLowest(score, sys, true, [part]) + AUTO_LYRIC_GAP;
+      if (top >= need) continue;
+      const dy = need - top;
+      for (const lrc of lyrics) lrc.y -= dy;
+    }
   }
 }
 
-/** 这一行第一谱表的歌词。 */
-function systemLyrics(score: StaffLayout, sys: Sys): LyricLayout[] {
+/** 这一行的歌词（`parts` 缺省 = 所有声部）。 */
+function systemLyrics(score: StaffLayout, sys: Sys, parts: readonly PartLayout[] = score.parts): LyricLayout[] {
   const out: LyricLayout[] = [];
   for (const mif of sys.measures) {
-    for (const part of score.parts) {
+    for (const part of parts) {
       const md = part.measures[mif.index];
       if (md) out.push(...md.lyrics);
     }
@@ -471,7 +476,7 @@ function systemLyrics(score: StaffLayout, sys: Sys): LyricLayout[] {
 /** 这一行第一谱表往下伸到哪（cy 向下为正，谱表底线 = 40）：符头、朝下符干、下方记号、下方连音数字、下方 slur/tie。
  *  弧取画出来的真实曲线底（`slurEnds`/`tiedEnds` + `arcExtent`，与绘制同一份几何），跨行的弧按本行那一截。
  *  要在 `autoPlaceTuplets` 之后：连音数字的上下在那里才定。 */
-function systemLowest(score: StaffLayout, sys: Sys, withWedges = true): number {
+function systemLowest(score: StaffLayout, sys: Sys, withWedges = true, parts: readonly PartLayout[] = score.parts): number {
   const four = new Fraction(4);
   const eng = score.options;
   const chordLow = (ch: ChordLayout): number => {
@@ -483,7 +488,7 @@ function systemLowest(score: StaffLayout, sys: Sys, withWedges = true): number {
   };
   let maxDown = 40; // 谱表底线（cy 向下为正）
   for (const mif of sys.measures) {
-    for (const part of score.parts) {
+    for (const part of parts) {
       const md = part.measures[mif.index];
       if (!md) continue;
       // 倚音也算：低倚音（`{5,,}`）带着加线落到谱表下面，不算的话歌词就排到它身上
@@ -493,7 +498,7 @@ function systemLowest(score: StaffLayout, sys: Sys, withWedges = true): number {
       }
     }
   }
-  for (const part of score.parts) {
+  for (const part of parts) {
     // 混排里 slur/tie 画在简谱层上方；这时候谱表记法还没定（formatMixedScore 在后头），按五线谱的画法量，
     // 画在下方的才算数
     const arcs = [

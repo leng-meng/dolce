@@ -285,8 +285,11 @@ function buildRow(measures: readonly Measure[], ranges?: ReadonlyMap<Measure, re
     const addOrn = (h: NoteElement | SustainElement | BarlineElement | undefined, o: SourceOrnament): void => {
       if (h && "ornaments" in h && !h.ornaments.some((x) => x.name === o.name)) h.ornaments.push({ name: o.name, level: o.level, source: ZERO, projected: true });
     };
-    for (const [j, orns] of dm.byElement) for (const o of orns) addOrn(headFrom(j), o);
+    // 小节被换行切成几段时每段都会走到这里：只收落在本段 `[from, to)` 里的，否则另一段的记号会挂到本段末尾、挂两遍
+    const inRange = (j: number): boolean => j >= from && j < to;
+    for (const [j, orns] of dm.byElement) if (inRange(j)) for (const o of orns) addOrn(headFrom(j), o);
     for (const [j, text] of dm.words) {
+      if (!inRange(j)) continue;
       const h = headFrom(j);
       if (h?.kind === "note" && h.annotation === undefined) h.annotation = text;
     }
@@ -306,7 +309,7 @@ function buildRow(measures: readonly Measure[], ranges?: ReadonlyMap<Measure, re
       row.refs.push({ barline: right, measure: mea });
     }
     if (tail) for (const o of dm.barEnd) addOrn(rightEl ?? heads[heads.length - 1]?.[1], o);
-    if (dm.wedges.length) row.wedges.push(...dm.wedges.map((w) => ({ ...w, id: mea.elements[w.index]!.id })));
+    for (const w of dm.wedges) if (inRange(w.index)) row.wedges.push({ ...w, id: mea.elements[w.index]!.id });
     if (tail) pushInline(row, mea.trailing, mea);
     // 跨度只数有归属的符号与小节线（夹层不算），房号的起止偏移以此为基准（`Ending.startOffset/endOffset`）
     let f = -1;
