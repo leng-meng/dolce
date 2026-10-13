@@ -1,6 +1,6 @@
 // 歌词：音节、标点挤压、歌词联合括号与注记。
 import { Font } from "../../font";
-import { Group } from "../../pageitem";
+import { Group, Lyric } from "../../pageitem";
 import { syllableRun } from "../../../engrave/syllable";
 import type { PlacedItem, PlacedVoice } from "../place/model";
 import { type OriginalCtx, text } from "./ctx";
@@ -88,12 +88,18 @@ export function paintSyllables(c: OriginalCtx,
     if (!syl) return;
     const str = syl.text + (syl.trailingPunctuation ?? "");
     const g = new Group();
-    g.classes.add("lyric");
     g.data = syl;
-    // 音节按其**主体**居中于音符锚点，前后标点挂出去；量宽与笔位同一串挤压后的坐标（engrave/syllable.ts）
+    // 音节按其**主体**居中于音符锚点，前后标点挂出去；量宽与笔位同一串挤压后的坐标（engrave/syllable.ts，`Lyric.update` 同一份）
     const run = syllableRun(str, font, m.style.look.punctCompress);
     const x0 = x - run.lead - run.body / 2;
-    const t = text(str, x0, voice.lyricY[verse]!, font, c.lyricInk);
+    const t = new Lyric();
+    t.text = str;
+    t.font = font;
+    t.color = c.lyricInk;
+    t.compress = m.style.look.punctCompress;
+    t.verse = verse + 1;
+    t.x = x0;
+    t.y = voice.lyricY[verse]!;
     t.charXs = run.xs;
     g.add(t);
     if (rightEdge) rightEdge[verse] = Math.max(rightEdge[verse] ?? 0, x0 + run.width);

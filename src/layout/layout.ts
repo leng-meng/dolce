@@ -12,12 +12,12 @@ import { TupletGlyph } from "../engrave/tuplet";
 import type { Font } from "./font";
 import { measureDuration, type JChord, type JDirection, type JMeasure, type JNote, type JScore } from "./input";
 import { DYNAMIC_SIZE } from "../engrave/dynamics";
-import { getOrNull, PageItem, Group, GraphicPath, TextFrame, SmuflText, JpNumber, Lyric, Tie, type SlurTieBase } from "./pageitem";
+import { getOrNull, PageItem, Group, GraphicPath, TextFrame, SmuflText, JpNumber, Lyric, Tie, BeamLine, type SlurTieBase } from "./pageitem";
 import { hairpinPath } from "../engrave/hairpin";
 import { latinWordBreak } from "../engrave/syllable";
 import { beatGroupIndex, beatGroupSize, pickupOffset } from "../engrave/beatgroup";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, arcRise, jpArcY, type SlurStyle } from "../engrave/arc";
-import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, BeamLine, EntryItemInfo, entryBounds, normalizeEntryX, placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "./entry";
+import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, beamLineOf, EntryItemInfo, entryBounds, normalizeEntryX, placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "./entry";
 import { LayoutOptions } from "./options";
 
 /** LayoutOptions → SlurStyle。谱面这一路的弧全由它配参数，别在调用点各配各的。 */
@@ -1936,7 +1936,7 @@ export class Line {
         if (pairs.size === 0) break;
         maxLev = Math.max(maxLev, level);
         for (const [k, v] of pairs) {
-          const l = new BeamLine(level, k, v, opt);
+          const l = beamLineOf(level, k, v, opt);
           this.beams.push(l);
           this.group.add(l);
         }

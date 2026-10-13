@@ -16,7 +16,7 @@ import { GlyphCodes } from "../smufl/smufl";
 import { chordTextSegs, layoutHarmonySegs } from "../engrave/chord";
 import { GraceAlter, GraceMetrics, GraceNote, graceAdvance, graceBottom, graceGeometry } from "../engrave/grace";
 import type { JChord, JKey, JTime } from "./input";
-import { PageItem, GraphicPath, Group, TextFrame, GraphicLine, SmuflText, JpOctaveDot, JpNumber, Lyric } from "./pageitem";
+import { PageItem, GraphicPath, Group, TextFrame, GraphicLine, SmuflText, JpOctaveDot, JpNumber, Lyric, BeamLine } from "./pageitem";
 import type { LayoutOptions } from "./options";
 import type { Line } from "./layout";
 
@@ -751,30 +751,14 @@ export class LineBreak extends Entry {
   }
 }
 
-export class BeamLine extends GraphicLine {
-  level = 0;
-  left: NoteEntry | null = null;
-  right: NoteEntry | null = null;
-  constructor(lev: number, l: NoteEntry, r: NoteEntry, opt: LayoutOptions) {
-    super();
-    this.selectable = true;
-    this.level = lev;
-    this.left = l;
-    this.right = r;
-    const grp = l.line.group;
-    this.p0 = l.entryItem()!.pos(grp);
-    this.p1 = r.entryItem()!.pos(grp);
-    this.p1 = this.p1.offset(r.numberPos, 0);
-    // `lev` 从 1 起；落点走公共那一份（engrave/stack.ts，墨迹到墨迹等距）
-    const y = beamY(opt.numberBound("1").bottom, lev, opt.stack);
-    this.p0 = new Point(this.p0.x, y);
-    this.p1 = new Point(this.p1.x, y);
-    this.strokeWidth = opt.jpBeamWidth;
-    this.strokeColor = opt.color;
-    this.x = this.p0.x;
-    this.p1 = this.p1.offset(-this.p0.x, 0);
-    this.p0 = new Point(0, this.p0.y);
-  }
+/** 简谱引擎的一条减时线：两端对到两个音符数字（`lev` 从 1 起）。 */
+export function beamLineOf(lev: number, l: NoteEntry, r: NoteEntry, opt: LayoutOptions): BeamLine {
+  const grp = l.line.group;
+  const x0 = l.entryItem()!.pos(grp).x;
+  const x1 = r.entryItem()!.pos(grp).offset(r.numberPos, 0).x;
+  // 落点走公共那一份（engrave/stack.ts，墨迹到墨迹等距）
+  const y = beamY(opt.numberBound("1").bottom, lev, opt.stack);
+  return new BeamLine(lev, x0, x1, y, opt.jpBeamWidth, opt.color, l.number, r.number);
 }
 
 export class EntryItemInfo {

@@ -408,6 +408,31 @@ export class JpNumber extends TextFrame {
   }
 }
 
+/**
+ * 减时线：数字下的一道横线，第 `level` 层（1 起），从 `x0` 到 `x1`、中线在 `y`。
+ * 两端记着挂在哪两个数字上：导出 .pptx 时要按目标字体的数字宽把两端接回数字盒（`editor/pptx.ts`）。
+ */
+export class BeamLine extends GraphicLine {
+  constructor(
+    readonly level: number,
+    x0: number,
+    x1: number,
+    y: number,
+    width: number,
+    color: number,
+    readonly leftNum: JpNumber | null = null,
+    readonly rightNum: JpNumber | null = null,
+  ) {
+    super();
+    this.selectable = true;
+    this.x = x0;
+    this.p0 = new Point(0, y);
+    this.p1 = new Point(x1 - x0, y);
+    this.strokeWidth = width;
+    this.strokeColor = color;
+  }
+}
+
 export class Lyric extends TextFrame {
   _widths = [0, 0, 0];
   /** 标点挤压的档（`LayoutOptions.punctCompress`）。 */

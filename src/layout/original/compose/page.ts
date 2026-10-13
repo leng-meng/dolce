@@ -1,13 +1,13 @@
 // 一页：谱组、声部、连谱号的绘制。
 import { Font } from "../../font";
-import { Group } from "../../pageitem";
+import { BeamLine, Group } from "../../pageitem";
 import { sustainDash } from "../../../engrave/dash";
 import { beamY } from "../../../engrave/stack";
 import { syllableRun } from "../../../engrave/syllable";
 import type { ElementId } from "../../../model/doc";
 import { addBarlineOwner } from "../../identity";
 import type { PlacedGroup, PlacedPage, PlacedVoice } from "../place/model";
-import { type OriginalCtx, rect, text } from "./ctx";
+import { type OriginalCtx, text } from "./ctx";
 import { paintHeader } from "./header";
 import { paintBrace } from "./brace";
 import { paintLayer, paintMark } from "./marks";
@@ -221,14 +221,8 @@ export function paintVoice(c: OriginalCtx,
 
   // 减时线
   for (const u of voice.underlines) {
-    root.add(
-      rect(c.ink,
-        left + u.x0,
-        baseline + (u.dy ?? 0) + beamY(m.ink.noteHeight / 2, u.level, m.ink.stack) - m.style.stroke.beam / 2,
-        u.x1 - u.x0,
-        m.style.stroke.beam,
-      ),
-    );
+    const y = baseline + (u.dy ?? 0) + beamY(m.ink.noteHeight / 2, u.level, m.ink.stack);
+    root.add(new BeamLine(u.level, left + u.x0, left + u.x1, y, m.style.stroke.beam, c.ink));
   }
 
   paintLyricAnnotations(c, root, voice, left);

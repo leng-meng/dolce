@@ -1,7 +1,7 @@
 // 记号层：弧线、多连音、跳房子、渐强渐弱，以及内联层。
 import { Font } from "../../font";
 import { Point } from "../../../common/geom";
-import { Group, Slur } from "../../pageitem";
+import { BeamLine, Group, Slur } from "../../pageitem";
 import { addEndingBracket } from "../../../engrave/ending";
 import { TupletGlyph } from "../../../engrave/tuplet";
 import { sustainDash } from "../../../engrave/dash";
@@ -154,13 +154,6 @@ export function paintLayer(c: OriginalCtx,
     for (let i = 0; i < -oct; i++) root.add(dot(c.ink, x, y + lowDotY(h / 2, noteBeams(it.element), i, cue), cue.dotRadius));
   }
   for (const u of layer.underlines) {
-    root.add(
-      rect(c.ink,
-        left + u.x0,
-        y + beamY((m.ink.noteHeight * cs) / 2, u.level, cue) - cue.beamWidth / 2,
-        u.x1 - u.x0,
-        cue.beamWidth,
-      ),
-    );
+    root.add(new BeamLine(u.level, left + u.x0, left + u.x1, y + beamY((m.ink.noteHeight * cs) / 2, u.level, cue), cue.beamWidth, c.ink));
   }
 }

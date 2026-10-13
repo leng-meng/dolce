@@ -2,7 +2,7 @@
 import type { JianpuGrid } from "../metrics";
 import { Font } from "../../font";
 import type { Rect } from "../../../common/geom";
-import { GraphicPath, TextFrame } from "../../pageitem";
+import { GraphicPath, JpNumber, JpOctaveDot, TextFrame } from "../../pageitem";
 import { jpDot } from "../../../engrave/dot";
 import { fillRect, strokePath, textItem } from "../../../engrave/prims";
 import type { Region } from "../../../style/ss";
@@ -41,6 +41,25 @@ export const stroke = (color: number, width = 1.4): GraphicPath => strokePath(co
  *  挤压在这里就压掉了（engrave/prims.ts::textItem）。 */
 export function text(str: string, x: number, y: number, font: Font, color: number): TextFrame {
   return textItem(str, font, color, x, y, true);
+}
+
+/** 音符数字（成书、PPTX 按 `JpNumber` 认）。落笔点由调用方按墨迹居中算好（`digitOrigin`）。 */
+export function digitItem(ch: string, x: number, y: number, font: Font, color: number): JpNumber {
+  const t = new JpNumber();
+  t.text = ch;
+  t.font = font;
+  t.color = color;
+  t.x = x;
+  t.y = y;
+  return t;
+}
+
+/** 八度点 / 附点：圆心 (cx, cy)、半径 r 的实心圆（`JpOctaveDot`，局部盒 (0,0)–(2r,2r)）。 */
+export function octaveDot(color: number, cx: number, cy: number, r: number): JpOctaveDot {
+  const d = new JpOctaveDot(r, color);
+  d.x = cx - r;
+  d.y = cy - r;
+  return d;
 }
 
 /** 数字按墨迹居中于锚点：返回该把文字画在哪个 x/y，并附带墨迹盒。 */

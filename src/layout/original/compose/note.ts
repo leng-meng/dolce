@@ -4,7 +4,7 @@ import { noteMarkGap } from "../metrics";
 import { AccidentalGlyph, type AccidentalKind } from "../../../engrave/accidental";
 import { ACCIDENTAL_GLYPH, ACCOMP_BRACKET, BARLINE_MARKS, DYNAMICS, ORNAMENTS, TERMS } from "../../../pu/glyph";
 import { Font } from "../../font";
-import { Group } from "../../pageitem";
+import { Group, type JpNumber, type PageItem } from "../../pageitem";
 import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../../../engrave/chord";
 import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
 import { highDotY, lowDotY } from "../../../engrave/stack";
@@ -12,7 +12,7 @@ import { augDotCenter } from "../../../engrave/augdot";
 import { breathPath } from "../../../engrave/breath";
 import type { PlacedItem } from "../place/model";
 import { graceLayout, noteBeams, stackTop } from "../place/vertical";
-import { type OriginalCtx, digitOrigin, dot, rect, stroke, text } from "./ctx";
+import { type OriginalCtx, digitItem, digitOrigin, dot, octaveDot, rect, stroke, text } from "./ctx";
 
 /** 音符/增时线上方的和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）。 */
 export function paintChord(c: OriginalCtx, g: Group, chord: string, x: number, baseline: number): void {
@@ -38,10 +38,12 @@ export function paintNote(c: OriginalCtx,
   g.classes.add("entry");
   g.data = note;
 
+  let num: JpNumber | null = null;
   if (!note.hidden) {
     const ch = note.sound === "rhythm" ? "X" : String(note.pitch);
     const { dx, dy } = digitOrigin(c, ch);
-    g.add(text(ch, x + dx, baseline + dy, c.digitFont, c.ink));
+    num = digitItem(ch, x + dx, baseline + dy, c.digitFont, c.ink);
+    g.add(num);
 
     // 变音记号：画法与定位走公共那一份（engrave/accidental.ts，照混排：csym 字形、按数字墨迹盒定位）
     const kind = note.accidental as AccidentalKind | undefined;
@@ -57,10 +59,10 @@ export function paintNote(c: OriginalCtx,
     // 落点走公共那一份（engrave/stack.ts，墨迹到墨迹等距；低音点挂在减时线之下）
     const half = m.ink.noteHeight / 2;
     for (let i = 0; i < note.octave; i++) {
-      g.add(dot(c.ink, x, baseline + highDotY(-half, i, m.ink.stack), m.style.dot.octave));
+      g.add(octaveDot(c.ink, x, baseline + highDotY(-half, i, m.ink.stack), m.style.dot.octave));
     }
     for (let i = 0; i < -note.octave; i++) {
-      g.add(dot(c.ink, x, baseline + lowDotY(half, noteBeams(note), i, m.ink.stack), m.style.dot.octave));
+      g.add(octaveDot(c.ink, x, baseline + lowDotY(half, noteBeams(note), i, m.ink.stack), m.style.dot.octave));
     }
   }
 
@@ -69,7 +71,8 @@ export function paintNote(c: OriginalCtx,
   const digitInk = ab.offset(x + adx, baseline + ady);
   for (let i = 0; i < note.dots; i++) {
     const p = augDotCenter(digitInk, i, m.style.dot.aug, m.ink.stack.gap);
-    const d = dot(c.ink, p.cx, p.cy, m.style.dot.aug);
+    const d = octaveDot(c.ink, p.cx, p.cy, m.style.dot.aug);
+    if (num) d.aug = { num, index: i };
     d.classes.add("aug-dot"); // 可视化编辑单独点选附点（`notePartEls`）
     d.ident = { kind: "aug-dot" };
     g.add(d);
@@ -83,6 +86,7 @@ export function paintNote(c: OriginalCtx,
     const a = note.annotation;
     const t = text(a, x - font.measureText(a) / 2, baseline + c.chordLane, font, c.ink);
     t.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
+    t.classes.add("section-word"); // 成书 line-check 认段落词（`pdflayout/browser.ts::CLS_TAGS`）
     t.ident = { kind: "annotation" };
     g.add(t);
   }
@@ -103,10 +107,7 @@ export function paintNote(c: OriginalCtx,
   // `&xx` 记号
   const before = g.children.length;
   paintOrnaments(c, g, note.ornaments, x, baseline, stackTop(note, c.metrics));
-  for (const it of g.children.slice(before)) {
-    it.classes.add("ornament"); // 同上
-    it.ident = { kind: "deco" };
-  }
+  for (const it of g.children.slice(before)) it.ident = { kind: "deco" };
 
   root.add(g);
   const id = c.doc?.idOf.get(note);
@@ -135,7 +136,9 @@ function paintGrace(c: OriginalCtx,
   for (const d of geom.digits) {
     // 数字按**墨迹中心**定位（公共几何给的是中心，这里换算成落笔点）
     const b = font.charBound(d.text);
-    g.add(text(d.text, d.cx - (b.left + b.right) / 2, d.cy - (b.top + b.bottom) / 2, font, c.ink));
+    const t = text(d.text, d.cx - (b.left + b.right) / 2, d.cy - (b.top + b.bottom) / 2, font, c.ink);
+    t.classes.add("grace");
+    g.add(t);
   }
   for (const o of geom.dots) g.add(dot(c.ink, o.cx, o.cy, o.r));
   // 升降号：与主音同一套画法（Bravura 的 SMuFL 字形、按墨迹定位），只是所有量
@@ -150,11 +153,16 @@ function paintGrace(c: OriginalCtx,
     const ab = accFont.charBound(glyph);
     g.add(text(glyph, acc.inkRight - ab.right, acc.inkCy - (ab.top + ab.bottom) / 2, accFont, c.ink));
   }
-  for (const bm of geom.beams) g.add(rect(c.ink, bm.x, bm.y, bm.w, bm.h));
+  for (const bm of geom.beams) {
+    const r = rect(c.ink, bm.x, bm.y, bm.w, bm.h);
+    r.classes.add("grace-line");
+    g.add(r);
+  }
   if (geom.hook) {
     const p = stroke(c.ink, geom.hook.width);
     p.moveTo(geom.hook.m[0], geom.hook.m[1]);
     p.cubicTo(...geom.hook.c);
+    p.classes.add("grace-line");
     g.add(p);
   }
 }
@@ -172,6 +180,11 @@ export function paintOrnaments(c: OriginalCtx,
   const top = noteTop ?? -c.metrics.ink.noteHeight / 2;
   if (ornaments.length === 0) return;
   const m = c.metrics;
+  /** 记号带上类名：乐谱字形的奏法记号 `artic`，力度、术语、跳转字 `direction`（成书 line-check 认，`pdflayout/browser.ts::CLS_TAGS`） */
+  const add = (it: PageItem, cls: "artic" | "direction"): void => {
+    it.classes.add(cls);
+    g.add(it);
+  };
   let slot = 0;
   for (const orn of ornaments) {
     const y = baseline + m.note.ornamentY - orn.level * m.note.levelStep - slot * 11;
@@ -185,13 +198,13 @@ export function paintOrnaments(c: OriginalCtx,
       const bend = isLeft ? -4.5 : 4.5;
       p.moveTo(bx, baseline - h / 2);
       p.cubicTo(bx + bend, baseline - h / 4, bx + bend, baseline + h / 4, bx, baseline + h / 2);
-      g.add(p);
+      add(p, "artic");
       continue;
     }
 
     if (orn.name === "hx") {
       // 换气：细笔画的 V 挂在音符右上角（形状与落点走公共那一份，engrave/breath.ts）
-      g.add(breathPath(x, baseline, m.ink.noteHeight, 1.1, c.ink));
+      add(breathPath(x, baseline, m.ink.noteHeight, 1.1, c.ink), "artic");
       continue;
     }
 
@@ -203,9 +216,9 @@ export function paintOrnaments(c: OriginalCtx,
         // 延长记号按**墨迹**贴着音符堆叠顶（含高八度点）放，净距与减时线、八度点同一个值
         // （metrics.ts::alignNoteMarks）；走 laneOrnament 固定槽位离音符太远（用户口径）。
         const ab = font.charBound(glyph.glyph);
-        g.add(text(glyph.glyph, x - w / 2, baseline + top - noteMarkGap(m) - ab.bottom, font, c.ink));
+        add(text(glyph.glyph, x - w / 2, baseline + top - noteMarkGap(m) - ab.bottom, font, c.ink), "artic");
       } else {
-        g.add(text(glyph.glyph, x - w / 2, y, font, c.ink));
+        add(text(glyph.glyph, x - w / 2, y, font, c.ink), "artic");
       }
       slot += 1;
       continue;
@@ -219,7 +232,7 @@ export function paintOrnaments(c: OriginalCtx,
       // 数字一大力度就压到数字顶上；小节线、增时线上的（不传 top）照旧走槽位
       const ab = font.charBound(dyn);
       const dy = noteTop !== undefined && slot === 0 ? baseline + top - noteMarkGap(m) - ab.bottom : y;
-      g.add(text(dyn, x - w / 2, dy, font, c.ink));
+      add(text(dyn, x - w / 2, dy, font, c.ink), "direction");
       slot += 1;
       continue;
     }
@@ -227,7 +240,7 @@ export function paintOrnaments(c: OriginalCtx,
     const term = TERMS[orn.name];
     if (term) {
       const font = new Font(m.style.font.text.family, m.style.size.chord);
-      g.add(text(term, x - font.measureText(term) / 2, y, font, c.ink));
+      add(text(term, x - font.measureText(term) / 2, y, font, c.ink), "direction");
       slot += 1;
       continue;
     }
@@ -238,13 +251,13 @@ export function paintOrnaments(c: OriginalCtx,
       const w = font.measureText(mark.text);
       // **与小节线右对齐**（同简谱引擎 `layout.ts::addDirections`）：居中在线上的话一半压着线，
       // 线头又比数字高，正好戳进字里。基线也不许低于线顶一道空
-      if (bar) g.add(text(mark.text, bar.right - w, Math.min(y, bar.top - noteMarkGap(m)), font, c.ink));
-      else g.add(text(mark.text, x - w / 2, y, font, c.ink));
+      if (bar) add(text(mark.text, bar.right - w, Math.min(y, bar.top - noteMarkGap(m)), font, c.ink), "direction");
+      else add(text(mark.text, x - w / 2, y, font, c.ink), "direction");
       slot += 1;
     } else if (mark?.glyph) {
       const font = new Font("Bravura", c.digitFont.size * 0.95);
       const w = font.measureText(mark.glyph);
-      g.add(text(mark.glyph, x - w / 2, y, font, c.ink));
+      add(text(mark.glyph, x - w / 2, y, font, c.ink), "direction");
       slot += 1;
     }
   }

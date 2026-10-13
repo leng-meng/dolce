@@ -6,8 +6,8 @@
 import { zipSync, type Zippable } from "fflate";
 import * as opentype from "opentype.js";
 import { asset } from "../common/asset";
-import { BeamLine } from "../layout/entry";
 import {
+  BeamLine,
   GraphicLine,
   GraphicPath,
   Group,
@@ -187,8 +187,8 @@ function shapeVisitor(font: opentype.Font, out: Shape[], stackGap: number): Item
       // 减时线：排版给的两端是**排版字体**的数字 advance 边缘，可 .pptx 里画出来的
       // 数字是目标字体的宽度（见 TARGET_ADVANCE）。按目标宽度把两端接回数字盒，
       // 否则 "1" 底下那道线短一截、还整体偏左。
-      if (item instanceof BeamLine && item.left?.number && item.right?.number) {
-        const l = numberSpan(item.left.number), r = numberSpan(item.right.number);
+      if (item instanceof BeamLine && item.leftNum && item.rightNum) {
+        const l = numberSpan(item.leftNum), r = numberSpan(item.rightNum);
         x0 = l.cx - l.half;
         x1 = r.cx + r.half;
       }
