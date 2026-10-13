@@ -340,8 +340,8 @@ export function parseLyricLine(
       push(l);
       continue;
     }
-    // 左引号：领起**后**一个字，所以先吃住、挂到下一个音节前缀
-    if (PU_LYRIC_QUOTES.includes(ch) && isOpenQuote(ch)) {
+    // 左引号、开括号：领起**后**一个字，所以先吃住、挂到下一个音节前缀
+    if (isOpenQuote(ch)) {
       const next = body[i + 1];
       if (next !== undefined && isCjk(next)) {
         let text = ch + next;
@@ -353,6 +353,8 @@ export function parseLyricLine(
         push(l);
         continue;
       }
+      // 后面不是汉字：引号照旧不占位；括号不能丢（往返要稳），攒着挂到下一个音节前面
+      if (!PU_LYRIC_QUOTES.includes(ch)) prefix += ch;
       i++;
       continue;
     }

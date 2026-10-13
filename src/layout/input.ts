@@ -30,6 +30,8 @@ export interface JDirection {
   text: string;
   /** 走乐谱字体（力度记号）还是文本字体（`rit.` / `Fine` / `D.S.`）。 */
   music: boolean;
+  /** 力度记号（字号另按 `engrave/dynamics.ts::DYNAMIC_SIZE` 放大）。 */
+  dynamic?: boolean;
   /** 原文标的斜体。 */
   italic: boolean;
   /** 记号写在小节**最后一个音符之后**（`Fine` / `D.S.`），贴着小节线右对齐排。 */

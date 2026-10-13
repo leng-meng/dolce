@@ -4,7 +4,7 @@
 // engine that renders the live score SVG, so measurement and rendering agree.
 
 import { Rect } from "./geom";
-import { compressRun, pairTrimPx, type CompressMode, type Slack } from "./cjkpunct";
+import { compressRun, pairTrimPx, trimLeft, type CompressMode, type Slack } from "./cjkpunct";
 
 const SVG_NS = "http://www.w3.org/2000/svg";
 
@@ -320,6 +320,17 @@ export function measureGlyphRun(
   const width = t.getComputedTextLength();
   t.style.fontFeatureSettings = "";
   t.style.whiteSpace = "";
+  // **起始类标点要把笔位往左挪回压掉的那截**：特性换的是半宽字形（墨已挪进半格里），
+  // 而绘制端的 `<text>` 不叠特性、画的是全宽字形——它的墨在方框右半边，照特性笔位落笔就压到下一个字上
+  //（`（副`、`「面` 的括号骑在字上）。收尾类与点号的墨本来就在左半边，不用挪。
+  // 与不带特性那条路（`compressRun` 的 `xs.push(x - l)`）同一个口径
+  chars.forEach((ch, i) => {
+    if (trimLeft(ch) <= 0) return;
+    const featAdv = (i + 1 < chars.length ? xs[i + 1]! : width) - xs[i]!;
+    const fullAdv = measureGlyphText(ch, fontFamily, fontSizePx, fontWeight).width;
+    // 差不到半个点的是字形自己的进位误差（PingFang 的 `“` 本来就是半宽字形，两者只差 0.02），不挪
+    if (fullAdv - featAdv > 0.5) xs[i] = xs[i]! - (fullAdv - featAdv);
+  });
   return { xs, width };
 }
 

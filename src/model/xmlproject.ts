@@ -903,12 +903,43 @@ function autoBeams(
       }
     }
   }
+  // **倚音另成一组**：同一声部里紧挨着的几颗倚音连一条符杠（`{2_ 3_}5` 是一组两颗十六分，
+  // 各画各的符尾的话小旗子挤在一起、戳到主音符头上）。层数按各自的时值（八分一层、十六分两层…）。
+  const graceLevel = (el: Element): number =>
+    el.kind === "chord" ? GRACE_BEAM_LEVELS[el.duration.type ?? "eighth"] ?? 0 : 0;
+  let run: Chord[] = [];
+  const flush = (): void => {
+    if (run.length >= 2) {
+      const lv = run.map(graceLevel);
+      const maxLevel = Math.max(...lv);
+      for (let level = 1; level <= maxLevel; level++) {
+        run.forEach((ch, k) => {
+          if (lv[k]! < level) return;
+          const prevOn = k > 0 && lv[k - 1]! >= level;
+          const nextOn = k + 1 < run.length && lv[k + 1]! >= level;
+          const v: BeamVal = prevOn && nextOn ? "continue" : prevOn ? "end" : nextOn ? "begin" : k > 0 ? "backward hook" : "forward hook";
+          out.set(ch, [...(out.get(ch) ?? []), v]);
+        });
+      }
+    }
+    run = [];
+  };
+  for (const el of m.elements) {
+    if (el.kind === "chord" && el.grace && !el.rest && graceLevel(el) > 0) {
+      if (run.length && (run[run.length - 1]!.voice || 1) !== (el.voice || 1)) flush();
+      run.push(el);
+    } else flush();
+  }
+  flush();
   for (const el of m.elements) {
     const b = out.get(el);
     if (b) el.beams = b;
     else delete el.beams;
   }
 }
+
+/** 倚音的音符类型 → 符杠层数（`autoBeams` 给倚音成杠用）。 */
+const GRACE_BEAM_LEVELS: Partial<Record<string, number>> = { eighth: 1, "16th": 2, "32nd": 3, "64th": 4 };
 
 /** 拆开的小节：符杠不能跨过切点。段末的音 begin/continue → 收尾，段首的 continue/end → 起头；只剩自己一个的去掉。 */
 function closeBeams(m: Measure): void {

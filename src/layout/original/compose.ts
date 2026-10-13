@@ -25,6 +25,7 @@ import { EQ_PAD_EM } from "../../engrave/spacing";
 import { addEndingBracket } from "../../engrave/ending";
 import { TupletGlyph } from "../../engrave/tuplet";
 import { sustainDash } from "../../engrave/dash";
+import { DYNAMIC_SIZE } from "../../engrave/dynamics";
 import { beamY, highDotY, lowDotY } from "../../engrave/stack";
 import { augDotCenter } from "../../engrave/augdot";
 import { AccidentalGlyph, type AccidentalKind } from "../../engrave/accidental";
@@ -1136,6 +1137,8 @@ function paintOrnaments(c: OriginalCtx,
   baseline: number,
   /** 音符上方堆叠顶（相对基线，含高八度点，见 layout.ts::stackTop）；小节线/增时线上的记号不传 */
   noteTop?: number,
+  /** 挂在小节线上时，那条线的墨迹右缘与线顶（页坐标）：`Fine` / `D.S.` 照它右对齐、让开线头 */
+  bar?: { right: number; top: number },
 ): void {
   const top = noteTop ?? -c.metrics.ink.noteHeight / 2;
   if (ornaments.length === 0) return;
@@ -1181,7 +1184,7 @@ function paintOrnaments(c: OriginalCtx,
 
     const dyn = DYNAMICS[orn.name];
     if (dyn) {
-      const font = new Font("Bravura", c.digitFont.size * 0.95);
+      const font = new Font("Bravura", c.digitFont.size * DYNAMIC_SIZE);
       const w = font.measureText(dyn);
       // 按**墨迹**贴着音符那一摞（含高八度点）往上一道空（同延长记号）——固定槽位 `ornamentY` 不随字号走，
       // 数字一大力度就压到数字顶上；小节线、增时线上的（不传 top）照旧走槽位
@@ -1200,15 +1203,19 @@ function paintOrnaments(c: OriginalCtx,
       continue;
     }
 
-    const bar = BARLINE_MARKS[orn.name];
-    if (bar?.text) {
+    const mark = BARLINE_MARKS[orn.name];
+    if (mark?.text) {
       const font = new Font(m.font.text, m.size.chord);
-      g.add(text(bar.text, x - font.measureText(bar.text) / 2, y, font, c.ink));
+      const w = font.measureText(mark.text);
+      // **与小节线右对齐**（同简谱引擎 `layout.ts::addDirections`）：居中在线上的话一半压着线，
+      // 线头又比数字高，正好戳进字里。基线也不许低于线顶一道空
+      if (bar) g.add(text(mark.text, bar.right - w, Math.min(y, bar.top - noteMarkGap(m)), font, c.ink));
+      else g.add(text(mark.text, x - w / 2, y, font, c.ink));
       slot += 1;
-    } else if (bar?.glyph) {
+    } else if (mark?.glyph) {
       const font = new Font("Bravura", c.digitFont.size * 0.95);
-      const w = font.measureText(bar.glyph);
-      g.add(text(bar.glyph, x - w / 2, y, font, c.ink));
+      const w = font.measureText(mark.glyph);
+      g.add(text(mark.glyph, x - w / 2, y, font, c.ink));
       slot += 1;
     }
   }
@@ -1243,11 +1250,6 @@ function paintBarline(c: OriginalCtx,
     return null;
   }
 
-  if (el.ornaments.length > 0) {
-    const g = new Group();
-    paintOrnaments(c, g, el.ornaments, x, baseline);
-    root.add(g);
-  }
   // 临时拍号：`|"p:2/4"`，画在这条小节线右侧
   if (el.temporaryMeter) {
     const font = new Font(m.font.text, m.size.keyMeter * 0.85);
@@ -1264,7 +1266,14 @@ function paintBarline(c: OriginalCtx,
   const type = el.repeatForwardAfter && el.type === "normal" ? "repeat-start"
     : el.repeatForwardAfter && el.type === "repeat-end" ? "repeat-both" : el.type;
   const spec = PU_BARLINE_SPEC[type];
-  if (!spec) return null;
+  if (!spec) {
+    if (el.ornaments.length > 0) {
+      const og = new Group();
+      paintOrnaments(c, og, el.ornaments, x, baseline);
+      root.add(og);
+    }
+    return null;
+  }
   const r = new BarlineGlyph(spec, type === "end", {
     top: -half,
     bot: half + spanHeight,
@@ -1275,6 +1284,11 @@ function paintBarline(c: OriginalCtx,
   });
   // BarlineGlyph 的 x 从 0 起；文本谱的小节线是**居中于锚点**的
   const ox = x - r.width / 2;
+  if (el.ornaments.length > 0) {
+    const og = new Group();
+    paintOrnaments(c, og, el.ornaments, x, baseline, undefined, { right: ox + r.width, top: baseline - half });
+    root.add(og);
+  }
   const g = new Group();
   for (const item of r.items) {
     item.x += ox;
@@ -1340,8 +1354,11 @@ function paintLyricAnnotations(c: OriginalCtx, root: Group, voice: PlacedVoice, 
     // `%NN` 可以调这个间隙，默认 20% 字宽。
     const gapPx = Math.max(line.annotationGap / 100, 0.1) * m.size.lyric;
     const w = font.measureText(line.annotation);
+    // 首字前挂出去的前置标点（`“主`）也得让开，同 `systemMetrics` 留位的口径——不让的话段号压在引号上
+    const syl = line.syllables.find((x) => x?.text);
+    const lead = syl ? syllableRun(syl.text, new Font(m.font.text, m.size.lyric), m.look.punctCompress).lead : 0;
     root.add(
-      text(line.annotation, left - m.size.lyric * 0.5 - gapPx - w, voice.lyricY[verse]!, font, c.lyricInk),
+      text(line.annotation, left - m.size.lyric * 0.5 - lead - gapPx - w, voice.lyricY[verse]!, font, c.lyricInk),
     );
   });
 }

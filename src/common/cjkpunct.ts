@@ -234,12 +234,13 @@ export function isLyricCjk(ch: string): boolean {
 /** 并入前一字、不占音符格的标点。**引号也不占音符格**：直引号 `"` 分不出开闭，一律贴前字——
  *  位置上略有出入，但对位是对的；而把它当成一个音节会让后面整行错位、末尾溢出丢字。 */
 export function isLyricTrailingPunct(ch: string): boolean {
-  return PU_LYRIC_PUNCTUATION.includes(ch) || "”’｡、\"".includes(ch);
+  return !isLyricOpenQuote(ch) && (PU_LYRIC_PUNCTUATION.includes(ch) || "”’｡、\"".includes(ch));
 }
 
-/** 领起后一个字的左引号。 */
+/** 领起后一个字的左引号与开括号。开括号并到前一字后面的话（`段（副` 切成 `段（` + `副`），
+ *  它成了不占位的尾标点，后一个字直接压在括号上。 */
 export function isLyricOpenQuote(ch: string): boolean {
-  return ch === "“" || ch === "‘";
+  return "“‘（《(「『【〈".includes(ch);
 }
 
 /** `mixed/model.ts::LyricLayout.widthInfo`：判「哪些字算 CJK 主体」时要排除的标点。 */

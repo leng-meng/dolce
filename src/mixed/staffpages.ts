@@ -10,7 +10,7 @@ import { Matrix33 } from "../common/geom";
 import { Font } from "../layout/font";
 import { Group, TextFrame } from "../layout/pageitem";
 import type { StaffLeafData } from "./prims";
-import { harmonyBand, LCR, StaffLayout, Notation, ScoreCredit, Sys, type TextBlock } from "./model";
+import { harmonyBand, LCR, StaffLayout, Notation, ScoreCredit, Sys, type MeasureText, type TextBlock } from "./model";
 import { drawSystem } from "./render";
 
 // -----------------------------------------------------------------------
@@ -90,25 +90,28 @@ export function placeAboveStaff(score: StaffLayout, mixed: boolean): void {
       if (score.autoLayout && st.hasHarmony) floor = Math.max(floor, st.harmonyY + 3 + harmTop + MIXED_TEXT_CLEAR / 2);
       // 横向撞上的（曲首的速度记号与 `mp` 落在同一拍上）往上摞：y 是谱表之上的高度，大的在上
       const placed: { x0: number; x1: number; y0: number; y1: number }[] = [];
-      for (const m of sys.measures) {
-        for (const t of p.measures[m.index]?.textBlocks ?? []) {
-          if (!t.autoY || t.staff !== 0) continue;
-          if (t.y < floor) t.y = floor;
-          const w = t.width();
-          const x0 = m.xpos() + t.x - (t.justify === LCR.Center ? w / 2 : t.justify === LCR.Right ? w : 0);
-          const x1 = x0 + w;
-          const h = textInkHeight(t);
-          for (let again = true; again; ) {
-            again = false;
-            for (const b of placed) {
-              if (b.x1 + MIXED_TEXT_CLEAR / 2 <= x0 || b.x0 >= x1 + MIXED_TEXT_CLEAR / 2) continue;
-              if (t.y + h <= b.y0 || t.y >= b.y1) continue;
-              t.y = b.y1 + MIXED_TEXT_CLEAR / 2;
-              again = true;
-            }
+      // **速度记号最后排**（摞在最上面）：力度、文字记号贴着谱面，速度是整段的标题性记号，
+      // 按出现先后摞的话曲首的 `♩=88` 会被同一拍上的 `mp` 压到下面去
+      const isTempo = (t: MeasureText): boolean => !!t.src && [t.src, ...(t.src.more ?? [])].some((d) => d.type === "metronome");
+      const blocks = sys.measures.flatMap((m) => (p.measures[m.index]?.textBlocks ?? []).map((t) => ({ m, t })));
+      blocks.sort((a, b) => Number(isTempo(a.t)) - Number(isTempo(b.t)));
+      for (const { m, t } of blocks) {
+        if (!t.autoY || t.staff !== 0) continue;
+        if (t.y < floor) t.y = floor;
+        const w = t.width();
+        const x0 = m.xpos() + t.x - (t.justify === LCR.Center ? w / 2 : t.justify === LCR.Right ? w : 0);
+        const x1 = x0 + w;
+        const h = textInkHeight(t);
+        for (let again = true; again; ) {
+          again = false;
+          for (const b of placed) {
+            if (b.x1 + MIXED_TEXT_CLEAR / 2 <= x0 || b.x0 >= x1 + MIXED_TEXT_CLEAR / 2) continue;
+            if (t.y + h <= b.y0 || t.y >= b.y1) continue;
+            t.y = b.y1 + MIXED_TEXT_CLEAR / 2;
+            again = true;
           }
-          placed.push({ x0, x1, y0: t.y, y1: t.y + h });
         }
+        placed.push({ x0, x1, y0: t.y, y1: t.y + h });
       }
     }
   }

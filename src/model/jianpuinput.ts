@@ -509,7 +509,7 @@ function directionMarks(d: Direction): JDirection[] {
       res.push({ text: it.type === "segno" ? GlyphCodes.segno : GlyphCodes.coda, music: true, italic: false });
     } else if (it.type === "dynamics") {
       const g = it.text ? dynamicGlyphs(it.text) : "";
-      if (g) res.push({ text: g, music: true, italic: false });
+      if (g) res.push({ text: g, music: true, dynamic: true, italic: false });
     }
   }
   return res;

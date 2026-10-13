@@ -97,7 +97,7 @@ export function layoutOriginalPages(layout: Layout, score: JScore, w: number, h:
   // 才能让首页少放几行（`LayoutOptions.firstPageHeadroom`）。
   const head = opt.continuousPage || opt.bookHead ? bookHead(layout, score, w) : null;
   if (head) head.update();
-  opt.firstPageHeadroom = head && !opt.continuousPage ? head.height + opt.marginTop : 0;
+  opt.firstPageHeadroom = head && !opt.continuousPage ? head.height + headGap(opt) : 0;
   layout.fromScore(score, dur, w, h);
   // 没有页脚：原样档是印刷歌本的排法，成书（`pageFurniture: "none"`）的页眉页脚由整本那一层统一加；
   // 页脚只归展开档（`layoutExpandedPages`）。
@@ -139,6 +139,12 @@ function attachBookHead(layout: Layout, head: Group): void {
  * 连续长纸（「原样」档）：标题与词曲**排在同一张纸的顶上**，谱面接在下面，
  * 整张纸多高由内容说了算——不另起标题页，也没有页脚。
  */
+/** 标题块与第一条谱行之间的空：1.5 个音符字号（= 缺省上边距，见 `LayoutOptions.applyFontSize`）。
+ *  不直接取上边距——面板或谱里给了边距（500 首那张纸是 48pt，合 4 个字号）时，标题下就空出一大片。 */
+function headGap(opt: Layout["options"]): number {
+  return opt.numberSize * 1.5;
+}
+
 function stackContinuous(layout: Layout, head: Group): number[] {
   const opt = layout.options;
   const first = layout.pages[0];
@@ -148,8 +154,7 @@ function stackContinuous(layout: Layout, head: Group): number[] {
   outer.add(head);
   head.y = opt.marginTop;
   outer.add(first);
-  // 标题块与第一条谱行之间留一个上边距那么宽的空
-  first.y = head.y + head.height + opt.marginTop;
+  first.y = head.y + head.height + headGap(opt);
   outer.update();
   layout.pages = [outer];
   return [outer.y + outer.height + opt.marginBottom];

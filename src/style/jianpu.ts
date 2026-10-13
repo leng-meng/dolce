@@ -17,10 +17,12 @@ import { pageMargins } from "./paper";
 import { headerFontsOf } from "./header";
 import { resolveLength } from "./units";
 
-/** 原样档标题/词曲字号 ÷ 基础字号。取出厂那三个数的比（48/28、36/28）——
- *  那一档不单独设标题与词曲，字号一改整块跟着缩放，观感与出厂值一致。 */
-const TITLE_RATIO = PPTX_PAGE.titleSize / PPTX_PAGE.fontSize;
-const CREDIT_RATIO = PPTX_PAGE.creditSize / PPTX_PAGE.fontSize;
+/** 标题/词曲字号 ÷ 音符字号（那两档不单独设标题与词曲，字号一改整块跟着缩放）。
+ *  展开档取投影片出厂那三个数的比（48/28、36/28）；原样档照 500 首成书实测（标题 22.03、署名 10.98、音符 12.08）。 */
+const HEAD_RATIOS = {
+  pptx: { title: PPTX_PAGE.titleSize / PPTX_PAGE.fontSize, credit: PPTX_PAGE.creditSize / PPTX_PAGE.fontSize },
+  original: { title: 22.03 / 12.08, credit: 10.98 / 12.08 },
+} as const;
 
 /** 角色字号（pt）。只认 pt——note 是 em 的基准，不能相对自己。 */
 function rolePt(sheet: StyleSheet, role: "note" | "title" | "credit" | "chord"): number | undefined {
@@ -41,13 +43,17 @@ export function isLongImage(sheet: StyleSheet): boolean {
   return !isPagedSheet(sheet);
 }
 
+function headRatios(sheet: StyleSheet): { title: number; credit: number } {
+  return sheet.jianpu.preset === "original" ? HEAD_RATIOS.original : HEAD_RATIOS.pptx;
+}
+
 /** 字号标题、词曲的实际值：给了就用；原样档没给就按出厂比例派生。 */
 export function jianpuSizes(sheet: StyleSheet): { fontSize: number; titleSize: number; creditSize: number } {
   const fontSize = jianpuFontSize(sheet);
   return {
     fontSize,
-    titleSize: rolePt(sheet, "title") ?? Math.round(fontSize * TITLE_RATIO),
-    creditSize: rolePt(sheet, "credit") ?? Math.round(fontSize * CREDIT_RATIO),
+    titleSize: rolePt(sheet, "title") ?? Math.round(fontSize * headRatios(sheet).title),
+    creditSize: rolePt(sheet, "credit") ?? Math.round(fontSize * headRatios(sheet).credit),
   };
 }
 
@@ -151,6 +157,17 @@ function applyOriginalPreset(opt: LayoutOptions, longImage: boolean): void {
   opt.lyricStack = opt.lrcFont.size * LYRIC_STACK_RATIO;
   opt.continuousPage = longImage;
   opt.bookHead = true;
+  // **笔画按字号的比例给**（em，照 500 首成书实测：`dev/style/books/hymn500-measured.ss` 的 @jianpu）：
+  // 小节线 0.0714em、终止线粗线 0.125em、弧厚 0.214em；减时线、弧描边、弧高上下限 500 首没量，取与它同一档的比例。
+  // 写成绝对量的话换小纸（500 首那张 425×612、字号 12）时不跟着缩，小节线和反复点粗得压过数字
+  const em = opt.numberSize;
+  opt.barlineWidth = em / 14;
+  opt.finalBarlineWidth = em / 8;
+  opt.jpBeamWidth = em * (3 / 56);
+  opt.slurTieThickness = em * (3 / 14);
+  opt.slurOutlineWidth = em * 0.025;
+  opt.slurMaxHeight = em * (9 / 14);
+  opt.slurMinHeight = em * (5 / 14);
 }
 
 // 「PPT 版面」档：投影/导出 .pptx 用的那一档，编辑器的**默认档**。

@@ -386,7 +386,8 @@ export class NoteEntry extends Entry {
       lit.color = options.color;
       lit.verse = l.number;
       lit.update();
-      lit.x = it.left - lit.left;
+      // 对到数字的落笔点：前面有倚音时主音已右移了 `leadSpace`（`addGraceNotes`），不加 `it.x` 歌词就留在倚音底下
+      lit.x = it.x + it.left - lit.left;
       ent.add(lit);
     }
   }

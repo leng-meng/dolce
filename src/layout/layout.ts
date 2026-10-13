@@ -10,7 +10,8 @@ import { BarStyle, StartStopDiscontinue } from "../score/enums";
 import { addEndingBracket, labelBaseline } from "../engrave/ending";
 import { TupletGlyph } from "../engrave/tuplet";
 import type { Font } from "./font";
-import { measureDuration, type JChord, type JMeasure, type JNote, type JScore } from "./input";
+import { measureDuration, type JChord, type JDirection, type JMeasure, type JNote, type JScore } from "./input";
+import { DYNAMIC_SIZE } from "../engrave/dynamics";
 import { getOrNull, PageItem, Group, GraphicPath, TextFrame, SmuflText, JpNumber, Lyric, Tie, slurStyleOf, type SlurTieBase } from "./pageitem";
 import { hairpinPath } from "../engrave/hairpin";
 import { latinWordBreak } from "../engrave/syllable";
@@ -23,6 +24,12 @@ import { LayoutOptions } from "./options";
 
 /** 一行里的一段房：`cont` = 上一行续过来的（不画左脚、不印房号）。 */
 interface EndingSpan { num: string; notes: NoteEntry[]; closed: boolean; x0: number; x1: number; cont?: boolean }
+
+/** 力度、Segno 这类乐谱字体记号的字号：按数字字号算（与原样文档 `compose.ts::paintOrnaments` 同口径），
+ *  力度另乘 `DYNAMIC_SIZE`。按和弦字号排的话 Bravura 的力度字形小得看不清。 */
+function musicDirectionSize(opt: LayoutOptions, d: JDirection): number {
+  return opt.numberSize * (d.dynamic ? DYNAMIC_SIZE : 0.95);
+}
 
 export class Line {
   group = new Group();
@@ -55,7 +62,7 @@ export class Line {
   private bandBoxes: BandItem[] = [];
   /** 表情/跳转记号：纵向位置**堆叠之后**才定，见 placeDirections。
    *  `barLeft` 是本小节左侧那条小节线——让位不许越过它（越过去就成了上一小节的记号）。 */
-  private pendingDirs: { grp: Group; anchorX: number; fallbackY: number; barLeft: number }[] = [];
+  private pendingDirs: { grp: Group; anchorX: number; fallbackY: number; barLeft: number; bar?: Barline }[] = [];
   /** 弧的样式，由 addTie/addSlur 从 LayoutOptions 暂存下来（addSlurTie 拿不到 opt）。 */
   private slurStyle: SlurStyle = { thickness: 6, color: 0 };
   /** 弧罩住这么多音符就改画扁平式（0 = 只按跨度判）。见 LayoutOptions.slurFlatNotes。 */
@@ -485,7 +492,7 @@ export class Line {
     const size = opt.chordSize > 0 ? opt.chordSize : opt.numberSize * 0.6;
     let w = 0;
     for (const d of ch.directions) {
-      w += (d.music ? opt.smuflFont : opt.numberFont).makeWithSize(size).measureText(d.text) + size * 0.25;
+      w += (d.music ? opt.smuflFont.makeWithSize(musicDirectionSize(opt, d)) : opt.numberFont.makeWithSize(size)).measureText(d.text) + size * 0.25;
     }
     return Math.max(0, w - size * 0.25);
   }
@@ -557,7 +564,7 @@ export class Line {
         tf.classes.add("direction");
         tf.color = opt.color;
         tf.text = d.text;
-        tf.font = (d.music ? opt.smuflFont : opt.numberFont).makeWithSize(size);
+        tf.font = d.music ? opt.smuflFont.makeWithSize(musicDirectionSize(opt, d)) : opt.numberFont.makeWithSize(size);
         tf.inkBound = true; // 乐谱字体的全局 ascent/descent 有四个字号高，不能拿它当行高
         tf.update();
         tf.x = pen;
@@ -595,6 +602,7 @@ export class Line {
         anchorX: grp.x,
         fallbackY: e.group.y + inkTop - (opt.chordGap > 0 ? opt.chordGap : size),
         barLeft: barLeft ? barLeft.group.x + barLeft.inkRight : 0,
+        bar: atEnd ? barRight : undefined,
       });
       this.group.add(grp);
     }
@@ -616,11 +624,25 @@ export class Line {
     const right = lineWidth || this.group.width || Infinity;
     const gap = size * 0.28;
     const limit = size * 1.2;
-    const boxes: { g: Group; x0: number; x1: number }[] = [];
+    const boxes: { g: Group; x0: number; x1: number; bottom: number }[] = [];
     for (const e of this.entries) {
       if (!(e instanceof NoteEntry)) continue;
       for (const it of this.chordGroups(e))
-        boxes.push({ g: it, x0: e.group.x + it.x, x1: e.group.x + it.x + it.width });
+        boxes.push({ g: it, x0: e.group.x + it.x, x1: e.group.x + it.x + it.width, bottom: e.group.y + it.y + it.height });
+    }
+    // **不压小节线**：小节头一个音上的宽和弦（`B♭/C`）居中后左半截探过前面那条线，
+    // 线头又比数字高，正好戳进字里。和弦归这一小节，整块挪到线的右边
+    const bars = this.entries.filter((b): b is Barline => b instanceof Barline);
+    for (const b of boxes) {
+      const hit = bars.find((bar) => {
+        const l = bar.group.x + bar.inkLeft, r = bar.group.x + bar.inkRight;
+        return r > b.x0 - gap && l < b.x1 && (l + r) / 2 < (b.x0 + b.x1) / 2 && bar.group.y < b.bottom;
+      });
+      if (!hit) continue;
+      const dx = hit.group.x + hit.inkRight + gap - b.x0;
+      b.g.x += dx;
+      b.x0 += dx;
+      b.x1 += dx;
     }
     boxes.sort((a, b) => a.x0 - b.x0);
     for (let i = 1; i < boxes.length; i++) {
@@ -782,62 +804,14 @@ export class Line {
     if (!this.pendingDirs.length) return;
     const size = opt.chordSize > 0 ? opt.chordSize : opt.numberSize * 0.6;
     const chords = this.chordBoxes();
-    for (const { grp, anchorX, fallbackY, barLeft } of this.pendingDirs) {
-      if (!chords.length) {
-        grp.y += fallbackY; // 本行一个和弦都没有：退回音符上方那一带
-        continue;
+    for (const { grp, anchorX, fallbackY, barLeft, bar } of this.pendingDirs) {
+      this.placeDirection(opt, size, chords, grp, anchorX, fallbackY, barLeft);
+      // 贴着小节线右对齐的（`D.S.` / `Fine`）横向就在线顶上方：线比数字高出一截，
+      // 照和弦基线摆会压在线头上（终止线的粗线尤其明显）——整块抬到线顶之上一个叠层间距
+      if (bar) {
+        const barTop = bar.group.y;
+        if (grp.y + grp.height > barTop - opt.jpStackGap) grp.y = barTop - opt.jpStackGap - grp.height;
       }
-      // 基线取**离它最近的那个和弦**，不是本行第一个：同一行的和弦并不总是等高
-      //（八度点、被弧抬过的那些差半个字号），照第一个摆就与身边的错开。
-      const near = chords.reduce((m, c) =>
-        Math.abs((c.x0 + c.x1) / 2 - anchorX) < Math.abs((m.x0 + m.x1) / 2 - anchorX) ? c : m, chords[0]);
-      const baseY = near.base;
-      grp.y += baseY;
-      // 撞没撞上**按墨迹盒判**，别按「基线差多少」——高低差半个字号的和弦照样压得着。
-      const top = baseY - size * 0.85, bot = baseY + size * 0.25;
-      // 底下那一层（弧、三连音括线）也得算：470《出到营外》的 `mf` 就压在三连音括线上。
-      const low = this.bandBoxes.filter((b) => b.layer === 0);
-      const hits = (x0: number): boolean =>
-        chords.some((c) => c.inkTop < bot && c.base + size * 0.25 > top
-          && c.x1 > x0 - size * 0.35 && c.x0 < x0 + grp.width + size * 0.35)
-        || low.some((b) => b.top < bot && b.bottom > top
-          && b.x1 > x0 - size * 0.35 && b.x0 < x0 + grp.width + size * 0.35);
-      if (!hits(grp.x)) continue;
-      // 沿 x 让：挪到压着它的那些和弦的左边（`D.C. al Coda` 那种长记号在密和弦的
-      // 小节里常常让不开，036《这是天父世界》就是）。
-      // **挡路的要按 `hits` 那把尺子筛**（含那道净空容差）：照「严格重叠」筛的话，
-      // 差 0.3pt 挨着的和弦一个都选不中，`left` 成了 Infinity，于是明明往左让一让就行，
-      // 却直接抬到了上面一层（344《万古磐石为我开》的 `Fine`）。
-      const left = chords
-        .filter((c) => c.inkTop < bot && c.base + size * 0.25 > top
-          && c.x1 > grp.x - size * 0.35 && c.x0 < grp.x + grp.width + size * 0.35)
-        .reduce((m, c) => Math.min(m, c.x0), Infinity);
-      // **让位不许越过左边那条小节线**：`D.S.` / `Fine` 标的是**这一小节**唱到哪儿为止，
-      // 挪到上一小节去就换了意思（344《万古磐石为我开》的 `Fine` 曾这么跑到前一小节）。
-      const alt = left - grp.width - size * 0.3;
-      if (Number.isFinite(alt) && alt >= barLeft && alt >= 0 && !hits(alt)) {
-        grp.x = alt;
-        continue;
-      }
-      // 本小节里让不开：抬到**它那一段 x 上真正的最高墨迹**之上一格（弧、三连音括线…），
-      // 不是固定抬一个字号——179《我主耶稣是生命源》的 `f` 底下就一条弧，
-      // 照固定量抬完离弧 8pt，空落落地飘在那儿。下面什么都没有才退回固定量。
-      let lowTop = Infinity;
-      for (const b of this.bandBoxes) {
-        if (b.layer !== 0) continue;
-        if (b.x1 <= grp.x || b.x0 >= grp.x + grp.width) continue;
-        lowTop = Math.min(lowTop, b.topAt ? b.topAt(grp.x, grp.x + grp.width) : b.top);
-      }
-      // 和弦也在这一带（本来就是为了让开它才抬的），一并算进去——只让开弧的话
-      // 正好落进和弦的墨迹里（064《啊！圣善夜》、470《出到营外》各两处）
-      for (const c of chords) {
-        if (c.x1 <= grp.x || c.x0 >= grp.x + grp.width) continue;
-        // 和弦盒的顶是**字体 ascent**（纯文本那档 `inkBound` 是关的），比真墨迹高一截；
-        // 照它让位，记号就比和弦高出一大块（064《啊！圣善夜》的 Segno）。按各段文字的墨迹顶算
-        //（上标 `Am⁷` 的 7 比字母高，照字号估的 0.85 会压上去）。
-        lowTop = Math.min(lowTop, c.inkTop);
-      }
-      grp.y = Number.isFinite(lowTop) ? lowTop - opt.jpStackGap - grp.height : grp.y - size * 1.2;
     }
     // 记号定完了才进 `bandBoxes`——房号的车道要算上它们（`addEnding` 排在后面）
     for (const { grp } of this.pendingDirs)
@@ -845,6 +819,69 @@ export class Line {
         key: grp, x0: grp.x, x1: grp.x + grp.width,
         top: grp.y, bottom: grp.y + grp.height, layer: 1, kind: "chord",
       });
+  }
+
+  /** 一个表情/跳转记号的落位（`placeDirections` 的单件）。 */
+  private placeDirection(
+    opt: LayoutOptions, size: number, chords: ReturnType<Line["chordBoxes"]>,
+    grp: Group, anchorX: number, fallbackY: number, barLeft: number,
+  ): void {
+    if (!chords.length) {
+      grp.y += fallbackY; // 本行一个和弦都没有：退回音符上方那一带
+      return;
+    }
+    // 基线取**离它最近的那个和弦**，不是本行第一个：同一行的和弦并不总是等高
+    //（八度点、被弧抬过的那些差半个字号），照第一个摆就与身边的错开。
+    const near = chords.reduce((m, c) =>
+      Math.abs((c.x0 + c.x1) / 2 - anchorX) < Math.abs((m.x0 + m.x1) / 2 - anchorX) ? c : m, chords[0]);
+    const baseY = near.base;
+    grp.y += baseY;
+    // 撞没撞上**按墨迹盒判**，别按「基线差多少」——高低差半个字号的和弦照样压得着。
+    // 力度、Segno 按数字字号排（`musicDirectionSize`），比和弦字号估的那一截高——取实际墨迹盒与估值的并
+    const top = Math.min(baseY - size * 0.85, grp.y), bot = Math.max(baseY + size * 0.25, grp.y + grp.height);
+    // 底下那一层（弧、三连音括线）也得算：470《出到营外》的 `mf` 就压在三连音括线上。
+    const low = this.bandBoxes.filter((b) => b.layer === 0);
+    const hits = (x0: number): boolean =>
+      chords.some((c) => c.inkTop < bot && c.base + size * 0.25 > top
+        && c.x1 > x0 - size * 0.35 && c.x0 < x0 + grp.width + size * 0.35)
+      || low.some((b) => b.top < bot && b.bottom > top
+        && b.x1 > x0 - size * 0.35 && b.x0 < x0 + grp.width + size * 0.35);
+    if (!hits(grp.x)) return;
+    // 沿 x 让：挪到压着它的那些和弦的左边（`D.C. al Coda` 那种长记号在密和弦的
+    // 小节里常常让不开，036《这是天父世界》就是）。
+    // **挡路的要按 `hits` 那把尺子筛**（含那道净空容差）：照「严格重叠」筛的话，
+    // 差 0.3pt 挨着的和弦一个都选不中，`left` 成了 Infinity，于是明明往左让一让就行，
+    // 却直接抬到了上面一层（344《万古磐石为我开》的 `Fine`）。
+    const left = chords
+      .filter((c) => c.inkTop < bot && c.base + size * 0.25 > top
+        && c.x1 > grp.x - size * 0.35 && c.x0 < grp.x + grp.width + size * 0.35)
+      .reduce((m, c) => Math.min(m, c.x0), Infinity);
+    // **让位不许越过左边那条小节线**：`D.S.` / `Fine` 标的是**这一小节**唱到哪儿为止，
+    // 挪到上一小节去就换了意思（344《万古磐石为我开》的 `Fine` 曾这么跑到前一小节）。
+    const alt = left - grp.width - size * 0.3;
+    if (Number.isFinite(alt) && alt >= barLeft && alt >= 0 && !hits(alt)) {
+      grp.x = alt;
+      return;
+    }
+    // 本小节里让不开：抬到**它那一段 x 上真正的最高墨迹**之上一格（弧、三连音括线…），
+    // 不是固定抬一个字号——179《我主耶稣是生命源》的 `f` 底下就一条弧，
+    // 照固定量抬完离弧 8pt，空落落地飘在那儿。下面什么都没有才退回固定量。
+    let lowTop = Infinity;
+    for (const b of this.bandBoxes) {
+      if (b.layer !== 0) continue;
+      if (b.x1 <= grp.x || b.x0 >= grp.x + grp.width) continue;
+      lowTop = Math.min(lowTop, b.topAt ? b.topAt(grp.x, grp.x + grp.width) : b.top);
+    }
+    // 和弦也在这一带（本来就是为了让开它才抬的），一并算进去——只让开弧的话
+    // 正好落进和弦的墨迹里（064《啊！圣善夜》、470《出到营外》各两处）
+    for (const c of chords) {
+      if (c.x1 <= grp.x || c.x0 >= grp.x + grp.width) continue;
+      // 和弦盒的顶是**字体 ascent**（纯文本那档 `inkBound` 是关的），比真墨迹高一截；
+      // 照它让位，记号就比和弦高出一大块（064《啊！圣善夜》的 Segno）。按各段文字的墨迹顶算
+      //（上标 `Am⁷` 的 7 比字母高，照字号估的 0.85 会压上去）。
+      lowTop = Math.min(lowTop, c.inkTop);
+    }
+    grp.y = Number.isFinite(lowTop) ? lowTop - opt.jpStackGap - grp.height : grp.y - size * 1.2;
   }
 
   /** 本行没有和弦时段落词的收尾：被弧或三连音括线压住就抬到它之上一格。
@@ -887,6 +924,16 @@ export class Line {
         if (r - l < width || last === idx) {
           last++;
           continue;
+        }
+        // **放不下时退回到本行最后一条小节线之后断**：照条目贪心会把一个小节劈成两半
+        //（窄纸上 `2· 3 2·· 3` 的后半截 `2·· 3` 单独成行）。本行一条小节线都没有
+        //（单个小节就比版心宽）才在小节中间断
+        //（`‖:` 是下一小节的开头，断在它前面）
+        for (let k = last; k > idx + 1; k--) {
+          const b = this.entries[k - 1];
+          if (!(b instanceof Barline) || !this.entries.slice(idx, k - 1).some((e) => e instanceof NoteEntry)) continue;
+          last = b.spec.repeatForward && !b.spec.repeatBackward ? k - 1 : k;
+          break;
         }
         break;
       }

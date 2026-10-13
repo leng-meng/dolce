@@ -40,7 +40,7 @@ const GRACE_STEP = 0.45;
  *  不让位的话升降号会骑到左边那颗倚音上。 */
 const GRACE_ACC_INSET = 0.32;
 
-/** 倚音数字的墨迹高 ÷ 主音墨迹高。 */
+/** 钩子尺寸的基准（÷ 主音墨迹高）：原版倚音的墨迹高。叠层按各路实际的 `GraceMetrics.scale`。 */
 const GRACE_INK = 0.5;
 /** 减时线线宽（也是钩子的线宽）——这是**墨迹**不是间距，放宽间距时不要跟着动。 */
 const GRACE_BEAM_H = 0.055;
@@ -114,9 +114,11 @@ export function graceGeometry(
   const gxs = centers.map((c) => c + shift);
   // 竖向：倚音数字、减时线、八度点按**倚音自己的**叠层排（engrave/stack.ts，墨迹到墨迹等距，
   // 空 = stackGap × 倚音墨迹高），与主音那一摞同一个口径，只是整体缩小。
-  // **点半径照主音整体缩小**（倚音墨迹高是主音的一半，点也一半）。
-  const gInk = ink * GRACE_INK;
-  const st: StackStyle = { gap: m.stackGap * gInk, dotRadius: m.octaveDotRadius * GRACE_INK, beamWidth: ink * GRACE_BEAM_H };
+  // **点半径照主音整体缩小**（倚音墨迹高是主音的 `scale` 倍，点也同比）。
+  // 墨迹高按**实际字号比** `m.scale` 算，不按常数：简谱引擎的倚音是 0.59，照 0.5 排的话数字墨迹底
+  // 比算的低一截，正好吃掉数字与第一条减时线之间那道空（看着贴在一起）。
+  const gInk = ink * m.scale;
+  const st: StackStyle = { gap: m.stackGap * gInk, dotRadius: m.octaveDotRadius * m.scale, beamWidth: ink * GRACE_BEAM_H };
   const inkTop = gy - gInk / 2;
   const inkBottom = gy + gInk / 2;
   // 倚音默认八分：一条减时线；时值再短就多一层。比主音的细得多。
@@ -167,7 +169,7 @@ export function graceGeometry(
   // **有低音点时钩子接在低音点下方**：低音点排在数字正下方（cx = gx），钩子也从那儿
   // 垂下来；起点顺着同一条竖轴下移到最低那个点的下缘之外，中间留一道空（已经算进 `hookAt.y`）。
   const startY = low ? uy : uy + ink * 0.033;
-  out.hook = { ...graceHook(mid, startY, gInk, -dir as -1 | 1), width: ink * GRACE_BEAM_H };
+  out.hook = { ...graceHook(mid, startY, ink * GRACE_INK, -dir as -1 | 1), width: ink * GRACE_BEAM_H };
   return out;
 }
 
@@ -199,7 +201,7 @@ export function graceHook(mid: number, startY: number, gInk: number, toward: -1 
  * 再回填真正的 `centerY`（三引擎同一条，见 `entry.ts::addGraceNotes`、`compose.ts::paintGrace`、混排 `graceRow`）。
  */
 export function graceBottom(g: GraceGeom, m: GraceMetrics): number {
-  let low = (m.ink * GRACE_INK) / 2; // 数字自己的墨迹底
+  let low = (m.ink * m.scale) / 2; // 数字自己的墨迹底
   for (const b of g.beams) low = Math.max(low, b.y + b.h);
   for (const d of g.dots) low = Math.max(low, d.cy + d.r);
   return low;

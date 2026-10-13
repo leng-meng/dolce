@@ -79,7 +79,7 @@ const AUTO_NOTE_PAD = 8;    // 铺开音符时两端留白
 const AUTO_LYRIC_SPACE = 6;  // 相邻两个字之间至少留的空
 const AUTO_HARMONY_SPACE = 8; // 相邻两个和弦符号之间至少留的空
 const AUTO_GRACE_STEP = 14;   // 倚音一个占多宽（小号符头 + 符尾 + 间隙；tenths）
-const AUTO_GRACE_GAP = 8;     // 最靠近主音的那个倚音与主音之间再多留的空（倚音的符尾朝右伸）
+const AUTO_GRACE_GAP = 14;    // 最靠近主音的那个倚音与主音之间再多留的空（倚音的符尾朝右伸；8 时单颗倚音的符尾贴到主音符头）
 
 /** 一个和弦前（`after` = 后）挨着的那串倚音：同声部同谱表、在元素流里紧挨着它的 grace 和弦，按离它由远到近排。 */
 function gracesOf(md: { chords: readonly ChordLayout[] }, ch: ChordLayout, after: boolean): ChordLayout[] {
@@ -754,7 +754,16 @@ function updateDataXPos(score: StaffLayout): void {
       // `<harmony relative-x>`：和弦相对拍位的横向微调（歌本改谱脚本写进 XML 的那种）
       for (const h of md.harmonies) h.x = mif.getEntPos(h.offset) + (xmlPos(h.src)?.relativeX ?? 0);
       for (const t of md.textBlocks) {
-        if (t.data.length && t.relative) t.x += mif.getEntPos(t.offset);
+        if (!t.data.length || !t.relative) continue;
+        // **写在小节末尾的（`D.S.` / `Fine`）与小节线右对齐**（同简谱 `layout.ts::addDirections`）：
+        // 小节末的拍位是最后一个音之后的数据区末端，照它左对齐就从线上探出去。只管自动铺排、
+        // 原文没写横坐标的（带版面的谱照原文）
+        if (score.autoLayout && fEq(t.offset, mif.dur) && t.justify === LCR.Left && t.x === 0 && t.src && !xmlPos(t.src)) {
+          t.x = mif.width;
+          t.justify = LCR.Right;
+          continue;
+        }
+        t.x += mif.getEntPos(t.offset);
       }
     }
   }

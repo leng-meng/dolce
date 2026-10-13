@@ -844,12 +844,12 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return this._jpwDoc;
   }
 
-  /** 五线谱/混排档的纸（键取自 `PAPER_SIZES`），出厂 A4。 */
+  /** 五线谱/混排档的纸（键取自 `PAPER_SIZES`），出厂 `STAFF_PAPER_DEFAULT`。 */
   get staffPaper(): string {
     return this.staffStyle().page.paper ?? STAFF_PAPER_DEFAULT;
   }
 
-  /** 五线谱/混排档的纸：设置里五线谱那张（谱里写了纸就是谱里那张，见曲内层）；长图按 A4 宽、`heightPt = null`。
+  /** 五线谱/混排档的纸：设置里五线谱那张（谱里写了纸就是谱里那张，见曲内层）；长图按出厂纸宽、`heightPt = null`。
    *  `override`：用户明确选过纸——谱里的 `<page-layout>` 连同版面坐标都不用了，按这张纸重新铺排。 */
   get staffPage(): { widthPt: number; heightPt: number | null; marginsPt?: number[]; override: boolean } {
     const pg = this.staffStyle().page;

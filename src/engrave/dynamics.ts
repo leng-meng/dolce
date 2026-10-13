@@ -13,6 +13,10 @@ const LETTER: Readonly<Record<string, string>> = {
   n: GlyphCodes.dynamicNiente,
 };
 
+/** 力度字形的字号 ÷ 简谱数字字号。Bravura 的力度字形很矮（`m` 的墨迹约 0.25 em），
+ *  按数字字号排只有数字一半高、看着太小；1.4 时小写部分约为数字墨迹高的一半。简谱两条路（简谱引擎、原样文档）同用。 */
+export const DYNAMIC_SIZE = 1.4;
+
 /** 力度名 → 字形串；有认不出的字母（不是力度名）返回 ""。 */
 export function dynamicGlyphs(name: string): string {
   let res = "";

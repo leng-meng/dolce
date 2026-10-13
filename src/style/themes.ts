@@ -31,7 +31,7 @@ export const PAGE_RATIOS: Record<string, [number, number]> = {
 export const PAPER_SIZES: Record<string, readonly [number, number] | null> = { ...STANDARD_PAPERS, 长图: null };
 
 /** 「原样」档能选的纸（含长图）。 */
-export const ORIGINAL_PAPERS = ["A4", "A5", "B5", "Letter", "长图"] as const;
+export const ORIGINAL_PAPERS = ["A4", "A5", "B5", "Letter", "150×216mm", "155×240mm", "长图"] as const;
 
 /** 「长图」那一档的纸宽。取文本谱「原版」量到的那一份（`layout/original/metrics.ts::JIANPU_DEFAULTS.page.width`）
  *  ——两者本就是同一种观感，长图也就该同宽。 */
@@ -40,12 +40,12 @@ export const LONG_IMAGE_WIDTH = 1000;
 /** 出厂纸。原样档与文本谱「原版」档一贯的观感都是长图。 */
 export const PAPER_DEFAULT = "长图";
 
-/** 五线谱/混排的出厂纸。五线谱一贯按实际纸张排（MusicXML 的 `<page-layout>` 也都是纸），
+/** 五线谱/混排的出厂纸：155×240mm（歌本开本，用户定）。五线谱一贯按实际纸张排（MusicXML 的 `<page-layout>` 也都是纸），
  *  不跟简谱原样档的「长图」——长图宽 1000pt、页高随内容，短曲子排出来是一张扁图，像横版。 */
-export const STAFF_PAPER_DEFAULT = "A4";
+export const STAFF_PAPER_DEFAULT = "155×240mm";
 
-/** 五线谱/混排选了「长图」时的纸宽：按 A4 宽排，只是不分页（1000pt 宽的谱表比 A4 宽出近一倍）。 */
-export const STAFF_LONG_IMAGE_WIDTH = 595;
+/** 五线谱/混排选了「长图」时的纸宽：按出厂纸的宽排，只是不分页（1000pt 宽的谱表比纸宽出一倍多）。 */
+export const STAFF_LONG_IMAGE_WIDTH = STANDARD_PAPERS[STAFF_PAPER_DEFAULT]![0];
 
 /** 这个纸张名在不在表里。 */
 export const isPaper = (k: unknown): k is string =>
