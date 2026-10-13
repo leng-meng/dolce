@@ -75,19 +75,28 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     foot: cfg.foot,
   };
   const headerBottoms = doc.songs.map((song) => headerBottom(c, song.metadata));
-  // 墨迹量具注入给排版（它不碰字体）。
-  // 歌词：落位口径同 paintSyllables——主体居中于锚点、尾随标点挂右边。量墨迹而不是字面框：「声，」的全角逗号字面框右半边是空的，
-  // 按字面框约束会把墨迹根本没碰到的行也撑开（《圣哉三一歌》长图就是这样被误伤的）。
-  // 歌词避让量的是**画出来的**那串：与 paintSyllables 同一个居中点、同一串挤压后的宽
+  // 量具注入给排版（它不碰字体）。歌词量的是**画出来的**那串：与 paintSyllables 同一串挤压后的笔位，
+  // 首尾留白的口径同简谱引擎的 `Lyric.headBlank / tailBlank`（横向避让的判据从那边整段搬来，见 place/spacing.ts）
   const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
   const ink: InkMeasurer = {
     lyric(syl) {
-      const str = syl.text + (syl.trailingPunctuation ?? "");
-      const run = syllableRun(str, lyricFont, m.style.look.punctCompress);
-      const b = lyricFont.charBound(str);
-      const center = run.lead + run.body / 2;
-      return { left: center - b.left, right: Math.min(run.width, b.right) - center };
+      const text = syl.text + (syl.trailingPunctuation ?? "");
+      const run = syllableRun(text, lyricFont, m.style.look.punctCompress);
+      const chars = [...text];
+      const first = chars[0] ?? "";
+      const last = chars[chars.length - 1] ?? "";
+      const pen0 = run.xs?.[0] ?? 0;
+      const upto = run.xs ? run.xs[chars.length - 1]! : lyricFont.measureText(text.slice(0, text.length - last.length));
+      return {
+        text,
+        width: run.width,
+        lead: run.lead,
+        body: run.body,
+        headBlank: first ? Math.max(0, pen0 + lyricFont.charBound(first).left) : 0,
+        tailBlank: last ? Math.max(0, run.width - (upto + lyricFont.charBound(last).right)) : 0,
+      };
     },
+    lyricSpace: lyricFont.measureText(" "),
     digit: (ch) => ({ advance: c.digitFont.measureText(ch), ink: c.digitFont.charBound(ch) }),
   };
   // **源里的行放不下就整首重新断行**（用户定：原样档按排得下的位置断、中间不要短行）：断点写进文档克隆的换行位、
@@ -120,7 +129,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     // 直接用 marginLeft 会左右不对称（实测 14 / 81）。
     const inkLeft = Math.min(...placed.pages.map((p) => systemLeft(c, p)));
     const inkRight =
-      m.page.margin.left + m.page.systemIndent + placed.contentRight + m.ink.noteHeight * 0.6;
+      m.page.margin.left + placed.contentRight + m.ink.noteHeight * 0.6;
     // **纸宽固定**（用户定：长图与分页纸同宽，各曲一样宽）：墨迹那一段在纸宽里左右居中；
     // 放不下（单个小节就比版心宽）才按墨迹撑宽
     // 墨迹段本来就是「版心 + 两侧伸出的一点」，不再另加长图留白（加了就总比纸宽）

@@ -60,7 +60,7 @@ function systemMetrics(c: OriginalCtx, group: PlacedGroup, page?: PlacedPage): {
   };
   const labelWidth = widthOf(group);
   const slotWidth = Math.max(labelWidth, ...(page?.groups ?? []).map(widthOf));
-  const notesLeft = m.page.margin.left + m.page.systemIndent;
+  const notesLeft = m.page.margin.left;
   // 段号排在 [细竖线] ← 间隙 → [段号] ← 间隙 → [歌词首字] 之间
   const labelToLyric = m.style.size.verseNum * 0.2;
   const lineToLabel = m.style.size.verseNum * 0.55;
@@ -148,7 +148,7 @@ export function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): 
           if (it.element.kind !== "barline") continue;
           const g = paintBarline(c,
             sys,
-            m.page.margin.left + m.page.systemIndent + it.x,
+            m.page.margin.left + it.x,
             first.y,
             it,
             last.y - first.y,
@@ -180,7 +180,7 @@ export function paintVoice(c: OriginalCtx,
   skipBarlines = false,
 ): void {
   const m = c.metrics;
-  const left = m.page.margin.left + m.page.systemIndent;
+  const left = m.page.margin.left;
   const baseline = voice.y;
   c.chordLane = voice.chordY;
   /** 各段歌词墨迹的最右缘，联合括号据此定位 */

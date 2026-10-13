@@ -57,6 +57,12 @@ export const TIME_SIG_DEFAULTS = {
   ruleLengthRatio: 0.28125,
 } as const;
 
+/** 拍号占的宽（即分数线长）：只由小节线高 `H` 与位数定，纯算术——横向排布给行中转拍让位用（`place/spacing.ts`）。 */
+export function timeSigWidth(beats: number, beatType: number, H: number, digitRatio?: number, ruleLengthRatio?: number): number {
+  const digits = Math.max(String(beats).length, String(beatType).length);
+  return digits * (ruleLengthRatio !== undefined ? H * ruleLengthRatio : H * (digitRatio ?? TIME_SIG_DEFAULTS.digitRatio) * 0.5);
+}
+
 /**
  * 分数式拍号（分子在上、分母在下、中间一横），**两个数字都横向居中于分数线**。
  * 图元相对自身原点，x 从 0 起，宽度即分数线长度。
@@ -87,8 +93,7 @@ export class TimeSigGlyph {
     // **长度按位数算**，不跟着字体量出来的数字宽度走：给了 `ruleLengthRatio` 就按 H 的比例，
     // 没给就按**拍值字号的半个 em**（数字 advance）——那正是默认比例 0.28125 的来历
     //（0.5 × 默认 digitRatio 0.5625），字号一改自己跟着走，不必再算一遍比例。
-    const digits = Math.max(String(beats).length, String(beatType).length);
-    const width = digits * (style.ruleLengthRatio !== undefined ? H * style.ruleLengthRatio : font.size * 0.5);
+    const width = timeSigWidth(beats, beatType, H, style.digitRatio, style.ruleLengthRatio);
 
     // 竖向：两个数字各离分数线**一格**（TIME_SIG_GAP_EM × 拍值字号，墨迹到墨迹），
     // `TextFrame.y` 是基线，故上数字要减去墨迹底（数字一般 ≈ 0）、下数字要减去墨迹顶

@@ -1,23 +1,14 @@
 // 小节线（含反复点、跳转记号）的绘制。
 import { Font } from "../../font";
 import { Group } from "../../pageitem";
-import { BarlineGlyph, type BarlineSpec } from "../../../engrave/barline";
-import { BarStyle } from "../../../score/enums";
+import { BarlineGlyph } from "../../../engrave/barline";
+import { puBarlineSpec } from "../barspec";
+import { TIME_SIG_PAD_EM } from "../place/spacing";
 import { barlineSpan } from "../metrics";
 import type { PlacedItem } from "../place/model";
 import type { OriginalCtx } from "./ctx";
 import { paintMeter } from "./header";
 import { paintOrnaments } from "./note";
-
-/** 文本谱的小节线类型 → 谱面那一路的 `BarlineSpec`（两边的表达力一一对上）。 */
-const PU_BARLINE_SPEC: Record<string, BarlineSpec | undefined> = {
-  normal: {},
-  double: { style: BarStyle.LIGHT_LIGHT },
-  end: { style: BarStyle.LIGHT_HEAVY },
-  "repeat-start": { repeatForward: true },
-  "repeat-end": { repeatBackward: true },
-  "repeat-both": { repeatBackward: true, repeatForward: true },
-};
 
 /** `spanHeight` > 0 时，这条小节线从 baseline 一直画到 baseline+spanHeight（贯穿多声部）。
  *
@@ -43,15 +34,9 @@ export function paintBarline(c: OriginalCtx,
     }
     if (el.temporaryMeter) {
       const font = new Font(m.style.font.text.family, m.style.size.keyMeter * 0.85);
-      paintMeter(c, root, x, baseline, el.temporaryMeter, font);
+      paintMeter(c, root, x + m.style.size.note * TIME_SIG_PAD_EM, baseline, el.temporaryMeter, font);
     }
     return null;
-  }
-
-  // 临时拍号：`|"p:2/4"`，画在这条小节线右侧
-  if (el.temporaryMeter) {
-    const font = new Font(m.style.font.text.family, m.style.size.keyMeter * 0.85);
-    paintMeter(c, root, x + m.style.stroke.doubleBarlineGap, baseline, el.temporaryMeter, font);
   }
 
   // 粗细组合、反复点、线间距**全部走谱面那一路的画法**（engrave/barline.ts::BarlineGlyph）。
@@ -59,11 +44,8 @@ export function paintBarline(c: OriginalCtx,
   // 反复点在 ±0.18H 且离线 6px——同一件事两种写法，改一处忘一处。
   // 纵向范围与简谱引擎同一口径（`barlineSpan`），连谱号跨声部时下缘再加 spanHeight。
   const span = barlineSpan(m);
-  // 下一小节左线上起反复（`repeatForwardAfter`）：这条线画成 `|:` / `:|:`
-  const type = el.repeatForwardAfter && el.type === "normal" ? "repeat-start"
-    : el.repeatForwardAfter && el.type === "repeat-end" ? "repeat-both" : el.type;
-  const spec = PU_BARLINE_SPEC[type];
-  if (!spec) {
+  const bs = puBarlineSpec(el);
+  if (!bs) {
     if (el.ornaments.length > 0) {
       const og = new Group();
       paintOrnaments(c, og, el.ornaments, x, baseline);
@@ -71,7 +53,7 @@ export function paintBarline(c: OriginalCtx,
     }
     return null;
   }
-  const r = new BarlineGlyph(spec, type === "end", {
+  const r = new BarlineGlyph(bs.spec, bs.final, {
     top: span.top,
     bot: span.bottom + spanHeight,
     light: m.style.stroke.barline,
@@ -81,6 +63,13 @@ export function paintBarline(c: OriginalCtx,
   });
   // BarlineGlyph 的 x 从 0 起；文本谱的小节线是**居中于锚点**的
   const ox = x - r.width / 2;
+  // 临时拍号：`|"p:2/4"`，画在这条小节线组的右缘之后、前空一格（占位同口径，见 place/spacing.ts::barlineBox / meterAdvance）
+  if (el.temporaryMeter) {
+    const font = new Font(m.style.font.text.family, m.style.size.keyMeter * 0.85);
+    const last = r.lines[r.lines.length - 1]!;
+    const right = bs.spec.repeatForward ? r.width + 2 * m.style.dot.repeat : last.x + last.strokeWidth;
+    paintMeter(c, root, ox + right + m.style.size.note * TIME_SIG_PAD_EM, baseline, el.temporaryMeter, font);
+  }
   if (el.ornaments.length > 0) {
     const og = new Group();
     paintOrnaments(c, og, el.ornaments, x, baseline, undefined, { right: ox + r.width, top: baseline + span.top });

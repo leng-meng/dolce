@@ -121,11 +121,27 @@ export interface PlacedScore {
   contentRight: number;
 }
 
+/** 一个音节画出来的那串（字 + 尾随标点，标点挤压后）的横向度量，口径同简谱引擎的 `Lyric`（`pageitem.ts`）。
+ *  音节按**主体**居中于锚点、前后标点挂出去（同 compose/lyric.ts::paintSyllables）。 */
+export interface LyricRun {
+  text: string;
+  /** 整串字面宽 */
+  width: number;
+  /** 前置标点（`“凡` 的引号）宽 */
+  lead: number;
+  /** 主体宽 */
+  body: number;
+  /** 首字墨迹左边的留白（从挤压后的笔位起算） */
+  headBlank: number;
+  /** 末字墨迹右边的留白 */
+  tailBlank: number;
+}
+
 /** 定位用的墨迹量具，由绘制端注入（`compose/index.ts`）：排版这一层不碰字体。 */
 export interface InkMeasurer {
-  /** 一个音节画出来之后，**墨迹**在锚点左右各伸出多少（音节按**主体**居中于锚点，尾随标点挂在右边——
-   *  同 compose/lyric.ts::paintSyllables）。 */
-  lyric(syl: LyricSyllable): { left: number; right: number };
-  /** 音符数字（`0`–`7`、`X`）：字面宽，与墨迹盒（相对落笔原点、基线 y = 0）。 */
+  lyric(syl: LyricSyllable): LyricRun;
+  /** 歌词字体的空格宽（西文词与词之间补的那一格） */
+  readonly lyricSpace: number;
+  /** 音符数字（`0`–`7`、`X`、增时线 `-`、附点 `·`）：字面宽，与墨迹盒（相对落笔原点、基线 y = 0）。 */
   digit(ch: string): { advance: number; ink: Rect };
 }

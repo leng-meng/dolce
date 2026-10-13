@@ -113,10 +113,8 @@ export interface JianpuStyle {
   spacing: {
     /** 相邻歌词字之间的最小横向间隙 */
     lyricGap: number;
+    /** 两端对齐时往空档里加的总量最多是自然宽的这么多倍（短行不被扯得满行都是） */
     maxHorizontalScale: number;
-    /** 是否两端对齐、末行自然宽不足版心这个比例就不拉（原样文档） */
-    justify: boolean;
-    lastLineMinFill: number;
   };
   look: {
     /** 音符数字（与倚音）加粗。只管数字，和弦、房号那些用 `font.note` 不跟着粗 */

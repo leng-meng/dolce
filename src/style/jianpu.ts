@@ -111,7 +111,7 @@ export function defaultJianpuStyle(fontSize: number): JianpuStyle {
       barlineHeight: (fontSize * 4) / 3,
     },
     arc: { heightScale: 1, maxHeight: 18, minHeight: 10, flatSpan: 0, flatNotes: 0, flatRatio: 0 },
-    spacing: { lyricGap: 0, maxHorizontalScale: 2.0, justify: true, lastLineMinFill: 0.7 },
+    spacing: { lyricGap: 0, maxHorizontalScale: 2.0 },
     look: {
       noteBold: true,
       chordPlain: false,

@@ -3,7 +3,7 @@ import type { Meter, PuSong } from "../../../pu/ast";
 import { contentWidth, type JianpuGrid } from "../metrics";
 import { paginate, type SystemBlock } from "../../../jianpu/vertical";
 import type { InkMeasurer, PlacedGroup, PlacedPage, PlacedScore, PlacedVoice } from "./model";
-import { alignVoices, placeColumns } from "./spacing";
+import { placeColumns } from "./spacing";
 import { type BeatCtx, assignLyrics, computeUnderlines, layoutVoiceLine } from "./voice";
 import { GROUP_CLEAR, braceReach, chordLane, groupHeadroom, lineInkBottom, stackTop, voiceHeadroom } from "./vertical";
 import { placeMarks } from "./marks";
@@ -39,9 +39,9 @@ export function layoutSong(
   headerBottom = 0,
   ink: InkMeasurer,
 ): PlacedPage[] {
-  // 可用宽度要扣掉左内边距和末个音符的字形半宽，这样两端对齐后
-  // 最后一个音符的墨迹右缘正好落在版心右缘上
-  const width = contentWidth(m) - m.page.systemIndent - m.ink.noteHeight * 0.6;
+  // 行占满版心：行首最左的内容（数字落笔原点、升降号、歌词左缘）贴左缘，两端对齐后行末的占位右缘
+  //（末个音符的字面右缘、或末条小节线）贴右缘，同简谱引擎
+  const width = contentWidth(m);
 
   const bottomLimit = m.page.height - m.page.margin.bottom;
   // 拍号一路带过来：头部 `1=D4/4 3/4 5/4` 这类混合拍只有首个是起头拍号，其余由曲中
@@ -88,25 +88,14 @@ export function layoutSong(
       }
       const laidOut = group.voices.map((voice) => layoutVoiceLine(voice, m, beatCtx));
       carryCursor = laidOut[0]?.tail ?? 0;
-      // 多声部：同组各行按**拍位**对齐——逐个拍位取各声部里最靠右的 x，统一推齐。
-      if (laidOut.length > 1) alignVoices(laidOut);
-      // 两端对齐：诗歌本/印刷原版把每个 system 拉到版心右缘；番茄不拉伸，短行就是短的。
-      // 无论哪种方言，超宽都要压缩。末组太短则不拉，免得几个音符被扯得满行都是。
-      const natural = Math.max(...laidOut.map((l) => l.width), 1);
-      const fill = natural / width;
-      const stretchable =
-        m.style.spacing.justify && !(group === lastGroup && fill < m.style.spacing.lastLineMinFill);
-      const scale = stretchable
-        ? Math.min(width / natural, m.style.spacing.maxHorizontalScale)
-        : Math.min(1, width / natural);
-
-      // 音节先挂上（只按序号对到跟词的符号上），列位置要看字宽
+      // 音节先挂上（只按序号对到跟词的符号上），列宽要看字宽
       laidOut.forEach((l, vi) => {
         const voice = group.voices[vi]!;
         for (const it of l.items) it.syllables = new Array(voice.lyrics.length).fill(null);
         assignLyrics(l.items, voice.lyrics);
       });
-      placeColumns(laidOut, group.voices.map((v) => v.lyrics), scale, stretchable, width, m, ink);
+      // 横向：各声部同一拍位归一列、列宽按内容、歌词避让、两端对齐（spacing.ts）
+      placeColumns(laidOut, m, ink, width);
 
       const voices: PlacedVoice[] = [];
       let textY = y + m.note.wordsY;

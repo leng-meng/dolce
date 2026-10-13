@@ -30,12 +30,18 @@ export function assignLyrics(items: PlacedItem[], lyrics: readonly LyricLine[]):
   });
 }
 
-/** 算一行的自然布局（x 从 0 起），返回符号序列与自然总宽。 */
+/**
+ * 一行一个声部的符号序列、拍位与拍组。
+ *
+ * 主旋律的横向位置由 `spacing.ts::placeColumns` 按内容另算；这里按固定步距给的 `x` / `advance`
+ * 只剩 `{bz}` 临时伴奏层在用（`layers.ts`，小字号一行自己排）。`pad` 是每个符号**之后**必须硬让出的地方
+ * （`&sbf` 连谱号、`{dsb}` 花括号），两种排法都加。
+ */
 export function layoutVoiceLine(
   voice: ScoreLine,
   m: JianpuGrid,
   ctx: BeatCtx = {},
-): { items: PlacedItem[]; width: number; groups: number[]; tail: number } {
+): { items: PlacedItem[]; width: number; groups: number[]; tail: number; pad: number[] } {
   // 只有音符/增时线/小节线占位；`~`/`^` 与内联层不进步进序列。
   const flat = voice.elements.filter(
     (el) => el.kind === "note" || el.kind === "sustain" || el.kind === "barline",
@@ -88,6 +94,7 @@ export function layoutVoiceLine(
   // 连同 items 一起带出去给 computeUnderlines 用，两处不各算一遍。
   const { groups, tail } = beatGroups(items, ctx);
 
+  const pad = new Array<number>(flat.length).fill(0);
   flat.forEach((el, i) => {
     const srcIndex = items[i]!.srcIndex;
     items[i]!.x = x;
@@ -104,7 +111,7 @@ export function layoutVoiceLine(
     // `&sbf` 的小节线后面要挤进一个连谱号（它离音符 1.41 个墨迹高），所以额外让出
     // 一个半墨迹高——按倍数加不行，行被压缩后连谱号会压到小节线上
     if (el.kind === "barline" && el.ornaments.some((o) => o.name === "sbf")) {
-      advance += m.ink.noteHeight * 1.5;
+      pad[i]! += m.ink.noteHeight * 1.5;
     }
     // 变音记号写在数字前，得给它让出位置
     // 让出的宽 = 升降号墨迹宽 + 它与数字的空 + 与前一个音之间的空（engrave/accidental.ts，与画法、简谱引擎同一份比例）
@@ -120,22 +127,23 @@ export function layoutVoiceLine(
     if (el.kind === "note" && el.graceAfter.length > 0) {
       advance += graceAdvance(jianpuGraceNotes(el.graceAfter), jianpuGraceMetrics(m));
     }
-    if (splitEnd.has(i)) advance += m.ink.noteHeight * 1.05;
+    if (splitEnd.has(i)) pad[i]! += m.ink.noteHeight * 1.05;
     // 两个符号之间夹着并排块的话，中间要放得下一个花括号（原版给的间距比普通小节线宽 0.75）
     if (next !== undefined) {
       const nextAt = voice.elements.indexOf(next);
       for (const at of splitAt) {
         if (at > srcIndex && at < nextAt) {
-          advance += m.ink.noteHeight * 1.05;
+          pad[i]! += m.ink.noteHeight * 1.05;
           break;
         }
       }
     }
+    advance += pad[i]!;
     items[i]!.advance = advance;
     x += advance;
   });
 
-  return { items, width: x, groups, tail };
+  return { items, width: x, groups, tail, pad };
 }
 
 /** 一行的拍组上下文：行首拍号、上一行开口小节已用的拍数、是不是整首的头一行。

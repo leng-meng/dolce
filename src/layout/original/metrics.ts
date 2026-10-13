@@ -32,8 +32,6 @@ export interface JianpuMetrics {
     longImage: boolean;
     /** 版心第一行音符基线相对上边距的偏移 */
     firstSystemTop: number;
-    /** 版心左边距之后再让出的一点内边距（实测原版首音锚点 = 左边距 + 3） */
-    systemIndent: number;
   };
   /** 音符栅格：随音符字号等比。 */
   note: {
@@ -89,7 +87,6 @@ const GRID_NOTE_SIZE = 25;
 /** 原版（番茄）那套栅格，数字字号 `GRID_NOTE_SIZE` 时的值。 */
 const GRID = {
   firstSystemTop: 156,
-  systemIndent: 3,
   note: {
     noteStep: 37.5,
     beamedNoteStep: 25,
@@ -147,7 +144,6 @@ export function gridOf(src: JianpuStyle, page: GridPage): JianpuGrid {
       margin: { ...style.page.margin },
       longImage: page.continuous,
       firstSystemTop: GRID.firstSystemTop * k,
-      systemIndent: GRID.systemIndent,
     },
     note: scaled(GRID.note),
     head,
