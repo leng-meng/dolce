@@ -66,6 +66,7 @@ import {
   type LyricMeasure,
 } from "./place";
 import { BRACE_GLYPHS } from "./brace";
+import { addBarlineOwner } from "../identity";
 import { applyDocOptions, applyUserOptions, noteMarkGap, jianpuSlurStyle, withDigitInk, type JianpuGrid, type JianpuMetrics, type JianpuUserOptions } from "./metrics";
 import { ACCOMP_BRACKET, ACCIDENTAL_GLYPH, BARLINE_MARKS, BRACKET, DYNAMICS, ORNAMENTS, TERMS } from "../../pu/glyph";
 
@@ -95,14 +96,6 @@ interface OriginalCtx {
   pageHeight: number;
   /** 连续长图裁紧后，整页要平移多少（把墨迹推到左侧留白处） */
   _pageShiftX: number;
-  /** 播放高亮索引：元素 id → 它所在页与 PageItem。增时线有自己的 id，也收在这里（可视化编辑点选用） */
-  noteItems: Map<ElementId, { page: number; item: PageItem }>;
-  /** 键为 `${音符 id}:${段序}` */
-  syllableItems: Map<string, { page: number; item: PageItem }>;
-  /** 小节线（没有自己的 id，按「相邻音符 + 侧」认）：键为 `${音符 id}:${before|after}` */
-  barlineItems: Map<string, { page: number; item: PageItem }>;
-  /** 圆滑线/延音线（同样没有 id）：键为 `${起点 id}:${终点 id}` */
-  slurItems: Map<string, { page: number; item: PageItem }>;
   /** 谱面墨色；用户指定前景色时与歌词同色——用户指定的是「前景色」，没道理还留着那点深浅差。 */
   ink: number;
   lyricInk: number;
@@ -399,6 +392,7 @@ function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): Group {
     // 每个谱组单独成一个 Group（`system`）：页面检查按它量相邻谱行的墨迹盒，绝对坐标不受影响
     const sys = new Group();
     sys.classes.add("system");
+    sys.ident = { kind: "system" };
     const texts = group.group.texts;
     if (texts.length > 0) {
       const font = new Font(m.style.font.text.family, m.style.size.words);
@@ -451,7 +445,7 @@ function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): Group {
           for (const it of voice.items) {
             if (it.element.kind === "barline") {
               const g = drawn.get(it.x);
-              if (g && prevNoteId !== undefined) c.barlineItems.set(`${prevNoteId}:after`, { page: pageIndex, item: g });
+              if (g && prevNoteId !== undefined) addBarlineOwner(g, prevNoteId, "after");
             } else if (it.element.kind !== "sustain") {
               prevNoteId = c.doc?.idOf.get(it.element) ?? prevNoteId;
             }
@@ -782,7 +776,7 @@ function paintVoice(c: OriginalCtx,
       if (!skipBarlines || it.dy !== undefined) {
         const g = paintBarline(c, root, x, base, it);
         // 行视图只出「右线」（`pu/slots.ts`），所以一律是画在前一个音符之后的那一侧
-        if (g && prevNoteId !== undefined) c.barlineItems.set(`${prevNoteId}:after`, { page: pageIndex, item: g });
+        if (g && prevNoteId !== undefined) addBarlineOwner(g, prevNoteId, "after");
       }
       continue;
     }
@@ -793,15 +787,15 @@ function paintVoice(c: OriginalCtx,
       root.add(line);
       // 增时线有自己的 id（`Chord.sustains[]` 各带一个），可视化编辑按它点选这一条
       const sid = c.doc?.idOf.get(it.element);
-      if (sid !== undefined) c.noteItems.set(sid, { page: pageIndex, item: line });
+      if (sid !== undefined) line.ident = { kind: "sustain", id: sid };
       // 长音里换的和弦印在增时线上方（`- "hx:C/G"`），画法与音符上方那个一样
       if (it.element.chord) paintChord(c, root, it.element.chord, x, base);
-      paintSyllables(c, root, it, x, voice, pageIndex, lyricRight);
+      paintSyllables(c, root, it, x, voice, lyricRight);
       continue;
     }
-    paintNote(c, root, it, x, base, pageIndex);
+    paintNote(c, root, it, x, base);
     prevNoteId = c.doc?.idOf.get(it.element) ?? prevNoteId;
-    paintSyllables(c, root, it, x, voice, pageIndex, lyricRight);
+    paintSyllables(c, root, it, x, voice, lyricRight);
   }
 
   // 减时线
@@ -820,7 +814,7 @@ function paintVoice(c: OriginalCtx,
   paintJoinBrace(c, root, voice, lyricRight);
 
   // 跨若干符号的记号（弧线 / 多连音 / 跳房子 / 渐强渐弱）
-  for (const mk of voice.marks) paintMark(c, root, mk, left, baseline + (mk.dy ?? 0), pageIndex);
+  for (const mk of voice.marks) paintMark(c, root, mk, left, baseline + (mk.dy ?? 0));
   // 临时伴奏 / 临时多声部：主旋律上方的小字号行
   for (const layer of voice.layers) paintLayer(c, root, layer, left, baseline, pageIndex);
 }
@@ -835,7 +829,7 @@ function paintArc(c: OriginalCtx, root: Group, x0: number, x1: number, y: number
   return arc;
 }
 
-function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, baseline: number, pageIndex: number): void {
+function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, baseline: number): void {
   const m = c.metrics;
   const x0 = left + mk.x0;
   const x1 = Math.max(left + mk.x1, x0 + 6);
@@ -847,7 +841,7 @@ function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: number, ba
       // **不能用 `mk.mark.start/end`**——那是行内下标，元素 id 要从两端实际落在的符号上取
       const sid = mk.startEl && c.doc?.idOf.get(mk.startEl);
       const eid = mk.endEl && c.doc?.idOf.get(mk.endEl);
-      if (sid !== undefined && eid !== undefined) c.slurItems.set(`${sid}:${eid}`, { page: pageIndex, item: arc });
+      if (sid !== undefined && eid !== undefined) arc.ident = { kind: "slur", id: sid, end: eid };
       break;
     }
     case "tuplet": {
@@ -993,7 +987,6 @@ function paintNote(c: OriginalCtx,
   it: PlacedItem,
   x: number,
   baseline: number,
-  pageIndex: number,
 ): void {
   const note = it.element as NoteElement;
   const m = c.metrics;
@@ -1034,6 +1027,7 @@ function paintNote(c: OriginalCtx,
     const p = augDotCenter(digitInk, i, m.style.dot.octave, m.ink.stack.gap);
     const d = dot(c.ink, p.cx, p.cy, m.style.dot.octave);
     d.classes.add("aug-dot"); // 可视化编辑单独点选附点（`notePartEls`）
+    d.ident = { kind: "aug-dot" };
     g.add(d);
   }
 
@@ -1045,6 +1039,7 @@ function paintNote(c: OriginalCtx,
     const a = note.annotation;
     const t = text(a, x - font.measureText(a) / 2, baseline + c.chordLane, font, c.ink);
     t.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
+    t.ident = { kind: "annotation" };
     g.add(t);
   }
   // 曲中转调标签：新调首音上方，与和弦/注释同一槽；那一槽已有字就再往上叠一行（`place.ts::noteTextTop`）。
@@ -1064,11 +1059,14 @@ function paintNote(c: OriginalCtx,
   // `&xx` 记号
   const before = g.children.length;
   paintOrnaments(c, g, note.ornaments, x, baseline, stackTop(note, c.metrics));
-  for (const it of g.children.slice(before)) it.classes.add("ornament"); // 同上
+  for (const it of g.children.slice(before)) {
+    it.classes.add("ornament"); // 同上
+    it.ident = { kind: "deco" };
+  }
 
   root.add(g);
   const id = c.doc?.idOf.get(note);
-  if (id !== undefined) c.noteItems.set(id, { page: pageIndex, item: g });
+  if (id !== undefined) g.ident = { kind: "note", id };
 }
 
 /**
@@ -1355,7 +1353,6 @@ function paintSyllables(c: OriginalCtx,
   it: PlacedItem,
   x: number,
   voice: PlacedVoice,
-  pageIndex: number,
   rightEdge?: number[],
 ): void {
   const m = c.metrics;
@@ -1375,7 +1372,7 @@ function paintSyllables(c: OriginalCtx,
     if (rightEdge) rightEdge[verse] = Math.max(rightEdge[verse] ?? 0, x0 + run.width);
     root.add(g);
     const owner = c.doc?.syllableOwner.get(syl);
-    if (owner !== undefined) c.syllableItems.set(`${owner}:${verse}`, { page: pageIndex, item: g });
+    if (owner !== undefined) g.ident = { kind: "syllable", id: owner, verse };
   });
 }
 
@@ -1399,10 +1396,6 @@ export interface OriginalDocumentLayout {
   readonly digitFontSize: number;
   readonly view: DocView;
   readonly placed: PlacedScore;
-  readonly noteItems: ReadonlyMap<ElementId, { page: number; item: PageItem }>;
-  readonly syllableItems: ReadonlyMap<string, { page: number; item: PageItem }>;
-  readonly barlineItems: ReadonlyMap<string, { page: number; item: PageItem }>;
-  readonly slurItems: ReadonlyMap<string, { page: number; item: PageItem }>;
 }
 
 /** 排一份文档并生成全部页面（原 `PuPainter.load`）。 */
@@ -1422,10 +1415,6 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     pageWidth: m.page.width,
     pageHeight: m.page.height,
     _pageShiftX: 0,
-    noteItems: new Map(),
-    syllableItems: new Map(),
-    barlineItems: new Map(),
-    slurItems: new Map(),
     ink: cfg.ink ?? DEFAULT_INK,
     lyricInk: cfg.ink ?? DEFAULT_LYRIC_INK,
   };
@@ -1496,10 +1485,6 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     digitFontSize: c.digitFont.size,
     view: doc,
     placed,
-    noteItems: c.noteItems,
-    syllableItems: c.syllableItems,
-    barlineItems: c.barlineItems,
-    slurItems: c.slurItems,
   };
 }
 

@@ -11,7 +11,6 @@ import type { JScore } from "../layout/input";
 import { clearBreaks } from "../layout/input";
 import { JpwFile, LayoutSection } from "../jpword/jpwfile";
 import { measureJianpu, PaintResources, ScorePainter, type JianpuPaintRequest } from "../layout/painter";
-import { NoteEntry } from "../layout/entry";
 import { toPt } from "../layout/result";
 import { computeStyle, sanitizeLayer, upsertRule, type StyleEngine, type StyleRule } from "../style/cascade";
 import { docPageLayer, pageMargins, resolvePaper, songPageDecl } from "../style/paper";
@@ -1635,13 +1634,12 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
       el.classList.add("selected");
       this.selectedEl = el;
     }
-    // Remember the note entry so playback can start from here.
-    const d = target.data;
-    if (d && typeof (d as { verse?: unknown }).verse === "number" && (d as { chord?: unknown }).chord) {
-      const ne = d as { chord: import("../layout/input").JChord; verse: number };
-      this._selectedId = ne.chord.id;
-      this._selectedVerse = ne.verse;
-      if (ne.chord.id !== null) this.playback.seekTo({ id: ne.chord.id, pass: ne.verse }); // 播放中就跳过去
+    // 点中的是音符格本身（不是格里可单独选中的数字、点、歌词）就记下它（按身份标签认），起播从这儿开始
+    const cell = target.ident;
+    if ((cell?.kind === "note" || cell?.kind === "sustain") && cell.id !== undefined) {
+      this._selectedId = cell.id;
+      this._selectedVerse = cell.pass ?? 0;
+      this.playback.seekTo({ id: cell.id, pass: cell.pass ?? 0 }); // 播放中就跳过去
     }
     this.setStatus(describePick(picked));
   }
@@ -1652,10 +1650,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     const geom = this.painter.result?.pages[pageIndex]?.geometry;
     if (!ctm || !geom) return false;
     const pt = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse());
-    const picked = this.painter.pickPage(pageIndex, toPt(geom, pt.x, pt.y))?.item ?? null;
-    const d = picked ? this.painter.entryGroupOf(picked).data : null;
-    if (!(d instanceof NoteEntry) || !d.chord || d.chord.id === null) return false;
-    this.playback.seekTo({ id: d.chord.id, pass: d.verse });
+    const cell = this.painter.pickPage(pageIndex, toPt(geom, pt.x, pt.y))?.target;
+    if (!cell || cell.kind !== "element") return false;
+    this.playback.seekTo({ id: cell.id, pass: cell.occurrence ?? 0 });
     return true;
   }
 

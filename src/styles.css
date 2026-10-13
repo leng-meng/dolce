@@ -719,7 +719,7 @@ button:focus-visible, select:focus-visible {
 .beat-check-button.active { color: #e03131; }
 .format-marks-button.active { color: #1565ff; }
 
-/* 试听的竖直播放线（painter.ts::movePlayhead，简谱 / 五线谱 / 混排同一种）：纵贯整行，点击穿过它落到音符上 */
+/* 试听的竖直播放线（layout/playhead.ts，简谱 / 五线谱 / 混排同一种）：纵贯整行，点击穿过它落到音符上 */
 .score-page rect.playhead, .mixed-page rect.playhead { fill: rgba(232, 89, 12, 0.16); stroke: rgba(232, 89, 12, 0.7); stroke-width: 1.5; pointer-events: none; }
 .mixed-page g.staff-chord { cursor: pointer; }
 

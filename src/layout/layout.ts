@@ -1189,6 +1189,7 @@ export class Line {
     const blocks = lines.map((l, i) => {
       l.group.update();
       l.group.classes.add("system"); // 页面检查按它量相邻谱行的墨迹盒
+      l.group.ident = { kind: "system" };
       // 上一行以「另起一页」的换行符收尾（`.Layout` 的强制分页、展开档逐遍换页）
       const prev = lines[i - 1]?.entries[lines[i - 1]!.entries.length - 1];
       const breakBefore = !continuous && prev instanceof LineBreak && prev.newPage;
@@ -1241,6 +1242,7 @@ export class Line {
     // 可视化编辑按「起点和弦:终点和弦」认这条弧（弧自己没有 id，见 `Tie.startId`）
     grp.startId = a.chord.id;
     grp.endId = b.chord.id;
+    if (a.chord.id !== null && b.chord.id !== null) grp.ident = { kind: "slur", id: a.chord.id, end: b.chord.id };
     let pl = new Point(ena.cx, ypos);
     let pr = new Point(enb.cx, ypos);
     const dx = ena.number!.font.size / ARC_CHAIN_INSET_DIV;
@@ -1432,6 +1434,7 @@ export class Line {
       const grp = new Tie();
       grp.startId = arc.start.id;
       grp.endId = arc.end.id;
+      if (arc.start.id !== null && arc.end.id !== null) grp.ident = { kind: "slur", id: arc.start.id, end: arc.end.id };
       grp.init(new Point(xl, ypos), new Point(xr, ypos), this.slurStyle);
       grp.normalizeX();
       grp.normalizeY();

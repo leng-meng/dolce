@@ -52,6 +52,7 @@ export function layoutHarmonySegs(
   // 标记成和弦：成书重排把页面树扁平化成 DrawList 时靠它认角色（选字体、选是否走轮廓）。
   // 不标的话这几个 TextFrame 只是「小一号的普通文字」，会被当歌词排。
   grp.classes.add("chord");
+  grp.ident = { kind: "harmony" }; // 可视化编辑单独点选和弦名（`ScoreIndex.parts`）
   let xpos = 0;
   for (const s of segs) {
     const font = s.music ? musicFont : wordFont;

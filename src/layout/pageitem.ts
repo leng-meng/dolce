@@ -10,6 +10,7 @@ import type { CompressMode } from "../common/cjkpunct";
 import { syllableRun } from "../engrave/syllable";
 import { Font } from "./font";
 import { MetaData } from "../smufl/smufl";
+import type { ItemIdentity } from "./identity";
 
 export function getOrNull<T>(arr: T[], i: number): T | null {
   return i >= 0 && i < arr.length ? arr[i] : null;
@@ -25,6 +26,8 @@ export class PageItem {
   matrix: Matrix33 = newMatrix();
   classes = new Set<string>();
   data: unknown = null;
+  /** 身份标签：画的是谁（播放高亮、点选、可视化编辑按它认，见 `identity.ts`）。不进 SVG。 */
+  ident?: ItemIdentity;
   _selected = false;
   selectable = false;
 

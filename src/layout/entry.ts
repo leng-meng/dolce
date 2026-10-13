@@ -247,6 +247,7 @@ export class NoteEntry extends Entry {
     const musicFont = opt.smuflFont.makeWithSize(opt.chordSize);
     const g = layoutHarmonySegs(chordTextSegs(text, opt.chordPlainText, opt.accidentalSide), wordFont, musicFont, opt.color);
     g.classes.add("chord-group"); // 段落词要按它的位置让路，见 Line.addSectionWords
+    g.ident = { kind: "harmony" };
     g.update();
     g.x = num.x + num.cx - g.width / 2;
     // 挂在这个音符**已有内容的栈顶**之上（八度点已经加过了），不是固定高度——
@@ -385,6 +386,7 @@ export class NoteEntry extends Entry {
       lit.text = text;
       lit.color = options.color;
       lit.verse = l.number;
+      lit.ident = { kind: "syllable", verse: l.number };
       lit.update();
       // 对到数字的落笔点：前面有倚音时主音已右移了 `leadSpace`（`addGraceNotes`），不加 `it.x` 歌词就留在倚音底下
       lit.x = it.x + it.left - lit.left;
@@ -521,6 +523,7 @@ export class NoteEntry extends Entry {
       const t = new SmuflText(options);
       t.color = options.color;
       t.classes.add("artic"); // line-check 的 V12 靠它认（见 browser.ts::CLS_TAGS）
+      t.ident = { kind: "deco" };
       t.text = articGlyph("fermata", true);
       // Same ladder as the octave dots / slur (musicpp render.cpp:349-355 uses
       // `y -= dot*7` plus a flat -10 over a slur; both collapse to one rung).
@@ -546,6 +549,7 @@ export class NoteEntry extends Entry {
       const t = new SmuflText(options);
       t.color = options.color;
       t.classes.add("artic");
+      t.ident = { kind: "deco" };
       t.text = glyph;
       t.y = NoteEntry.notationTop(options, ent);
       t.x += ent.number!.x + ent.number!.cx;
@@ -577,6 +581,7 @@ export class NoteEntry extends Entry {
       dot.y = cy - r;
       dot.aug = { num, index: d };
       dot.classes.add("aug-dot"); // 可视化编辑单独点选附点（`ScorePainter.partEls`）
+      dot.ident = { kind: "aug-dot" };
       ent.group.add(dot);
     }
     num.augDotAdvance = adv * dots;
@@ -588,6 +593,7 @@ export class NoteEntry extends Entry {
     ent.beams = ch.beams;
     ent.chord = ch;
     ent.verse = lrc;
+    if (ch.id !== null) ent.group.ident = { kind: "note", id: ch.id, pass: lrc };
     let it = new JpNumber();
     it.color = options.color;
     it.text = ch.notes[0].number;
@@ -607,6 +613,8 @@ export class NoteEntry extends Entry {
       ent = new NoteEntry();
       ent.chord = ch;
       ent.verse = lrc;
+      // 增时线格不带自己的 id（`.jpwabc` 的 `-` 写在音符 token 里）：用宿主的 id，按序数认
+      if (ch.id !== null) ent.group.ident = { kind: "sustain", id: ch.id, pass: lrc };
       const num = ch.rest ? "0" : "-";
       it = new JpNumber();
       it.text = num;
@@ -639,13 +647,19 @@ export class Barline extends Entry {
    *  小节线在模型里**没有自己的 `ElementId`**（`model/doc.ts` 的 `Barline` 只有样式与 `source`），
    *  可视化编辑要点中它就得有个键，口径与 `editor/sync.ts::addPartExtras` 一致：借挨着的那个音符的 id。
    *  借哪一个由 `ScorePainter` 遍历页面树时按前后顺序定（那里才看得到跨小节、跨行的相邻关系），
-   *  这里只记是哪一侧。**排版不读它**。 */
-  ownerEdge: "before" | "after" = "after";
+   *  这里只记是哪一侧（同时写进身份标签，`scoreindex.ts` 按树序借 id）。**排版不读它**。 */
+  get ownerEdge(): "before" | "after" {
+    return this.group.ident?.edge ?? "after";
+  }
+  set ownerEdge(edge: "before" | "after") {
+    this.group.ident = { kind: "barline", edge };
+  }
 
   constructor(final: boolean, opt: LayoutOptions, spec: BarlineSpec = {}) {
     super();
     this.spec = spec;
     this.group.data = this;
+    this.group.ident = { kind: "barline", edge: "after" };
     const top = opt.jpStaffTop;
     const bot = opt.jpStaffBottom;
     this.defaultTop = top;
