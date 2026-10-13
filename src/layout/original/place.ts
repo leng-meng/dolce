@@ -28,6 +28,8 @@ import { elementQuarters, takesLyric, tupletRatios } from "../../pu/ast";
 import { paginate, type SystemBlock } from "../../jianpu/vertical";
 import { DYNAMICS, TERMS } from "../../pu/glyph";
 import { latinWordBreak } from "../../engrave/syllable";
+import { beatGroupIndex, beatGroupSize, pickupOffset } from "../../engrave/beatgroup";
+import { ARC_CHAIN_INSET_DIV } from "../../engrave/arc";
 
 /** 西文词间空格 ÷ 歌词字号（常见无衬线字体的空格宽约 0.28 em）。 */
 const LATIN_SPACE_EM = 0.28;
@@ -481,25 +483,21 @@ function beatGroups(items: PlacedItem[], ctx: BeatCtx = {}): { groups: number[];
   const out = new Array<number>(items.length).fill(0);
   let tail = 0; // 行末那个开口小节（跨行未收）算到哪个拍位——下一行的续段接着它
   segs.forEach((seg, si) => {
-    const size =
-      seg.meter !== undefined && seg.meter.denominator === 8 && seg.meter.numerator % 3 === 0
-        ? 1.5
-        : 1;
+    const size = seg.meter !== undefined ? beatGroupSize(seg.meter.numerator, seg.meter.denominator) : 1;
     let offset = seg.carried ? ctx.carryIn ?? 0 : 0;
     // 残节（弱起、被反复切开的那半个）按小节末尾对齐。两种不补：行末那个开口小节
     // （跨行未收，后半在下一行），以及整曲的末小节（musicpp: `this == measures.back()`）。
     // 曲首那个弱起例外——整行只有它一节时也得补。
     const openTail = si === segs.length - 1 && !(si === 0 && ctx.songStart === true);
-    if (!seg.carried && !openTail && !(ctx.songEnd === true && si === lastFilled) &&
-        seg.meter !== undefined) {
-      const expect = (seg.meter.numerator * 4) / seg.meter.denominator;
-      const skip = expect - durOf(seg);
+    // 判据走公共那一份（engrave/beatgroup.ts）：下一小节正好等于要补的那一截（首尾配对的两个残节）不补
+    if (!seg.carried && !openTail && seg.meter !== undefined) {
       const next = segs[si + 1];
-      // 例外同 musicpp：下一小节的时值正好等于要补的那一截（首尾配对的两个残节）就不补
-      if (skip > 1e-9 && !(next && Math.abs(durOf(next) - skip) < 1e-9)) offset = skip;
+      const skip = pickupOffset((seg.meter.numerator * 4) / seg.meter.denominator, durOf(seg),
+        ctx.songEnd === true && si === lastFilled, next ? durOf(next) : undefined);
+      if (skip > 0) offset = skip;
     }
     for (let i = seg.from; i < seg.to; i++) {
-      out[i] = Math.floor((offset + items[i]!.beat) / size + 1e-9);
+      out[i] = beatGroupIndex(items[i]!.beat, offset, size);
     }
     // 末段非空就是行末的开口小节：行以小节线收尾时它是空的，tail 留 0
     if (si === segs.length - 1 && seg.to > seg.from) tail = offset + durOf(seg);
@@ -801,7 +799,7 @@ function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid): Place
     // 与 .jpwabc 的 addSlurTie 一致——不再往外扩半个音符宽。
     // 端点还挂着别的弧线时各自内缩 dx（= 字号/14），免得两条弧首尾顶在一起。
     const isArc = mark.type === "slur" || mark.type === "tuplet";
-    const dx = isArc ? m.ink.noteHeight / 0.7 / 14 : 0;
+    const dx = isArc ? m.ink.noteHeight / 0.7 / ARC_CHAIN_INSET_DIV : 0;
     const chainedLeft = voice.marks.some((o) => o !== mark && o.end === mark.start);
     const chainedRight = voice.marks.some((o) => o !== mark && o.start === mark.end);
     // 渐强渐弱要**包住**起止音符（原版里楔尖就落在音符下方），所以往外扩半个字宽；

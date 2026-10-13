@@ -9,6 +9,7 @@ import { Fraction } from "../common/fraction";
 import { Matrix33 } from "../common/geom";
 import { GraphicPath, Group, TextFrame } from "../layout/pageitem";
 import { Font } from "../layout/font";
+import { textItem } from "../engrave/prims";
 import { jpDot } from "../engrave/dot";
 import { TimeSigGlyph } from "../engrave/timesig";
 import { KeyLabel, keyNameOfFifths } from "../engrave/keysig";
@@ -177,15 +178,7 @@ function drawColumn(eng: MixedOptions, col: Group, md: PartMeasureLayout, ch: Ch
   }
 }
 
-function textAt(text: string, font: Font, x: number, y: number): TextFrame {
-  const t = new TextFrame();
-  t.text = text;
-  t.font = font;
-  t.color = BLACK;
-  t.x = x;
-  t.y = y;
-  return t;
-}
+const textAt = (text: string, font: Font, x: number, y: number): TextFrame => textItem(text, font, BLACK, x, y);
 
 /** 减时线（render.cpp::BeamLevelData::drawJianPu）：跨音的，各柱画完再画。 */
 function drawJpBeams(eng: MixedOptions, container: Group, md: PartMeasureLayout): void {

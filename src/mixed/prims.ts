@@ -1,7 +1,8 @@
 // 混排渲染的落笔小工具（线、SMuFL 字形、平移组）。五线谱层（`render.ts`）与简谱叠层（`jianpuoverlay.ts`）共用。
 
-import { Matrix33, Point } from "../common/geom";
-import { GraphicLine, Group, TextFrame } from "../layout/pageitem";
+import { Matrix33 } from "../common/geom";
+import { type GraphicLine, Group } from "../layout/pageitem";
+import { lineItem, textItem } from "../engrave/prims";
 import { Font } from "../layout/font";
 import type { ElementId } from "../model/doc";
 
@@ -55,24 +56,14 @@ export function chordGroup(id: ElementId): Group {
 }
 
 export function addLine(g: Group, x1: number, y1: number, x2: number, y2: number, lw: number): GraphicLine {
-  const l = new GraphicLine();
-  l.p0 = new Point(x1, y1);
-  l.p1 = new Point(x2, y2);
-  l.strokeColor = 0xff000000;
-  l.strokeWidth = lw;
+  const l = lineItem(x1, y1, x2, y2, lw, 0xff000000);
   g.add(l);
   return l;
 }
 
 /** SMuFL glyph via TextFrame with Bravura family. */
 export function addSmufl(g: Group, glyph: string, x: number, y: number, size: number): void {
-  const t = new TextFrame();
-  t.text = glyph;
-  t.font = new Font("Bravura", size);
-  t.color = 0xff000000;
-  t.x = x;
-  t.y = y;
-  g.add(t);
+  g.add(textItem(glyph, new Font("Bravura", size), 0xff000000, x, y));
 }
 
 /** SMuFL glyph with scale transform. */

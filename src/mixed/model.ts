@@ -16,6 +16,7 @@ import type { HarmonySeg } from "../engrave/chord";
 import type { AccidentalSide, AccidentalStyleKind } from "../engrave/spacing";
 import { STACK_GAP_DEFAULT, stackTop } from "../engrave/stack";
 import { graceBlockTop, mainRow } from "./jprow";
+import { beatGroupIndex, beatGroupSize, pickupOffset } from "../engrave/beatgroup";
 import { MetaData, GlyphCodes } from "../smufl/smufl";
 import type { Chord as DocChord, Direction as DocDirection, Harmony as DocHarmony, Lyric as DocLyric, Mark as DocMark, Note as DocNote, Song } from "../model/doc";
 import { beamCount } from "../model/jianpu";
@@ -1696,30 +1697,17 @@ export class PartMeasureLayout {
     const pstf = this.part.staves[stf];
     const t0 = this.measureInfo.offset;
     const ts = pstf.getTime(t0);
-    const expect = new Fraction(ts.beats * 4, ts.beatType);
-    let skip = expect.minus(this.measureInfo.dur);
+    // 拍位判据走公共那一份（engrave/beatgroup.ts，与简谱引擎、原样文档同一条）：残节按小节末尾对齐
     const measures = this.part.measures;
-    if (this === measures[measures.length - 1]) {
-      skip = new Fraction(0);
-    } else {
-      const next = measures[this.measureInfo.index + 1];
-      if (fEq(skip, next.measureInfo.dur)) skip = new Fraction(0);
-    }
+    const isLast = this === measures[measures.length - 1];
+    const next = isLast ? undefined : measures[this.measureInfo.index + 1];
+    const skip = pickupOffset((ts.beats * 4) / ts.beatType, this.measureInfo.dur.toFloat(), isLast, next?.measureInfo.dur.toFloat());
+    const beatSize = beatGroupSize(ts.beats, ts.beatType);
 
-    // 起点取不可能的拍号：小节比拍号长时 `skip` 为负，第一拍可能算到 -1
     let prevBeat = -Infinity;
-    let beatSize = new Fraction(1);
-    if (ts.beatType === 4 || ts.beatType === 2) {
-      // quarter/half beat
-    } else if (ts.beatType === 8 && ts.beats % 3 === 0) {
-      beatSize = new Fraction(3, 2);
-    } else {
-      console.warn("processJpBeam: unsupported time", ts.beats, ts.beatType);
-    }
     for (const ch of layer) {
       if (ch.jpBeamCount() < 1) continue;
-      const t = skip.plus(ch.offset);
-      const b = Math.floor(t.div(beatSize).toFloat());
+      const b = beatGroupIndex(ch.offset.toFloat(), skip, beatSize);
       if (prevBeat !== b) {
         const g = new BeamGroup();
         g.jp = true;

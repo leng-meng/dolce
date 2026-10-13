@@ -14,7 +14,8 @@ import { measureDuration, type JChord, type JMeasure, type JNote, type JScore } 
 import { getOrNull, PageItem, Group, GraphicPath, TextFrame, SmuflText, JpNumber, Lyric, Tie, slurStyleOf, type SlurTieBase } from "./pageitem";
 import { hairpinPath } from "../engrave/hairpin";
 import { latinWordBreak } from "../engrave/syllable";
-import type { SlurStyle } from "../engrave/arc";
+import { beatGroupIndex, beatGroupSize, pickupOffset } from "../engrave/beatgroup";
+import { ARC_CHAIN_INSET_DIV, type SlurStyle } from "../engrave/arc";
 import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, BeamLine, EntryItemInfo, entryBounds, normalizeEntryX, placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "./entry";
 import { LayoutOptions } from "./options";
 
@@ -1092,7 +1093,7 @@ export class Line {
     grp.endId = b.chord.id;
     let pl = new Point(ena.cx, ypos);
     let pr = new Point(enb.cx, ypos);
-    const dx = ena.number!.font.size / 14;
+    const dx = ena.number!.font.size / ARC_CHAIN_INSET_DIV;
     if (a.tiePrev !== null || a.tupletEnd) pl = pl.offset(dx, 0);
     if (b.tieNext !== null) pr = pr.offset(-dx, 0);
     pr = pr.offset(enb.group.x - ena.group.x, 0);
@@ -1420,7 +1421,7 @@ export class Line {
       }
       const left = leftItem.pos(this.group).x + leftItem.cx;
       let right = rightItem.pos(this.group).x + rightItem.cx;
-      if (end.beginOfSlurTied) right -= opt.numberSize / 14;
+      if (end.beginOfSlurTied) right -= opt.numberSize / ARC_CHAIN_INSET_DIV;
       const width = right - left;
       // 括线与音符之间要留一道空（原来紧贴着音符墨迹顶，看着像长在数字上）
       // **跨度里所有音符都得让开**，不只两端：470《出到营外》那组三连音中间那个音符
@@ -2087,7 +2088,7 @@ export class Layout {
     walkPlay(plan, {
       measure: (mid, pass, cut) => {
         const m = p.measures[mid];
-        for (const [ch, g] of beamGroupsOf(m)) l.beamGroups.set(ch, g);
+        for (const [ch, g] of beamGroupsOf(m, p.measures[mid + 1])) l.beamGroups.set(ch, g);
         l.load(m, pass, this.options, cut.final, cut.skip, cut.limit, ignoreBreaks);
       },
       passEnd: () => {
@@ -2149,24 +2150,25 @@ export class BeamGroup {
   chords: JChord[] = [];
 }
 
-/** **按拍自动成组**：拍长一个四分（`x/8` 拍号是附点四分）；减时线为 0 或长过一拍的不进组。 */
-function beamGroupsOf(m: JMeasure): Map<JChord, BeamGroup> {
-  let len = new Fraction(1);
-  if (m.time.beatType === 8) len = len.divInt(2).timesInt(3);
+/** **按拍自动成组**：拍位判据走公共那一份（engrave/beatgroup.ts：复拍子附点四分一组、残节按小节末尾对齐）；
+ *  减时线为 0 或长过一拍组的不进组。`next` 是下一小节（没有 = 整曲末小节）。 */
+function beamGroupsOf(m: JMeasure, next: JMeasure | undefined): Map<JChord, BeamGroup> {
+  const size = beatGroupSize(m.time.beats, m.time.beatType);
+  const actual = (x: JMeasure): number => (x.entries.some((e) => e.kind === "chord") ? measureDuration(x).toFloat() : 0);
+  const offset = pickupOffset((m.time.beats * 4) / m.time.beatType, actual(m), next === undefined, next ? actual(next) : undefined);
   const res = new Map<JChord, BeamGroup>();
   let cur: BeamGroup | null = null;
-  let curStart: Fraction | null = null;
+  let curBeat: number | null = null;
   for (const ent of byPosition(m.entries)) {
     if (ent.kind !== "chord") continue;
     if (ent.duration === undefined) throw new Error("");
     if (ent.beams === 0) continue;
-    if (ent.duration.compareTo(len) > 0) continue;
-    const start = len.timesInt(ent.position.div(len).toInt());
-    if (curStart !== null && !curStart.equals(start)) curStart = null;
-    if (curStart === null) cur = new BeamGroup();
+    if (ent.duration.toFloat() > size + 1e-9) continue;
+    const beat = beatGroupIndex(ent.position.toFloat(), offset, size);
+    if (curBeat !== beat) cur = new BeamGroup();
     cur!.chords.push(ent);
     res.set(ent, cur!);
-    curStart = start;
+    curBeat = beat;
   }
   return res;
 }

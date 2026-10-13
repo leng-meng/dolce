@@ -75,3 +75,7 @@ export function calcSlurPoints(pl: Point, pr: Point, o: Pick<SlurStyle, "heightS
   p2 = p2.offset(xl, yl);
   return [p1, p2, cos];
 }
+
+/** 首尾相接的两条弧（前一条的终点就是后一条的起点）在接点**各内缩**数字字号的几分之一：免得两条弧顶在一起。
+ *  简谱引擎与原样文档同一个值（musicpp 的 size/14）。 */
+export const ARC_CHAIN_INSET_DIV = 14;

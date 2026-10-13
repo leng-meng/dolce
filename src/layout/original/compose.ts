@@ -30,6 +30,7 @@ import { augDotCenter } from "../../engrave/augdot";
 import { AccidentalGlyph, type AccidentalKind } from "../../engrave/accidental";
 import { syllableRun } from "../../engrave/syllable";
 import { hairpinPath } from "../../engrave/hairpin";
+import { fillRect, strokePath, textItem } from "../../engrave/prims";
 import { breathPath } from "../../engrave/breath";
 import { BarStyle } from "../../score/enums";
 import type { Metadata, NoteElement } from "../../pu/ast";
@@ -132,25 +133,8 @@ function barlineBlocks(voices: readonly PlacedVoice[]): PlacedVoice[][] {
 const dot = (color: number, cx: number, cy: number, r: number): GraphicPath =>
   jpDot(cx, cy, r, color);
 
-function rect(color: number, x: number, y: number, w: number, h: number): GraphicPath {
-  const p = new GraphicPath();
-  p.moveTo(x, y);
-  p.lineTo(x + w, y);
-  p.lineTo(x + w, y + h);
-  p.lineTo(x, y + h);
-  p.close();
-  p.fill = true;
-  p.fillColor = color;
-  return p;
-}
-
-function stroke(color: number, width = 1.4): GraphicPath {
-  const p = new GraphicPath();
-  p.stroke = true;
-  p.strokeColor = color;
-  p.strokeWidth = width;
-  return p;
-}
+const rect = fillRect;
+const stroke = (color: number, width = 1.4): GraphicPath => strokePath(color, width);
 
 /** SVG path 的 `d` → 我们的 PathSeg（只需要 m/l/h/v/c/s/z，字形里没有别的命令）。 */
 function parsePathD(d: string): PathSeg[] {
@@ -280,18 +264,10 @@ function braceItem(
   return holder;
 }
 
+/** 标点挤压（CLREQ，见 common/cjkpunct.ts）：一个音节 = 一个 `<text>`，字 + 尾随标点、或前引号 + 字都在同一串里，
+ *  挤压在这里就压掉了（engrave/prims.ts::textItem）。 */
 function text(str: string, x: number, y: number, font: Font, color: number): TextFrame {
-  const t = new TextFrame();
-  t.text = str;
-  t.font = font;
-  t.color = color;
-  t.x = x;
-  t.y = y;
-  // 标点挤压（CLREQ，见 common/cjkpunct.ts）：一个音节 = 一个 `<text>`，
-  // 字 + 尾随标点、或前引号 + 字都在同一串里，挤压在这里就压掉了。
-  // **横向步进不看歌词宽度**（place.ts 只按拍值走），所以这条路只挤字符、不做避让。
-  if ([...str].length > 1) t.charXs = font.run(str).xs;
-  return t;
+  return textItem(str, font, color, x, y, true);
 }
 
 /** 文本谱的小节线类型 → 谱面那一路的 `BarlineSpec`（两边的表达力一一对上）。 */
