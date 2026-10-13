@@ -13,6 +13,7 @@
 // 无 DOM 依赖。
 import { computeStyle, type StyleContext, type StyleLayer } from "./cascade";
 import type { StyleSheet } from "./sheet";
+import type { Length } from "./units";
 import { STANDARD_PAPERS } from "../model/pagemeta";
 
 /** 老版展开档的「出厂默认」（投影片 960×540，字号 28/48/36）。 */
@@ -55,6 +56,41 @@ export const STAFF_LONG_IMAGE_WIDTH = STANDARD_PAPERS[STAFF_PAPER_DEFAULT]![0];
 export const isPaper = (k: unknown): k is string =>
   typeof k === "string" && Object.prototype.hasOwnProperty.call(PAPER_SIZES, k);
 
+/** 原样档的角色字号：照 500 首成书（音符 12.08 时：歌词 11.8、和弦 10.1、标题 22.0、署名 11.0、三连音与房号 7.2、段落词 7.8），
+ *  折成音符字号的倍数、取两位有效数字（落到 pt 时再取整或 .5，见 `style/jianpu.ts::rolePt`）。 */
+const PRINT_ROLES = {
+  lyric: { size: "1em" },
+  verseNum: { size: "1em" },
+  keyMeter: { size: "1em" },
+  chord: { size: "0.85em" },
+  title: { size: "1.8em" },
+  credit: { size: "0.9em" },
+  tuplet: { size: "0.6em" },
+  sectionWord: { size: "0.65em" },
+} as const;
+
+/** 原样档的笔画与间距：照 500 首（`dev/style/books/hymn500-measured.ss` 的 @jianpu），em = 音符字号，取两位有效数字或常见分数。
+ *  减时线、弧描边、松叶、拍号分数线 500 首没量，取与它同一档的比例。写成绝对量的话换小纸（500 首那张、字号 12）时不跟着缩。 */
+const PRINT_JIANPU: Record<string, Length | boolean> = {
+  barline: `${1 / 14}em`,
+  "final-barline": `${1 / 8}em`,
+  "beam-width": "0.05em",
+  "slur-thickness": "0.2em",
+  "slur-outline": "0.025em",
+  "slur-max-arc": "0.45em",
+  "slur-min-arc": "0.28em",
+  "hairpin-width": "0.05em",
+  "repeat-dot-diameter": "0.16em",
+  "time-sig-rule": "0.025em",
+  "slur-gap": "0.15em",
+  "lyric-stack": "1.25em",
+  // 和弦基线离音符墨迹顶留一道空（0 = 贴着数字）
+  "chord-gap": "0.25em",
+  "chord-plain": true,
+  "lrc-punct-compress": "halfwidth" as Length,
+  "grace-scale": 0.6,
+};
+
 const INK = 0xff000000;
 const PAPER_WHITE = 0xffffffff;
 
@@ -71,7 +107,7 @@ export const THEMES: Record<ThemeId, StyleLayer> = {
     },
   ],
   print: [
-    { set: { page: { paper: PAPER_DEFAULT, ink: INK, background: PAPER_WHITE }, jianpu: { preset: "original" } } },
+    { set: { page: { paper: PAPER_DEFAULT, ink: INK, background: PAPER_WHITE }, roles: PRINT_ROLES, jianpu: { preset: "original", overrides: PRINT_JIANPU } } },
     // 文本谱不给字号：那一路的尺寸是实测来的一整套，缺省 = 跟随版式量到的原尺寸
     { when: { engine: "jianpu" }, set: { roles: { note: { size: ORIGINAL_NOTE_SIZE } } } },
   ],

@@ -99,7 +99,7 @@ export class LayoutOptions {
    *  展开档仍是标题页独占第一屏。见 `jianpupages.ts::layoutOriginalPages`。 */
   bookHead = false;
   /** 源里的行有放不下的就**整首重新断行**（只在小节线处断、各行长度尽量均匀，见 `Line.reflowBreak`）。
-   *  原样档开（`style/jianpu.ts::applyOriginalPreset`，长图与分页纸同宽）：窄纸照原文的行排会出半截短行。 */
+   *  原样档开（`style/jianpu.ts::jianpuFlagsOf`，长图与分页纸同宽）：窄纸照原文的行排会出半截短行。 */
   reflowOverflow = false;
   /** 第一页顶部为标题块预留的高度。分页时首页可用高度按它扣减、首页各行整体下移。
    *  由 `jianpupages.ts::layoutOriginalPages` 量出 `bookHead` 的实际高度后填，**不是给人配的**。 */

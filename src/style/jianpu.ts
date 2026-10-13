@@ -16,9 +16,6 @@ import { pageMargins } from "./paper";
 import { headerFontsOf } from "./header";
 import { resolveLength } from "./units";
 
-/** 「原样」档多段歌词叠排时的段间行距 ÷ 歌词字号。原书量到的是 1.3 上下。 */
-export const LYRIC_STACK_RATIO = 1.35;
-
 /** 系统中文字体栈（原版用苹方-简 / 微软雅黑，webview 里交给 CSS 字体栈）。 */
 const CJK = "PingFang SC, Microsoft YaHei, sans-serif";
 
@@ -29,12 +26,13 @@ const HEAD_RATIOS = {
   original: { title: 22.03 / 12.08, credit: 10.98 / 12.08 },
 } as const;
 
-/** 角色字号（pt）。只认 pt——note 是 em 的基准，不能相对自己。 */
-function rolePt(sheet: StyleSheet, role: "note" | "title" | "credit" | "chord"): number | undefined {
+/** 角色字号（pt）。`note` 是 em 的基准、只认 pt；别的角色写 em 就是音符字号的几倍，折出来落到整数或 .5（样式值少有效位）。 */
+function rolePt(sheet: StyleSheet, role: StyleRole, notePt = NaN): number | undefined {
   const v = sheet.roles[role]?.size;
   if (v === undefined) return undefined;
-  const pt = resolveLength(v, { em: NaN, sp: NaN });
-  return pt !== null && Number.isFinite(pt) && pt > 0 ? pt : undefined;
+  const pt = resolveLength(v, { em: notePt, sp: NaN });
+  if (pt === null || !Number.isFinite(pt) || pt <= 0) return undefined;
+  return typeof v === "string" && v.endsWith("em") ? Math.round(pt * 2) / 2 : pt;
 }
 
 /** 排版器的构造字号。成书取歌词那一档，其余取音符字号。 */
@@ -57,8 +55,8 @@ export function jianpuSizes(sheet: StyleSheet): { fontSize: number; titleSize: n
   const fontSize = jianpuFontSize(sheet);
   return {
     fontSize,
-    titleSize: rolePt(sheet, "title") ?? Math.round(fontSize * headRatios(sheet).title),
-    creditSize: rolePt(sheet, "credit") ?? Math.round(fontSize * headRatios(sheet).credit),
+    titleSize: rolePt(sheet, "title", fontSize) ?? Math.round(fontSize * headRatios(sheet).title),
+    creditSize: rolePt(sheet, "credit", fontSize) ?? Math.round(fontSize * headRatios(sheet).credit),
   };
 }
 
@@ -179,20 +177,19 @@ export function jianpuStyleOf(sheet: StyleSheet): JianpuStyle {
       if (f.size !== undefined && (role === "subtitle" || role === "scripture")) st.header[role].size = f.size;
     }
     if (preset === "original") {
-      applyOriginalPreset(st);
+      // 原样档的出厂值都在样式表里（`themes.ts` 的 print 主题，照 500 首、em 口径）：这里只把角色字号落进尺子。
       // 面板或谱里给了边距就用给的；没给仍是字号派生的那套（`defaultJianpuStyle`）
       const mg = pageMargins(sheet.page);
       if (mg) st.page.margin = { top: mg[0], right: mg[1], bottom: mg[2], left: mg[3] };
-      // 和弦（123/ABC 原样档走引擎后才有）：`chord` 角色给了字号就用，没给按音符字号的 0.6（引擎缺省那一档）。
-      // `.jpwabc` 的投影不带和弦，这一项对它不起作用。
-      st.size.chord = rolePt(sheet, "chord") ?? st.size.note * 0.6;
-      // 和弦基线离音符墨迹顶留一道空（0 = 贴着数字）；段落词（123 的 `"^副歌"`）与和弦同一带、同字号
-      st.vertical.chordGap = st.size.note * 0.25;
-      st.size.sectionWord = st.size.chord;
-      // 房号（一房、二房的括线与数字）：原样档按原谱排一遍，房号要印出来；展开档逐遍展开、不画（pptx 预设不设）。
-      // 比例照五线谱（`mixed/render.ts::drawEnding`，两边共用 `engrave/ending.ts` 的画法）：房号字号约为谱高的一半，
-      // 简谱的「谱高」取小节线高（≈ 4/3 字号）
-      st.size.ending = st.size.note * 0.65;
+      const em = st.size.note;
+      const role = (r: StyleRole, fallback: number): number => rolePt(sheet, r, em) ?? fallback;
+      st.size.lyric = role("lyric", st.size.lyric);
+      st.size.verseNum = role("verseNum", st.size.verseNum);
+      st.size.keyMeter = role("keyMeter", st.size.keyMeter);
+      st.size.chord = role("chord", em * 0.6);
+      // 房号（一房、二房的括线与数字）：原样档按原谱排一遍，房号要印出来（展开档逐遍展开、不画）。字号同三连音数字（`tuplet` 角色）
+      st.size.ending = role("tuplet", em * 0.65);
+      st.size.sectionWord = role("sectionWord", st.size.chord);
     } else if (preset === "pptx") applyPptxPreset(st);
   }
   applyFonts(st, sheet);
@@ -244,27 +241,8 @@ function applyOverrides(st: JianpuStyle, sheet: StyleSheet): void {
     }
     const n = resolveLength(v as never, ctx);
     if (n === null) console.warn(`样式 @jianpu 的 ${k}：认不出的长度 ${JSON.stringify(v)}，忽略`);
-    else rec[field] = n;
+    else rec[field] = n * (def.jianpuScale ?? 1);
   }
-}
-
-/**
- * 「原样」档。按原谱排一遍（`lyricStack > 0`，多段叠在同一条谱行下）——印刷歌本的排法。
- */
-function applyOriginalPreset(st: JianpuStyle): void {
-  st.vertical.lyricStack = st.size.lyric * LYRIC_STACK_RATIO;
-  // **笔画按字号的比例给**（em，照 500 首成书实测：`dev/style/books/hymn500-measured.ss` 的 @jianpu）：
-  // 小节线 0.0714em、终止线粗线 0.125em、弧厚 0.214em；减时线、弧描边、弧高上下限 500 首没量，取与它同一档的比例。
-  // 写成绝对量的话换小纸（500 首那张 425×612、字号 12）时不跟着缩，小节线和反复点粗得压过数字
-  const em = st.size.note;
-  st.stroke.barline = em / 14;
-  st.stroke.finalBarline = em / 8;
-  st.stroke.beam = em * (3 / 56);
-  st.stroke.timeSigRule = em * (0.3 / 12.08); // 拍号（含页眉、转拍）的分数线照 500 首成书（0.3pt ÷ 音符 12.08）；写死 1.5 时粗得扎眼
-  st.stroke.slur = em * (3 / 14);
-  st.stroke.slurOutline = em * 0.025;
-  st.arc.maxHeight = em * (9 / 14);
-  st.arc.minHeight = em * (5 / 14);
 }
 
 // 「PPT 版面」档：投影/导出 .pptx 用的那一档，编辑器的**默认档**。
