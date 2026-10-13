@@ -11,6 +11,7 @@ import { type ChangeSpec, ChangeSet } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { ElementId, Part, ScoreDoc, Song } from "../../model/doc";
 import { type BeatIssue, checkMeasureDurations, describeBeatIssue } from "../../model/beatcheck";
+import { GlyphCodes } from "../../smufl/smufl";
 import type { BreakMark, SyncEntry, SyncIndex } from "../sync";
 import { deleteBreak, insertBreak } from "./breaks";
 import { setBeatSpans, setBreakSpans, setScoreFocus } from "./cursor";
@@ -2126,8 +2127,21 @@ function textShift(disp: string, src: string): number | null {
   const k = disp.indexOf(src);
   if (k >= 0) return -k;
   const k2 = src.indexOf(disp);
-  return k2 >= 0 && disp.length > 0 ? k2 : null;
+  if (k2 >= 0 && disp.length > 0) return k2;
+  // 单独画出来的升降号字形（调号「1=♭B」的 csym ♭ 是自己一段，engrave/keysig.ts）：换回原文写法再找
+  for (const spell of ACCIDENTAL_SPELLINGS.get(disp) ?? []) {
+    const k3 = src.indexOf(spell);
+    if (k3 >= 0) return k3;
+  }
+  return null;
 }
+
+/** 谱面上的升降号字形 → 原文里可能的写法（123 / `.jpwabc` / 文本谱写 `b` `#` `n`，也有人写 `♭♯♮`）。 */
+const ACCIDENTAL_SPELLINGS: ReadonlyMap<string, readonly string[]> = new Map<string, readonly string[]>([
+  ...[GlyphCodes.csymAccidentalFlat, GlyphCodes.accidentalFlat, "♭"].map((g) => [g, ["b", "♭"]] as [string, string[]]),
+  ...[GlyphCodes.csymAccidentalSharp, GlyphCodes.accidentalSharp, "♯"].map((g) => [g, ["#", "♯"]] as [string, string[]]),
+  ...[GlyphCodes.csymAccidentalNatural, GlyphCodes.accidentalNatural, "♮"].map((g) => [g, ["n", "♮"]] as [string, string[]]),
+]);
 
 /** 两份原文前后相同的部分去掉，剩下中间不同的那一段（局部补丁，撤销与光标映射都干净）。 */
 function diffRegion(a: string, b: string): { from: number; to: number; insert: string } {
