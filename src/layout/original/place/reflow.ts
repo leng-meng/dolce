@@ -3,7 +3,7 @@ import type { LyricLine, MusicElement, PuSong } from "../../../pu/ast";
 import { contentWidth, type JianpuGrid } from "../metrics";
 import { latinWordBreak } from "../../../engrave/syllable";
 import { LATIN_SPACE_EM, LYRIC_MIN_GAP_EM, alignVoices } from "./spacing";
-import type { LyricMeasure, PlacedItem } from "./model";
+import type { InkMeasurer, PlacedItem } from "./model";
 import { assignLyrics, layoutVoiceLine } from "./voice";
 
 /**
@@ -20,7 +20,7 @@ export function reflowLineStarts(
   songs: readonly PuSong[],
   idOf: ReadonlyMap<MusicElement, string | number>,
   m: JianpuGrid,
-  measure: LyricMeasure,
+  ink: InkMeasurer,
 ): Array<Array<string | number>> | null {
   const width = contentWidth(m) - m.page.systemIndent - m.ink.noteHeight * 0.6;
   if (!(width > 0)) return null;
@@ -38,7 +38,7 @@ export function reflowLineStarts(
           for (const it of l.items) it.syllables = new Array(voice.lyrics.length).fill(null);
           assignLyrics(l.items, voice.lyrics);
         });
-        const X = fullLyricColumns(laidOut, group.voices.map((v) => v.lyrics), m, measure);
+        const X = fullLyricColumns(laidOut, group.voices.map((v) => v.lyrics), m, ink);
         const lead = laidOut[0];
         if (!lead) continue;
         const total = X(Math.max(...laidOut.map((l) => l.width), 1));
@@ -101,7 +101,7 @@ function fullLyricColumns(
   lines: ReadonlyArray<{ items: PlacedItem[]; width: number }>,
   lyrics: ReadonlyArray<readonly LyricLine[]>,
   m: JianpuGrid,
-  measure: LyricMeasure,
+  ink: InkMeasurer,
 ): (x: number) => number {
   const EPS = 0.01;
   const cols = [...new Set(lines.flatMap((l) => l.items.map((it) => it.x)))].sort((a, b) => a - b);
@@ -127,7 +127,7 @@ function fullLyricColumns(
       for (const it of l.items) {
         const syl = it.syllables[v];
         if (!syl) continue;
-        const e = measure(syl);
+        const e = ink.lyric(syl);
         const col = colOf(it.x);
         if (prev && col > prev.col) {
           const d = prev.right + e.left + gap + (latinWordBreak(prev.text, syl.text) ? m.style.size.lyric * LATIN_SPACE_EM : 0);

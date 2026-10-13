@@ -22,7 +22,7 @@ import type { ElementId, ScoreDoc } from "../../../model/doc";
 import type { DocView } from "../../../pu/slots";
 import { originalInputOf } from "../input";
 import { applyBreaks } from "../../../model/breaks";
-import type { LyricMeasure, PlacedScore } from "../place/model";
+import type { InkMeasurer, PlacedScore } from "../place/model";
 import { layoutDocument } from "../place/song";
 import { reflowLineStarts } from "../place/reflow";
 import type { OriginalCtx } from "./ctx";
@@ -75,22 +75,25 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     foot: cfg.foot,
   };
   const headerBottoms = doc.songs.map((song) => headerBottom(c, song.metadata));
-  // 歌词的**墨迹**伸出注入给排版（它不碰字体）：落位口径同 paintSyllables——主体居中于锚点、
-  // 尾随标点挂右边。量墨迹而不是字面框：「声，」的全角逗号字面框右半边是空的，
+  // 墨迹量具注入给排版（它不碰字体）。
+  // 歌词：落位口径同 paintSyllables——主体居中于锚点、尾随标点挂右边。量墨迹而不是字面框：「声，」的全角逗号字面框右半边是空的，
   // 按字面框约束会把墨迹根本没碰到的行也撑开（《圣哉三一歌》长图就是这样被误伤的）。
-  const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
   // 歌词避让量的是**画出来的**那串：与 paintSyllables 同一个居中点、同一串挤压后的宽
-  const measure: LyricMeasure = (syl) => {
-    const str = syl.text + (syl.trailingPunctuation ?? "");
-    const run = syllableRun(str, lyricFont, m.style.look.punctCompress);
-    const ink = lyricFont.charBound(str);
-    const center = run.lead + run.body / 2;
-    return { left: center - ink.left, right: Math.min(run.width, ink.right) - center };
+  const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
+  const ink: InkMeasurer = {
+    lyric(syl) {
+      const str = syl.text + (syl.trailingPunctuation ?? "");
+      const run = syllableRun(str, lyricFont, m.style.look.punctCompress);
+      const b = lyricFont.charBound(str);
+      const center = run.lead + run.body / 2;
+      return { left: center - b.left, right: Math.min(run.width, b.right) - center };
+    },
+    digit: (ch) => ({ advance: c.digitFont.measureText(ch), ink: c.digitFont.charBound(ch) }),
   };
   // **源里的行放不下就整首重新断行**（用户定：原样档按排得下的位置断、中间不要短行）：断点写进文档克隆的换行位、
   // 整份重排一遍。元素 id 不变，编辑器的点选、高亮照旧对得上。多声部文本谱（各声部小节对不齐）`applyBreaks` 不重断
   if (!cfg.noReflow) {
-    const starts = reflowLineStarts(doc.songs, doc.idOf, m, measure);
+    const starts = reflowLineStarts(doc.songs, doc.idOf, m, ink);
     if (starts) {
       const clone = structuredClone(source);
       let changed = false;
@@ -101,7 +104,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
       if (changed) return layoutOriginalDocument(clone, { ...cfg, noReflow: true });
     }
   }
-  const placed = layoutDocument(doc.songs, m, headerBottoms, measure);
+  const placed = layoutDocument(doc.songs, m, headerBottoms, ink);
   c.placed = placed;
   // 页脚（BL/BC/BR）：每首末页、最低一行之下。先排一遍拿到占高，连续长图的页高要把它算进去
   const footers = layoutFooters(c, 0);

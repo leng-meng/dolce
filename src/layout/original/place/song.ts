@@ -2,7 +2,7 @@
 import type { Meter, PuSong } from "../../../pu/ast";
 import { contentWidth, type JianpuGrid } from "../metrics";
 import { paginate, type SystemBlock } from "../../../jianpu/vertical";
-import type { LyricMeasure, PlacedGroup, PlacedPage, PlacedScore, PlacedVoice } from "./model";
+import type { InkMeasurer, PlacedGroup, PlacedPage, PlacedScore, PlacedVoice } from "./model";
 import { alignVoices, placeColumns } from "./spacing";
 import { type BeatCtx, assignLyrics, computeUnderlines, layoutVoiceLine } from "./voice";
 import { GROUP_CLEAR, braceReach, chordLane, groupHeadroom, lineInkBottom, stackTop, voiceHeadroom } from "./vertical";
@@ -37,7 +37,7 @@ export function layoutSong(
   m: JianpuGrid,
   songIndex = 0,
   headerBottom = 0,
-  measure?: LyricMeasure,
+  ink: InkMeasurer,
 ): PlacedPage[] {
   // 可用宽度要扣掉左内边距和末个音符的字形半宽，这样两端对齐后
   // 最后一个音符的墨迹右缘正好落在版心右缘上
@@ -106,7 +106,7 @@ export function layoutSong(
         for (const it of l.items) it.syllables = new Array(voice.lyrics.length).fill(null);
         assignLyrics(l.items, voice.lyrics);
       });
-      placeColumns(laidOut, group.voices.map((v) => v.lyrics), scale, stretchable, width, m, measure);
+      placeColumns(laidOut, group.voices.map((v) => v.lyrics), scale, stretchable, width, m, ink);
 
       const voices: PlacedVoice[] = [];
       let textY = y + m.note.wordsY;
@@ -259,10 +259,10 @@ export function layoutDocument(
   songs: readonly PuSong[],
   m: JianpuGrid,
   headerBottoms: readonly number[] = [],
-  measure?: LyricMeasure,
+  ink: InkMeasurer,
 ): PlacedScore {
   let pages: PlacedPage[] = [];
-  songs.forEach((song, i) => pages.push(...layoutSong(song, m, i, headerBottoms[i] ?? 0, measure)));
+  songs.forEach((song, i) => pages.push(...layoutSong(song, m, i, headerBottoms[i] ?? 0, ink)));
 
   // 连续长图：所有页面首尾相接成一张，源里的 `[fenye]` 只当作一段额外留白
   if (m.page.longImage && pages.length > 1) {

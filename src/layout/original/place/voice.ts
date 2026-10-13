@@ -15,6 +15,10 @@ function isBeamed(el: MusicElement): boolean {
   return el.kind === "note" && el.duration > 4;
 }
 
+/**
+ * 把一行歌词的音节按顺序发给该行「跟词」的符号。
+ * 空音节（源码里的 `@` / `/`）本身就代表跳过一个音符，所以照序发即可。
+ */
 export function assignLyrics(items: PlacedItem[], lyrics: readonly LyricLine[]): void {
   lyrics.forEach((line, verse) => {
     let cursor = 0;

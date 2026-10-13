@@ -1,6 +1,7 @@
 // 原样文档布局的定位结构：排版行视图 → 各符号、记号、声部、谱组、页的位置。只有数据，算法在同目录各文件。
 import type { InlineLayerElement, LyricSyllable, Mark, MusicElement, ScoreLine, VoiceGroup } from "../../../pu/ast";
 import type { JianpuGrid } from "../metrics";
+import type { Rect } from "../../../common/geom";
 
 /** 一个占位的谱面符号（音符 / 增时线 / 小节线）。 */
 export interface PlacedItem {
@@ -120,12 +121,11 @@ export interface PlacedScore {
   contentRight: number;
 }
 
-/**
- * 把一行歌词的音节按顺序发给该行「跟词」的符号。
- * 空音节（源码里的 `@` / `/`）本身就代表跳过一个音符，所以照序发即可。
- */
-/**
- * 一个音节画出来之后，**墨迹**在锚点左右各伸出多少（音节按**主体**居中于锚点，尾随标点挂在右边——
- * 同 compose/lyric.ts::paintSyllables）。由绘制端注入：排版这一层不碰字体。
- */
-export type LyricMeasure = (syl: LyricSyllable) => { left: number; right: number };
+/** 定位用的墨迹量具，由绘制端注入（`compose/index.ts`）：排版这一层不碰字体。 */
+export interface InkMeasurer {
+  /** 一个音节画出来之后，**墨迹**在锚点左右各伸出多少（音节按**主体**居中于锚点，尾随标点挂在右边——
+   *  同 compose/lyric.ts::paintSyllables）。 */
+  lyric(syl: LyricSyllable): { left: number; right: number };
+  /** 音符数字（`0`–`7`、`X`）：字面宽，与墨迹盒（相对落笔原点、基线 y = 0）。 */
+  digit(ch: string): { advance: number; ink: Rect };
+}

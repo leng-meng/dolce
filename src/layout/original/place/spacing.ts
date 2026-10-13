@@ -2,7 +2,7 @@
 import type { LyricLine } from "../../../pu/ast";
 import type { JianpuGrid } from "../metrics";
 import { latinWordBreak } from "../../../engrave/syllable";
-import type { LyricMeasure, PlacedItem } from "./model";
+import type { InkMeasurer, PlacedItem } from "./model";
 
 /** 西文词间空格 ÷ 歌词字号（常见无衬线字体的空格宽约 0.28 em）。 */
 export const LATIN_SPACE_EM = 0.28;
@@ -35,7 +35,7 @@ export function placeColumns(
   stretchable: boolean,
   width: number,
   m: JianpuGrid,
-  measure: LyricMeasure | undefined,
+  ink: InkMeasurer,
 ): void {
   const natural = Math.max(...lines.map((l) => l.width), 1);
   const apply = (xs: (x: number) => number, s: number): void => {
@@ -46,10 +46,6 @@ export function placeColumns(
       }
     }
   };
-  if (!measure) {
-    apply((x) => x * scale, scale);
-    return;
-  }
   // 共享列：各声部符号 x 的并集（自然坐标）
   const EPS = 0.01;
   const cols = [...new Set(lines.flatMap((l) => l.items.map((it) => it.x)))].sort((a, b) => a - b);
@@ -75,7 +71,7 @@ export function placeColumns(
       for (const it of l.items) {
         const syl = it.syllables[v];
         if (!syl) continue;
-        const e = measure(syl);
+        const e = ink.lyric(syl);
         const col = colOf(it.x);
         if (prev && col > prev.col) {
           // 西文词与词之间补一个空格宽（判据同简谱引擎，engrave/syllable.ts::latinWordBreak）

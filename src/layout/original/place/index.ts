@@ -7,7 +7,7 @@
 // 只算位置、不碰绘图，构图在 `compose/`。这样播放高亮只需拿定位结构里的锚点，
 // 不必反查 SVG。
 
-export type { PlacedItem, PlacedMark, PlacedLayer, PlacedSplit, PlacedUnderline, PlacedVoice, PlacedGroup, PlacedPage, PlacedScore, LyricMeasure } from "./model";
+export type { PlacedItem, PlacedMark, PlacedLayer, PlacedSplit, PlacedUnderline, PlacedVoice, PlacedGroup, PlacedPage, PlacedScore, InkMeasurer } from "./model";
 export type { NoteElement, SustainElement } from "../../../pu/ast";
 export { elementBeats } from "./voice";
 export { layoutSong, layoutDocument } from "./song";
