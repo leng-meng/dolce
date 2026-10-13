@@ -4,6 +4,7 @@ import { MetaData } from "../smufl/smufl";
 import { Rect, Colors } from "../common/geom";
 import type { CompressMode } from "../common/cjkpunct";
 import type { AccidentalSide, AccidentalStyleKind } from "../engrave/spacing";
+import { STACK_GAP_DEFAULT, type StackStyle } from "../engrave/stack";
 
 /** 「原样」档多段歌词叠排时的段间行距 ÷ 歌词字号。原书量到的是 1.3 上下。 */
 export const LYRIC_STACK_RATIO = 1.35;
@@ -58,6 +59,8 @@ export class LayoutOptions {
   accidentalSide: AccidentalSide | undefined = undefined;
   /** 临时记号的样子（`engrave/spacing.ts::AccidentalStyleKind`）。样式键 `accidental-style`；成书缺省 `classic`。 */
   accidentalStyle: AccidentalStyleKind = "csym";
+  /** `csym` 临时记号的大小倍数（1 = 照混排）。样式键 `accidental-scale`；展开档的 pptx 预设取小一号。 */
+  accidentalScale = 1;
   /** 房号（1./2.）的字号。0 = 不画房号（展开档：反复已逐遍展开）。原样档与成书由样式层给值。 */
   endingSize = 0;
   /** 歌词段号（行首的 `1.` `2.`）标不标：
@@ -155,124 +158,30 @@ export class LayoutOptions {
   pageFurniture: "song" | "none" = "song";
   maxLineDist!: number;
   maxHorizontalScale = 2.0;
-  jpBeamDist!: number;
 
   // --- jianpu vertical grid ---------------------------------------------
-  // Everything stacked above (and below) a jianpu digit — octave dots, the
-  // slur/tie arc, the tuplet bracket — is separated by ONE gap, `jpStackGap`,
-  // measured ink-to-ink. So digit→dot, dot→dot and dot→slur are all equal and
-  // the stack reads as an even ladder.
-  //
-  // musicpp is *not* even here: it steps the dots by `octaveDotDist = 6` but
-  // lifts the slur a further 6 per dot from a different origin
-  // (render.cpp:906 vs model.cpp:2649), giving ~6.4px digit→dot against
-  // ~2.3px dot→slur at this font size. Its absolute slur height is still a
-  // good sanity check: with one octave dot the ladder below lands within
-  // 0.1px of it.
-  //
-  // (Before this, the project mixed three unrelated steps —
-  // `dotBound.height*1.5` ≈ 4.2px, `numberSize/8` = 3.5px and
-  // `numberSize/2` = 14px.)
+  // 数字上下那一摞（高音点 / 减时线 / 低音点）走公共那一份（engrave/stack.ts）：墨迹到墨迹等距，
+  // 一道空 = `stackGap` × 数字墨迹高（样式键 `stack-gap`）。
+  /** 叠层的空 ÷ 数字墨迹高（engrave/stack.ts）。样式键 `stack-gap`。 */
+  stackGap = STACK_GAP_DEFAULT;
+  /** 这一摞**之上**再给弧 / 三连音括线 / 上方带留的空（墨迹到墨迹）。 */
   jpStackGap!: number;
-  /** Baseline → first beam (减时线). musicpp draws level 0 at y=35 with the
-   * digit baseline at 30 (render.cpp:161, and processLevelJp's `lev >= cnt`
-   * makes the level 0-based), i.e. 5 units at jianpuFont 30 = 1/6 em.
-   * Without it the first beam sat at `jpBeamDist` (1/8 em) and crowded the
-   * digit, more so once the stroke widened to musicpp's 1.5. */
-  jpBeamTop!: number;
   jpBeamWidth = 1.5; // musicpp lineWidths.jpBeam (pptutil.cpp:138)
-  /**
-   * 数字 ↓ 减时线 ↓ 低音点 这条**向下**阶梯的墨迹净距（用户口径：「音符、减时线、
-   * 低音点之间的距离要相等、均匀排布」）。
-   *
-   * 为什么不跟上方共用 `jpStackGap`：上方那一格要给弧/三连音括线留手，量出来是 1/6 em；
-   * 下方三样是紧挨着排的一摞，1/6 em 会把低音点推得离减时线明显比减时线离数字远
-   * （实测 3.9 : 4.7，因为减时线原来是按**线心**摆在 `jpStackGap` 上、而低音点是按**墨迹**
-   * 摆在减时线墨迹之下，两处口径不一致）。这里取展开档实测的那个距离（≈ 1/9 em，
-   * 那一档是 2.9 / 3.0），并且两处都按墨迹算，看着才是均匀的一摞。
-   */
-  jpBelowGap!: number;
 
   /** `jpStaffTop` / `jpStaffBottom` 的覆写（0 = 按字号推算，见那两个 getter）。
    *  展开档要回到本项目原来的 −23/28 em 与 +5/28 em。 */
   jpStaffTopOverride = 0;
   jpStaffBottomOverride = 0;
 
-  /**
-   * **旧式纵向栅格**（展开档专用；默认 false = 等距的单一 `jpStackGap`）。
-   *
-   * 打开后，数字上下堆叠的那几样东西回到 2026-08 重构之前的**三套步长**：
-   * 高音点按 `dotBound.height * 1.5` 步进、`entryTop` 在此之上再退 `numberSize/8`
-   * （弧就落在这里，不再额外让一个 gap）、三连音退 `numberSize/2`、tie 退 `numberSize/8`，
-   * 低音点按 `numberSize * (d*0.175 + 0.25)` 排。
-   *
-   * 这几个数彼此对不齐（数字↔点 ≈ 2.0px 而点↔弧 ≈ 4.4px，故有了后来的等距栅格），
-   * 但那正是老 PPTX 的观感。**只在展开档打开**，默认那条路一个数都不许受影响。
-   * 换算不成单纯的 gap/rung 两个数——老式带 0.5 格偏移，且八度点当年是字形、
-   * 按基线落位，今天是矢量圆、按墨迹落位，两者差一个 `dotBound.top`。
-   */
-  jpGridLegacy = false;
+  /** 叠层的取尺（已乘好数字墨迹高）。 */
+  get stack(): StackStyle {
+    return { gap: this.stackGap * this.numberBound("1").height, dotRadius: this.jpDotRadius, beamWidth: this.jpBeamWidth };
+  }
 
-  /** One rung of the stack: a dot plus the gap above it. Also the amount by
-   * which anything that must clear a slur (a second arc, a tuplet bracket)
-   * steps up. */
+  /** 一格：一个点加它上面那道空。弧与弧、弧与三连音之间逐层上移也用它。 */
   get jpDotRung(): number {
-    return this.jpStackGap + this.numberBound(".").height;
-  }
-
-  /** 低音点那一摞的步距：一个点加它上面那道空（口径同 `jpDotRung`，只是用向下那个 gap）。 */
-  get jpLowDotRung(): number {
-    return this.jpBelowGap + 2 * this.jpDotRadius;
-  }
-
-  /**
-   * 旧式（展开档）数字的**墨迹顶**——按**目标字体**（Microsoft YaHei，`.pptx` 里真正
-   * 渲染的那一份）算，不是拿排版字体量的 `numberBound("1").top`。
-   *
-   * 两者差了 0.0585 em（PingFang 的 "1" 墨迹高 0.714 em、YaHei 的 0.7725）——28pt 上
-   * 1.64pt。凡是「贴着数字顶」的东西（倚音）照排版字体量，导到 .pptx 里就压进数字里
-   * （用户口径：「倚音底部还是没有对齐正常音符的顶部，要求做到墨迹对齐」）。
-   * 这一档的其它落点（`jpLegacyBandTop` / `jpLegacyDotCenter`）本来就是从成品 .pptx
-   * 量回来的、已经是目标字体的口径，这里补齐最后一处。
-   */
-  get jpLegacyDigitInkTop(): number {
-    return -this.numberSize * 0.7725;
-  }
-
-  /**
-   * 旧式（展开档，`jpGridLegacy`）八度点阶梯：第 `d` 级（0 = 离数字最近）那个点的
-   * **墨迹中心**离基线多远，`up` 为真是高音点（返回负值）。
-   *
-   * 两个系数是从 2019 年那批成品 .pptx（`ppt500/`，原桌面版在 Windows 上导的）
-   * 量回来的：28pt 上高音点的 `.` 基线在 −26.13、低音点在 +7.47，各自再补上
-   * Microsoft YaHei 那个 `.` 的墨迹半高（0.0506 em）就是墨迹中心，
-   * 也就是 −0.9839 em 与 +0.2161 em。逐级、以及低音点让开减时线的那几格，
-   * 一律走 `jpBeamDist`（同一批成品里量到 3.267pt @28pt，见 `style/jianpu.ts` 的 `pptx` 预设）。
-   */
-  /**
-   * 旧式（展开档）音符**上方那一带的底**：弧 / fermata / 三连音括线 / 和弦 / 房号
-   * 都落在它上面（`NoteEntry.entryTop` 在没有高音点时直接返回它）。
-   *
-   * 同样量自 2019 年那批成品（`ppt500/`）：28pt 上圆滑线外弧的两端（也就是弧的下缘）
-   * 恒在基线上方 27.07、fermata 的下缘在 26.04，取前者 → −0.967 em。
-   * **不按 `numberBound("1").top` 往上退**：那是拿排版字体量的，PingFang 的数字比
-   * 目标字体（YaHei，0.769 em）矮 0.055 em，照它退出来的弧在 .pptx 里贴着数字。
-   */
-  get jpLegacyBandTop(): number {
-    return -this.numberSize * 0.967;
-  }
-
-  jpLegacyDotCenter(d: number, beams: number, up: boolean): number {
-    return up
-      ? -(this.numberSize * 0.9839 + d * this.jpBeamDist)
-      : this.numberSize * 0.2161 + (d + beams) * this.jpBeamDist;
-  }
-
-  /** Bottom edge of the lowest of `n` beams, or the digit baseline if n = 0.
-   * Low octave dots hang one `jpStackGap` below this, mirroring the top side. */
-  jpBeamBottom(n: number): number {
-    if (n <= 0) return 0;
-    return this.jpBeamTop + this.jpBeamDist * (n - 1) + this.jpBeamWidth / 2;
+    const st = this.stack;
+    return st.gap + 2 * st.dotRadius;
   }
 
   constructor(public fontSize: number) {
@@ -293,11 +202,7 @@ export class LayoutOptions {
     this.marginTop = fontSize * 1.5;
     this.marginBottom = fontSize * 3;
     this.maxLineDist = fontSize * 0.75;
-    this.jpBeamDist = fontSize / 8;
     this.jpStackGap = fontSize / 6;
-    this.jpBelowGap = fontSize / 9;
-    // 减时线按**墨迹上缘**离数字 `jpBelowGap`（字段本身记的是线心，故加半个线宽）
-    this.jpBeamTop = this.jpBelowGap + this.jpBeamWidth / 2;
   }
 
   get lrcSize(): number {

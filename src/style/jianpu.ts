@@ -178,9 +178,6 @@ function applyOriginalPreset(opt: LayoutOptions, longImage: boolean): void {
 function applyPptxPreset(opt: LayoutOptions): void {
   const em = opt.numberSize;
 
-  // 纵向堆叠回到旧式三套步长（数字↔点、点↔弧、三连音各走各的）。见 jpGridLegacy 的注释。
-  opt.jpGridLegacy = true;
-
   // 音符数字**不加粗**：投影那一档的观感是既有的，原样档才照印刷谱加粗。
   opt.noteBold = false;
 
@@ -195,15 +192,12 @@ function applyPptxPreset(opt: LayoutOptions): void {
   opt.barlineWidth = 1.5;
   opt.finalBarlineWidth = 3.5;
 
-  // 减时线：线宽 1.4（= em/20，同样量自成品；老档 1.25、今默认 1.5）。
-  // **第一道的高度与层间步距也改按 2019 年那批成品
-  // .pptx 量回来的**（`ppt500/`，28pt 上是 4.667 与 3.267）——原先两者都取 `jpBeamDist`
-  // = em/8 = 3.5，减时线贴着数字，投影上看着像粘在音符底下（用户口径：
-  // 「减时线离音符太近」）。低音点那一摞按 `jpBeamDist` 让开减时线、
-  // 旧式八度点阶梯（`LayoutOptions.jpLegacyDotCenter`）也逐级走它，所以两个数一起改。
+  // 减时线：线宽 1.4（= em/20，量自 2019 年那批成品 .pptx；老档 1.25、今默认 1.5）。
+  // 落点与各引擎同一套等距叠层（engrave/stack.ts，用户定：展开档也不留旧式阶梯）。
   opt.jpBeamWidth = em / 20;
-  opt.jpBeamDist = (em * 7) / 60; // 0.11667 em
-  opt.jpBeamTop = em / 6;
+
+  // 临时记号小一号（用户口径：「展开档的升号偏大」）——投影的数字不加粗、字号大，照混排那个比例显得压过数字。
+  opt.accidentalScale = 0.75;
 
   // 拍号只留分数线粗细（比例走默认，见上面小节线那一段）。
   opt.timeSigRuleWidth = 1.5;

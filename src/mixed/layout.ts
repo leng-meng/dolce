@@ -240,6 +240,7 @@ class DocPartLoader {
     this.calcStemLen();
     if (!this.hasBeamEl) this.autoBeamPart();
     this.formatBeams();
+    this.fitFlagStems();
     // 符干/符杠就绪后再排记号（fermata 等），使 tailY 取到最终符干末端，避免 fermataBelow
     // 压住后续加长的符干（musicpp parser.cpp:2914）。
     for (const md of this.part.measures) md.layoutNotations();
@@ -1111,6 +1112,28 @@ class DocPartLoader {
         ch.stemLen = Math.abs(-ch.tailNote().cy() - sy);
       } else {
         ch.stemLen = ch.grace ? 35 * cueSize : 35;
+      }
+    }
+  }
+
+  /**
+   * 不连符杠、带符尾的符干**至少要比符尾长出 1/4 格**（按这个音的大小缩放）：符尾是从符干末端往音符头那边垂的，
+   * 符干短于它就戳出音符头之外。谱里给的 `<stem default-y>` 照用，只是不许比这短——
+   * 倚音最常见：Sibelius 给倚音 2.1 格的符干，倚音符尾（Bravura `flag8thUp` 3.24 格 × 倚音缩放）比它长（260《感恩的泪》）。
+   */
+  private fitFlagStems(): void {
+    const meta = this.score.options.meta;
+    const cueSize = this.score.options.cueSize;
+    for (const md of this.part.measures) {
+      for (const ch of md.chords) {
+        if (ch.rest || ch.beams.length > 0 || ch.stemLen <= 0) continue;
+        const flag = ch.tailSym(ch.stemUp);
+        if (!flag) continue;
+        const bb = meta.getBBox(flag);
+        if (!bb) continue;
+        const scale = ch.cue || ch.grace || ch.notes.some((n) => n.size === 1) ? cueSize : 1;
+        const flagLen = (bb.bBoxNE[1] - bb.bBoxSW[1]) * 10 * scale; // 1 格 = 10 tenths
+        ch.stemLen = Math.max(ch.stemLen, flagLen + 2.5 * scale);
       }
     }
   }

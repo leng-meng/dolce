@@ -2,6 +2,7 @@
 //
 // 由 `style/jianpu.ts` 的 `book` 预设调用。要量字体（附点大小），所以**只能在浏览器里跑**。
 import { Font } from "../layout/font";
+import { STACK_GAP_DEFAULT } from "../engrave/stack";
 import type { LayoutOptions } from "../layout/options";
 import type { BookStyle } from "../pdflayout/bookstyle";
 import type { StyleRole } from "./sheet";
@@ -15,9 +16,7 @@ const JP_BEAM_TO_BARLINE = 2 / 3;
  * 只改常量的来源，不动 layout.ts 的算法：`jpDotRung` / `jpStaffTop` 那些都是 getter，
  * 覆写字段就全局生效——《简谱纵向栅格》那把尺子一个常量都不用动。
  *
- * 层距（高音点上距 / 低音点下距 / 减时线首层距）在原书里并不相等，而 `jpStackGap` 只有一个。
- * 这里取三者的中位（`metrics.stackGapEm`）；要分开还原得先把 layout.ts 里那三处使用点拆开，
- * 那是背离《简谱纵向栅格》的既定写法，需要单独记账。
+ * 数字上下的叠层（八度点、减时线）与各引擎同一套等距（`stack-gap`，用户定：成书也不照原书那三个不等的层距）。
  */
 export function applyBookPreset(opt: LayoutOptions, s: BookStyle): void {
   const note = s.roles.note.size;
@@ -38,15 +37,12 @@ export function applyBookPreset(opt: LayoutOptions, s: BookStyle): void {
   opt.marginRight = s.page.margin.outer;
   opt.marginTop = s.page.margin.top;
   opt.marginBottom = s.page.margin.bottom;
+  // 弧 / 上方带离叠层顶的空照原书量的；叠层本身（八度点、减时线）与各引擎同一套等距（`stack-gap`）
   opt.jpStackGap = em(m.stackGapEm);
-  // 向下那条阶梯（数字↓减时线↓低音点）成书仍用同一个 `stackGapEm`——编辑器新调的
-  // `jpBelowGap`（1/9 em，见 LayoutOptions）是屏幕观感，原书量到的是这个。
-  opt.jpBelowGap = opt.jpStackGap;
+  opt.stackGap = m.stackGap ?? STACK_GAP_DEFAULT;
   // 附点也按原书那个大小：引擎默认让它与八度点同大（`.` 的墨迹高折半），
   // 而原书印的是 `·`，墨迹高出一截——照默认排全书会差出两页。
   opt.augDotRadius = opt.numberBound("·").height / 2;
-  opt.jpBeamTop = em(m.divLineGapEm);
-  opt.jpBeamDist = em(m.divLineStepEm);
   // 减时线宽**按小节线宽折算**，比例照混排的简谱层（`MixedOptions.lineWidths`：
   // jpBeam 1 : lightBarline 1.5 = 2/3）。用户口径：「成书重排减时线太细了」
   // ——原来取的是原书**实测的墨迹宽**（0.19pt 上下），那是扫描件里的一条细线，

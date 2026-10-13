@@ -14,7 +14,6 @@
 // 由 ScorePainter 直接按 id 取用，不必反查 SVG，也不依赖对象身份（重新解析一遍 id 不变）。
 
 import { Font } from "../font";
-import { graceGeometry } from "../../engrave/grace";
 import { Matrix33, Point, type Rect } from "../../common/geom";
 import { GraphicLine, GraphicPath, Group, PageItem, type PathSeg, Slur, TextFrame } from "../pageitem";
 import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../../engrave/chord";
@@ -26,6 +25,8 @@ import { EQ_PAD_EM } from "../../engrave/spacing";
 import { addEndingBracket } from "../../engrave/ending";
 import { TupletGlyph } from "../../engrave/tuplet";
 import { sustainDash } from "../../engrave/dash";
+import { beamY, highDotY, lowDotY } from "../../engrave/stack";
+import { augDotCenter } from "../../engrave/augdot";
 import { AccidentalGlyph, type AccidentalKind } from "../../engrave/accidental";
 import { BarStyle } from "../../score/enums";
 import type { Metadata, NoteElement } from "../../pu/ast";
@@ -42,8 +43,10 @@ import type { ElementId, ScoreDoc } from "../../model/doc";
 import type { DocView } from "../../pu/slots";
 import { originalInputOf } from "./input";
 import {
+  chordLane,
+  graceLayout,
   layoutDocument,
-  noteInkBottom,
+  noteBeams,
   stackTop,
   type PlacedItem,
   type PlacedLayer,
@@ -55,7 +58,7 @@ import {
   type LyricMeasure,
 } from "./place";
 import { BRACE_GLYPHS } from "./brace";
-import { applyDocOptions, applyUserOptions, noteMarkGap, jianpuGraceMetrics, jianpuGraceNotes, jianpuSlurStyle, withDigitInk, type JianpuGrid, type JianpuMetrics, type JianpuUserOptions } from "./metrics";
+import { applyDocOptions, applyUserOptions, noteMarkGap, jianpuSlurStyle, withDigitInk, type JianpuGrid, type JianpuMetrics, type JianpuUserOptions } from "./metrics";
 import { ACCOMP_BRACKET, ACCIDENTAL_GLYPH, BARLINE_MARKS, BRACKET, DYNAMICS, ORNAMENTS, TERMS } from "../../pu/glyph";
 
 /**
@@ -78,6 +81,8 @@ interface OriginalCtx {
   doc: DocView;
   placed: PlacedScore | null;
   digitFont: Font;
+  /** 正在画的这一行和弦/注释那一槽的基线（相对音符基线，place.ts::chordLane）。 */
+  chordLane: number;
   pageWidth: number;
   pageHeight: number;
   /** 连续长图裁紧后，整页要平移多少（把墨迹推到左侧留白处） */
@@ -781,6 +786,7 @@ function paintVoice(c: OriginalCtx,
   const m = c.metrics;
   const left = m.page.margin.left + m.page.systemIndent;
   const baseline = voice.y;
+  c.chordLane = voice.chordY;
   /** 各段歌词墨迹的最右缘，联合括号据此定位 */
   const lyricRight: number[] = [];
   /** 前面那个音符的元素 id：小节线没有自己的 id，借它认（口径同 `editor/sync.ts::addPartExtras`）。
@@ -822,7 +828,7 @@ function paintVoice(c: OriginalCtx,
     root.add(
       rect(c.ink,
         left + u.x0,
-        baseline + (u.dy ?? 0) + m.ink.beamTopY + (u.level - 1) * m.note.beamDist,
+        baseline + (u.dy ?? 0) + beamY(m.ink.noteHeight / 2, u.level, m.ink.stack) - m.note.beamWidth / 2,
         u.x1 - u.x0,
         m.note.beamWidth,
       ),
@@ -930,6 +936,7 @@ function paintLayer(c: OriginalCtx,
         items: layer.items,
         underlines: layer.underlines.map((u) => ({ ...u, dy: 0 })),
         marks: split.marks,
+        chordY: chordLane(split.line, m),
         layers: [],
         lyricY: [],
       },
@@ -948,7 +955,10 @@ function paintLayer(c: OriginalCtx,
     return;
   }
   const y = baseline + m.note.cueY;
-  const font = new Font(m.font.text, c.digitFont.size * m.ratio.cueScale);
+  const cs = m.ratio.cueScale;
+  const font = new Font(m.font.text, c.digitFont.size * cs);
+  const st = m.ink.stack;
+  const cue = { gap: st.gap * cs, dotRadius: st.dotRadius * cs, beamWidth: st.beamWidth * cs };
   for (const it of layer.items) {
     const x = left + it.x;
     if (it.element.kind === "barline") {
@@ -965,21 +975,19 @@ function paintLayer(c: OriginalCtx,
     root.add(
       text(ch, x - (b.left + b.right) / 2, y - (b.top + b.bottom) / 2, font, c.ink),
     );
+    // 小字层的叠层与主旋律同一套（engrave/stack.ts），整体按 cueScale 缩；低音点同样让开减时线
     const oct = it.element.octave;
-    for (let i = 0; i < oct; i++) {
-      root.add(dot(c.ink, x, y + m.ink.octaveUpY * m.ratio.cueScale - i * m.note.octaveDotDist, m.note.dotRadius * 0.8));
-    }
-    for (let i = 0; i < -oct; i++) {
-      root.add(dot(c.ink, x, y + m.ink.octaveDownY * m.ratio.cueScale + i * m.note.octaveDotDist, m.note.dotRadius * 0.8));
-    }
+    const h = m.ink.noteHeight * cs;
+    for (let i = 0; i < oct; i++) root.add(dot(c.ink, x, y + highDotY(-h / 2, i, cue), cue.dotRadius));
+    for (let i = 0; i < -oct; i++) root.add(dot(c.ink, x, y + lowDotY(h / 2, noteBeams(it.element), i, cue), cue.dotRadius));
   }
   for (const u of layer.underlines) {
     root.add(
       rect(c.ink,
         left + u.x0,
-        y + m.ink.beamTopY * m.ratio.cueScale + (u.level - 1) * m.note.beamDist,
+        y + beamY((m.ink.noteHeight * cs) / 2, u.level, cue) - cue.beamWidth / 2,
         u.x1 - u.x0,
-        m.note.beamWidth * 0.8,
+        cue.beamWidth,
       ),
     );
   }
@@ -993,7 +1001,7 @@ function paintChord(c: OriginalCtx, g: Group, chord: string, x: number, baseline
   const segs = chordTextSegs(chord, m.look.chordPlain, m.look.accidentalSide);
   const grp = layoutHarmonySegs(segs, wordFont, musicFont, c.ink);
   grp.x = x - harmonyWidth(segs, wordFont, musicFont) / 2;
-  grp.y = baseline + m.note.chordY;
+  grp.y = baseline + c.chordLane;
   g.add(grp);
 }
 
@@ -1019,28 +1027,29 @@ function paintNote(c: OriginalCtx,
     const kind = note.accidental as AccidentalKind | undefined;
     if (kind && ACCIDENTAL_GLYPH[kind]) {
       const digit = { font: c.digitFont, text: ch, x: x + dx, y: baseline + dy };
-      g.add(new AccidentalGlyph(kind, digit, { music: new Font("Bravura", 20), color: c.ink, kind: m.look.accidentalStyle }).item);
+      g.add(new AccidentalGlyph(kind, digit, { music: new Font("Bravura", 20), color: c.ink, kind: m.look.accidentalStyle, scale: m.look.accidentalScale }).item);
     }
 
     // 八度点：高音在上、低音在下，同侧多点向外叠。
     // 低音点必须挂在**减时线最下一层之下**（.jpwabc 的 entryBottom 规则：
     // above = max(数字墨迹底, 最低那条减时线的下缘)，再让开一个 stackGap），
     // 否则十六分音符的两条减时线会和低音点叠在一起。
+    // 落点走公共那一份（engrave/stack.ts，墨迹到墨迹等距；低音点挂在减时线之下）
+    const half = m.ink.noteHeight / 2;
     for (let i = 0; i < note.octave; i++) {
-      g.add(dot(c.ink, x, baseline + m.ink.octaveUpY - i * m.note.octaveDotDist, m.note.dotRadius));
+      g.add(dot(c.ink, x, baseline + highDotY(-half, i, m.ink.stack), m.note.dotRadius));
     }
-    if (note.octave < 0) {
-      const firstDot =
-        noteInkBottom(note, m) - (-note.octave - 1) * m.note.octaveDotDist - m.note.dotRadius;
-      for (let i = 0; i < -note.octave; i++) {
-        g.add(dot(c.ink, x, baseline + firstDot + i * m.note.octaveDotDist, m.note.dotRadius));
-      }
+    for (let i = 0; i < -note.octave; i++) {
+      g.add(dot(c.ink, x, baseline + lowDotY(half, noteBeams(note), i, m.ink.stack), m.note.dotRadius));
     }
   }
 
-  // 附点
+  // 附点：落点走公共那一份（engrave/augdot.ts：与数字墨迹中心等高，离数字墨迹右缘一道空）
+  const { dx: adx, dy: ady, b: ab } = digitOrigin(c, note.sound === "rhythm" ? "X" : String(note.pitch));
+  const digitInk = ab.offset(x + adx, baseline + ady);
   for (let i = 0; i < note.dots; i++) {
-    const d = dot(c.ink, x + m.note.dotDx + i * (m.note.dotRadius * 2 + 2), baseline, m.note.dotRadius);
+    const p = augDotCenter(digitInk, i, m.note.dotRadius, m.ink.stack.gap);
+    const d = dot(c.ink, p.cx, p.cy, m.note.dotRadius);
     d.classes.add("aug-dot"); // 可视化编辑单独点选附点（`notePartEls`）
     g.add(d);
   }
@@ -1051,7 +1060,7 @@ function paintNote(c: OriginalCtx,
   } else if (note.annotation) {
     const font = new Font(m.font.text, m.size.chord);
     const a = note.annotation;
-    const t = text(a, x - font.measureText(a) / 2, baseline + m.note.chordY, font, c.ink);
+    const t = text(a, x - font.measureText(a) / 2, baseline + c.chordLane, font, c.ink);
     t.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
     g.add(t);
   }
@@ -1059,15 +1068,15 @@ function paintNote(c: OriginalCtx,
   // 左缘对齐数字左缘、往右写——居中的话行首那个会伸出左边距
   if (note.keyLabel) {
     const font = new Font(m.font.text, m.size.chord);
-    const y = baseline + m.note.chordY - (note.chord || note.annotation ? m.size.chord * 1.2 : 0);
+    const y = baseline + c.chordLane - (note.chord || note.annotation ? m.size.chord * 1.2 : 0);
     const t = text(note.keyLabel, x - m.ink.noteHeight * 0.35, y, font, c.ink); // 数字宽约墨迹高的 0.7
     t.classes.add("key-change");
     g.add(t);
   }
 
   // 倚音：主音左/右侧的小号数字（默认八分，故带一条减时线）
-  paintGrace(c, g, note.graceBefore, x, baseline, -1);
-  paintGrace(c, g, note.graceAfter, x, baseline, 1);
+  paintGrace(c, g, note, "before", x, baseline);
+  paintGrace(c, g, note, "after", x, baseline);
 
   // `&xx` 记号
   const before = g.children.length;
@@ -1087,19 +1096,17 @@ function paintNote(c: OriginalCtx,
  */
 function paintGrace(c: OriginalCtx,
   g: Group,
-  notes: readonly NoteElement[],
+  note: NoteElement,
+  side: "before" | "after",
   x: number,
   baseline: number,
-  dir: -1 | 1,
 ): void {
+  const notes = side === "before" ? note.graceBefore : note.graceAfter;
   if (notes.length === 0) return;
   const m = c.metrics;
   const font = new Font(m.font.text, c.digitFont.size * m.ratio.graceScale);
-  const geom = graceGeometry(
-    jianpuGraceNotes(notes),
-    jianpuGraceMetrics(m),
-    x, baseline, dir, c.digitFont.size,
-  );
+  // 落位与让位同一份（place.ts::graceLayout）：整块倚音的墨迹底离主音那一摞的顶一道空
+  const geom = graceLayout(note, side, m, x, baseline);
   for (const d of geom.digits) {
     // 数字按**墨迹中心**定位（公共几何给的是中心，这里换算成落笔点）
     const b = font.charBound(d.text);
@@ -1408,6 +1415,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     doc,
     placed: null,
     digitFont: new Font(m.font.note, m.size.note, m.font.noteBold),
+    chordLane: m.note.chordY,
     pageWidth: m.page.width,
     pageHeight: m.page.height,
     _pageShiftX: 0,

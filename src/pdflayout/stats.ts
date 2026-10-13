@@ -675,7 +675,7 @@ export function inferBookStyle(
   if (spread > noteInk * 0.1) {
     warnings.push(
       `⚠ 层距不等：高音点上 ${gUp.toFixed(2)} / 低音点下 ${gDown.toFixed(2)} / 减时线 ${gDiv.toFixed(2)}（差 ${spread.toFixed(2)}pt > 0.1 墨迹高），` +
-        `jpStackGap 需要拆成三个字段分别覆写`,
+        `（叠层按 stack-gap 等距排，不照这三个数；仅供核对）`,
     );
   }
 
@@ -684,8 +684,6 @@ export function inferBookStyle(
     ...base.metrics,
     systemGapEm: em(ms.systemGap),
     noteStepEm: em(ms.noteStep),
-    divLineGapEm: em(ms.divLineGap),
-    divLineStepEm: em(ms.divLineStep),
     repeatDotDiam: pt(ms.repeatDotDiam),
     // 房号（1./2.）与三连音的括线：原书量到的线宽与「脚」长（脚长按音符字号归一）
     bracketWidth: pt(ms.bracketWidth),

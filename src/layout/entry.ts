@@ -3,6 +3,8 @@
 import { BarlineGlyph, type BarlineSpec } from "../engrave/barline";
 import { TimeSigGlyph } from "../engrave/timesig";
 import { KeyLabel, keyNameOfFifths } from "../engrave/keysig";
+import { beamY, highDotY, lowDotY, stackBottom, stackTop } from "../engrave/stack";
+import { augDotCenter } from "../engrave/augdot";
 import { ACCIDENTAL_CLEARANCE, AccidentalGlyph, accidentalKindOf } from "../engrave/accidental";
 import { Point, Rect } from "../common/geom";
 import type { CompressMode } from "../common/cjkpunct";
@@ -203,11 +205,12 @@ function graceMetricsOf(opt: LayoutOptions): GraceMetrics {
     ink: bnd.height,
     // 原书 260/264 两页实测：倚音数字墨迹高 4.82~5.00、正常音符 8.33 → 0.58~0.60
     scale: 0.59,
-    octaveUpY: bnd.top - opt.jpStackGap,
+    octaveUpY: bnd.top - opt.stack.gap,
     octaveDownY: opt.jpDotRung,
     octaveDotGap: opt.jpDotRung,
     octaveDotRadius: opt.numberFont.size * 0.06,
-    underlineGap: opt.jpBeamDist,
+    underlineGap: opt.stack.gap + opt.jpBeamWidth,
+    stackGap: opt.stackGap,
   };
 }
 
@@ -295,65 +298,22 @@ export class NoteEntry extends Entry {
     if (this.chord.notes[0].tieEnd) return true;
     return false;
   }
-  /** Ink top of the digit plus whatever octave dots sit above it — i.e. the
-   * top of the shared vertical ladder, which slurs/ties then continue. */
+  /** 数字墨迹顶加它上面那摞高音点的墨迹顶——叠层的顶（engrave/stack.ts），弧与连音接着往上排。 */
   entryTop(opt: LayoutOptions): number {
-    const oct = this.chord.notes[0].jpOctave;
-    const bnd = opt.numberBound("1");
-    if (opt.jpGridLegacy) {
-      // 旧式：高音点那一摞按 `jpLegacyDotCenter` 排，整摞再退 numberSize/8——
-      // 那个 1/8 就是当年的「gap」，所以 legacy 下 slurRung 不再额外退（见下）。
-      // **没有高音点时不按 `bnd.top` 退**，直接取量自成品的那一格（见 jpLegacyBandTop）：
-      // `bnd.top` 是拿排版字体（PingFang）量的，比目标字体的数字矮 0.055 em，
-      // 照它退出来的弧与 fermata 在 .pptx 里贴着数字。
-      if (oct > 0) {
-        return opt.jpLegacyDotCenter(oct - 1, 0, true) - opt.jpDotRadius - opt.numberSize / 8;
-      }
-      return opt.jpLegacyBandTop;
-    }
-    if (oct <= 0) return bnd.top;
-    return bnd.top - oct * opt.jpDotRung;
+    return stackTop(opt.numberBound("1").top, this.chord.notes[0].jpOctave, opt.stack);
   }
-  /**
-   * 数字**加它上面那摞八度点**的墨迹顶——不含上方那一带的空档。
-   *
-   * 与 `entryTop` 的分别：旧式档（PPT）的 `entryTop` 返回的是「上方那一带的底」
-   * （`jpLegacyBandTop`，比墨迹顶还高出一格，弧与 fermata 落在那儿）。倚音要**贴着音符**
-   * 摆（用户口径：「倚音底部对齐正常音符顶部」），用的是这一份。
-   */
+  /** 数字**加它上面那摞八度点**的墨迹顶（倚音贴着它摆）。与 `entryTop` 同一个数。 */
   stackInkTop(opt: LayoutOptions): number {
-    const oct = this.chord.notes[0].jpOctave;
-    if (opt.jpGridLegacy) {
-      return oct > 0
-        ? opt.jpLegacyDotCenter(oct - 1, 0, true) - opt.jpDotRadius
-        : opt.jpLegacyDigitInkTop;
-    }
-    const bnd = opt.numberBound("1");
-    return oct <= 0 ? bnd.top : bnd.top - oct * opt.jpDotRung;
+    return this.entryTop(opt);
   }
-  /** Where a slur/tie sits: one `jpStackGap` above whatever the note already
-   * stacks — the same gap that separates the digit from its first octave dot,
-   * and one dot from the next. */
+  /** 弧 / 延音线落在哪：叠层顶再让一个 `jpStackGap`。 */
   slurRung(opt: LayoutOptions): number {
-    // 旧式栅格里 entryTop 自带了那 numberSize/8 的间隙，弧就落在它上面。
-    if (opt.jpGridLegacy) return this.entryTop(opt);
     return this.entryTop(opt) - opt.jpStackGap;
   }
-  /** Mirror of entryTop below the baseline (low octave dots clear the beams). */
+  /** 叠层的底：数字墨迹底 → 减时线 → 低音点（engrave/stack.ts）。 */
   entryBottom(options: LayoutOptions): number {
     const oct = this.chord.notes[0].jpOctave;
-    const bnd = options.numberBound("1");
-    const beamBottom = options.jpBeamBottom(this.chord.beams);
-    if (options.jpGridLegacy) {
-      // 旧式：低音点从基线按 numberSize 的比例往下排，只让开减时线的**层号**
-      // （不是墨迹底），且与数字墨迹底无关。
-      let y = this.chord.beams * options.jpBeamDist;
-      if (oct < 0) y += options.numberSize * ((-oct - 1) * 0.175 + 0.25) + options.numberSize / 4;
-      return y;
-    }
-    if (oct >= 0) return beamBottom;
-    const above = Math.max(bnd.bottom, beamBottom);
-    return above + options.jpBelowGap + (-oct - 1) * options.jpLowDotRung + 2 * options.jpDotRadius;
+    return stackBottom(options.numberBound("1").bottom, this.chord.beams, Math.max(0, -oct), options.stack);
   }
 
   /** 临时记号：画法与定位走公共那一份（engrave/accidental.ts，样子由 `accidentalStyle` 选）。
@@ -366,6 +326,7 @@ export class NoteEntry extends Entry {
       color: options.color,
       meta: options.smuflMeta,
       kind: options.accidentalStyle,
+      scale: options.accidentalScale,
     });
     ent.addAccidental(acc.item);
     // 给它让位要「软」的（`Entry.leadWant`）：升降号伸出数字笔位左边多少、再多留一道空，由 `Line.adjust`
@@ -375,36 +336,17 @@ export class NoteEntry extends Entry {
       ent.leadWant = Math.max(0, it.x - acc.box.left) + options.numberBound("1").height * ACCIDENTAL_CLEARANCE;
     }
   }
-  /**
-   * Octave dots stack outward from the digit on the shared vertical ladder
-   * (see LayoutOptions.jpStackGap / jpDotRung). Row `d` = 0 is the row
-   * nearest the digit, so `entryTop`/`slurTop` can simply continue the same
-   * ladder at row `oct`.
-   *
-   * NB musicpp does the opposite — it pins the *outermost* dot at a fixed y
-   * and fills back down toward the digit (render.cpp:906, `octY + i*dotDist`
-   * with octY independent of the dot count), which is not how jianpu is
-   * normally engraved.
-   */
+  /** 八度点：落点走公共那一份（engrave/stack.ts，墨迹到墨迹等距；低音点挂在减时线之下）。 */
   static octaveDot(ch: JChord, options: LayoutOptions, ent: NoteEntry): void {
     const oct = ch.notes[0].jpOctave;
     const numBound = options.numberBound("1");
+    const st = options.stack;
     for (let d = 0; d < Math.abs(oct); d++) {
       const r = options.jpDotRadius;
       const tf = new JpOctaveDot(r, options.color);
-      // 栅格是**墨迹到墨迹**量的。圆的局部包围盒就是墨迹本身（(0,0)–(2r,2r)），
-      // 所以直接按上/下缘落位——不必再像字形那样倒扣 `.` 自己的基线偏移。
-      if (options.jpGridLegacy) {
-        // 旧式落位（展开档）：阶梯以**基线**为准，见 `LayoutOptions.jpLegacyDotCenter`。
-        // 那里记的是**墨迹中心**，圆的局部原点在墨迹顶，所以退一个半径。
-        tf.y = options.jpLegacyDotCenter(d, ch.beams, oct >= 0) - r;
-      } else if (oct >= 0) {
-        const inkBottom = numBound.top - options.jpStackGap - d * options.jpDotRung;
-        tf.y = inkBottom - 2 * r;
-      } else {
-        const above = Math.max(numBound.bottom, options.jpBeamBottom(ch.beams));
-        tf.y = above + options.jpBelowGap + d * options.jpLowDotRung;
-      }
+      // 圆的局部包围盒就是墨迹本身（(0,0)–(2r,2r)），圆心往上退一个半径就是 y
+      const cy = oct >= 0 ? highDotY(numBound.top, d, st) : lowDotY(numBound.bottom, ch.beams, d, st);
+      tf.y = cy - r;
       ent.group.add(tf);
       ent.octaveDot.push(tf);
     }
@@ -472,7 +414,8 @@ export class NoteEntry extends Entry {
       ...(GRACE_ALTER[g.jpAlter] ? { alter: GRACE_ALTER[g.jpAlter]! } : {}),
     }));
     const probe = graceGeometry(notes, gm, 0, 0, -1, options.numberFont.size, 0);
-    const centerY = ent.stackInkTop(options) - graceBottom(probe, gm);
+    // 整块倚音的墨迹底离主音那一摞的顶**一道空**（叠层的空，与原样文档、混排同一条规则）
+    const centerY = ent.stackInkTop(options) - options.stack.gap - graceBottom(probe, gm);
     const geom = graceGeometry(notes, gm, 0, 0, -1, options.numberFont.size, centerY);
     const lead = graceAdvance(notes, gm);
     // 主音符右移，给倚音腾地方；游标也要跟着推（不然倚音会压上一个音符）
@@ -604,23 +547,15 @@ export class NoteEntry extends Entry {
     const font = opt.noteFont;
     const adv = font.measureText("·");
     const r = opt.jpAugDotRadius;
-    // 数字本身的 advance。**不能用 `num.width`**——此刻 `update()` 还没跑过，它还是 0。
-    const x0 = num.measureText(0, num.text.length);
-    // **横向落在「数字墨迹右缘 → 条目右缘」的正中**（用户口径：附点要与音符居中对齐）。
-    // 照 `·` 字形自己的位置摆不行：数字的 advance 比墨迹宽得多，宽出多少还因数字而异
-    // （Times 28pt：`1` advance 11.2 而墨迹只到 8.2，`5` advance 16.8、墨迹到 15.4），
-    // 于是 `1.` 的点比 `5.` 的点离数字远出 1.6pt，一眼看得出来。
+    // 落点走公共那一份（engrave/augdot.ts）：圆心与数字墨迹中心等高；第一个点离数字墨迹右缘一道空
+    //（叠层那道空），点与点之间也是一道空。占位照旧按 `·` 的 advance 留（`augDotAdvance`）。
     const last = num.text[num.text.length - 1] ?? "0";
-    const nb = font.charBound(last);
-    const inkRight = num.measureText(0, num.text.length - 1) + nb.right;
-    // **纵向：圆心与数字墨迹的中心等高**（用户口径）。照 `·` 字形自己的墨迹中心摆也差不多，
-    // 但那是「跟着标点走」，数字一换字体就对不齐了——直接量数字。
-    const cy = (nb.top + nb.bottom) / 2;
-    const runW = adv * (dots - 1) + 2 * r;
-    const start = inkRight + (x0 + adv * dots - inkRight - runW) / 2;
+    const ink = font.charBound(last).offset(num.measureText(0, num.text.length - 1), 0);
+    const gap = opt.stack.gap;
     for (let d = 0; d < dots; d++) {
+      const { cx, cy } = augDotCenter(ink, d, r, gap);
       const dot = new JpOctaveDot(r, opt.color);
-      dot.x = start + adv * d;
+      dot.x = cx - r;
       dot.y = cy - r;
       dot.aug = { num, index: d };
       dot.classes.add("aug-dot"); // 可视化编辑单独点选附点（`ScorePainter.partEls`）
@@ -796,9 +731,8 @@ export class BeamLine extends GraphicLine {
     this.p0 = l.entryItem()!.pos(grp);
     this.p1 = r.entryItem()!.pos(grp);
     this.p1 = this.p1.offset(r.numberPos, 0);
-    // `lev` is 1-based here (musicpp's is 0-based), so the first beam lands on
-    // jpBeamTop and each further level steps down by jpBeamDist.
-    const y = opt.jpBeamTop + opt.jpBeamDist * (lev - 1);
+    // `lev` 从 1 起；落点走公共那一份（engrave/stack.ts，墨迹到墨迹等距）
+    const y = beamY(opt.numberBound("1").bottom, lev, opt.stack);
     this.p0 = new Point(this.p0.x, y);
     this.p1 = new Point(this.p1.x, y);
     this.strokeWidth = opt.jpBeamWidth;

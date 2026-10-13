@@ -46,9 +46,9 @@ export const ROLE_FONTS: Partial<Record<StyleRole, { layout?: string; mixed?: st
 export const JIANPU_KEYS: Record<string, KeyDef> = {
   "note-bold": { kind: "bool", layout: "noteBold", note: "混排的简谱数字不单独加粗" },
   "beam-width": { kind: "len", layout: "jpBeamWidth", mixed: "lineWidths.jpBeam", original: "note.beamWidth" },
-  "beam-top": { kind: "len", layout: "jpBeamTop", book: "metrics.divLineGapEm" },
-  "beam-dist": { kind: "len", layout: "jpBeamDist", mixed: "beamDistJP", book: "metrics.divLineStepEm" },
-  "octave-dot-dist": { kind: "len", layout: "jpStackGap", mixed: "octaveDotDist", book: "metrics.stackGapEm" },
+  // 数字上下那一摞（八度点、减时线、低音点）墨迹到墨迹的空 ÷ 数字墨迹高（engrave/stack.ts）
+  "stack-gap": { kind: "num", layout: "stackGap", mixed: "stackGap", book: "metrics.stackGap", original: "look.stackGap" },
+  "slur-gap": { kind: "len", layout: "jpStackGap", book: "metrics.stackGapEm", note: "弧离叠层顶的空，混排与原样文档各按自己的弧算" },
   "system-gap": { kind: "len", layout: "maxLineDist", book: "metrics.systemGapEm", original: "spacing.systemGap" },
   "note-step": { kind: "len", book: "metrics.noteStepEm", note: "音符步距只有成书断句用" },
   "lyric-gap": { kind: "len", layout: "lyricGap", book: "metrics.lyricGapEm", original: "lyricSpacing.lyricGap" },
@@ -59,6 +59,8 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "accidental-side": { kind: "word", layout: "accidentalSide", mixed: "accidentalSide", book: "metrics.accidentalSide", original: "look.accidentalSide" },
   // 临时记号的样子：csym（照混排）/ classic（原先简谱引擎的，成书缺省）
   "accidental-style": { kind: "word", layout: "accidentalStyle", mixed: "accidentalStyle", book: "metrics.accidentalStyle", original: "look.accidentalStyle" },
+  // csym 临时记号的大小倍数（1 = 照混排）
+  "accidental-scale": { kind: "num", layout: "accidentalScale", mixed: "accidentalScale", original: "look.accidentalScale", note: "成书照原书用 classic，不读这个" },
   "bracket-width": { kind: "len", layout: "bracketWidth", book: "metrics.bracketWidth" },
   "bracket-foot": { kind: "len", layout: "bracketFoot", book: "metrics.bracketFootEm" },
   "tuplet-style": { kind: "word", layout: "tupletStyle", note: "取 bracket（括线）/ arc（两段弧）；成书与混排不支持" },
@@ -75,12 +77,6 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "verse-numbers": { kind: "word", layout: "verseNumbers", book: "layout.verseNumbers" },
   "max-horizontal-scale": { kind: "num", layout: "maxHorizontalScale", book: "layout.maxHorizontalScale" },
   "grace-scale": { kind: "num", mixed: "jpGraceScale", note: "纯简谱的倚音缩放由排版器自算" },
-  // 以下几个笔位在纯简谱那一路是算出来的（`layout/options.ts` 的 getter），只有混排给常量
-  "octave-up-y": { kind: "len", mixed: "jpOctaveUpY", note: "纯简谱的八度点笔位由排版器自算" },
-  "octave-down-dy": { kind: "len", mixed: "jpOctaveDownDy", note: "同上" },
-  "beam-top-y": { kind: "len", mixed: "jpBeamTopY", note: "纯简谱的减时线基准由排版器自算" },
-  "dot-dx": { kind: "len", mixed: "jpDotDx", note: "纯简谱的附点笔位由排版器自算" },
-  "dot-dy": { kind: "len", mixed: "jpDotDy", note: "同上" },
   "top-dy": { kind: "len", mixed: "jpTopDy", note: "只有混排的简谱层要整体上提" },
   "show-key-change": { kind: "bool", mixed: "showKeyChangeJp", note: "纯简谱一定画调号" },
   "key-uses-full-font": { kind: "bool", mixed: "jpKeyJianpuFont", note: "纯简谱没有缩小的简谱层" },

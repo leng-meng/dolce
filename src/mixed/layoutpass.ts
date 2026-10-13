@@ -11,6 +11,7 @@ import {
   fEq,
   LCR,
   ChordLayout,
+  LyricLayout,
   StaffLayout,
   MPage,
   Notation,
@@ -363,11 +364,57 @@ function autoPlaceNotes(score: StaffLayout): void {
   }
 }
 
-/** 歌词 y：逐 system 取该行符头/朝下符干/下方记号/下方连音数字/下方 slur-tie 的最低点，各 verse 行整齐地排在它下面；
- *  离谱表底线至少 `AUTO_LYRIC_STAFF_GAP`。
+/** 歌词 y：逐 system 取该行往下伸的最低点（`systemLowest`），各 verse 行整齐地排在它下面；
+ *  离谱表底线至少 `AUTO_LYRIC_STAFF_GAP`。 */
+function autoPlaceLyricsY(score: StaffLayout): void {
+  const font = score.defaults.lyricFont;
+  const ascent = -font.metrics.ascent;
+  const row = Math.max(AUTO_LYRIC_ROW, font.size * 1.1);
+  for (const sys of score.systems) {
+    const base = Math.max(systemLowest(score, sys) + AUTO_LYRIC_GAP, 40 + AUTO_LYRIC_STAFF_GAP) + ascent;
+    for (const lrc of systemLyrics(score, sys)) {
+      const verse = Math.max(0, (parseInt(lrc.num, 10) || 1) - 1);
+      lrc.y = -(base + verse * row);
+    }
+  }
+}
+
+/**
+ * 带版面坐标的谱：歌词照谱里给的 y 排，但**只许往下让、不许往上提**——某一行里音符低（加线下的音、朝下的符干、
+ * 下方的弧）压到首行歌词字顶时，整行歌词一起往下挪到让开为止，净空与自动排版同一个（`AUTO_LYRIC_GAP`）。
+ * 出版软件的坐标是按它自己的字体与字号定的，换成本工程的歌词字体后常常贴到音符上（470《出到营外》、260《感恩的泪》）。
+ */
+function clearLyricsBelowNotes(score: StaffLayout): void {
+  const ascent = -score.defaults.lyricFont.metrics.ascent;
+  for (const sys of score.systems) {
+    const lyrics = systemLyrics(score, sys);
+    if (lyrics.length === 0) continue;
+    // 首行歌词字顶（cy 向下为正；lrc.y 是负的，越负越往下）
+    let top = Infinity;
+    for (const lrc of lyrics) top = Math.min(top, -lrc.y - ascent);
+    const need = systemLowest(score, sys) + AUTO_LYRIC_GAP;
+    if (top >= need) continue;
+    const dy = need - top;
+    for (const lrc of lyrics) lrc.y -= dy;
+  }
+}
+
+/** 这一行第一谱表的歌词。 */
+function systemLyrics(score: StaffLayout, sys: Sys): LyricLayout[] {
+  const out: LyricLayout[] = [];
+  for (const mif of sys.measures) {
+    for (const part of score.parts) {
+      const md = part.measures[mif.index];
+      if (md) out.push(...md.lyrics);
+    }
+  }
+  return out;
+}
+
+/** 这一行第一谱表往下伸到哪（cy 向下为正，谱表底线 = 40）：符头、朝下符干、下方记号、下方连音数字、下方 slur/tie。
  *  弧取画出来的真实曲线底（`slurEnds`/`tiedEnds` + `arcExtent`，与绘制同一份几何），跨行的弧按本行那一截。
  *  要在 `autoPlaceTuplets` 之后：连音数字的上下在那里才定。 */
-function autoPlaceLyricsY(score: StaffLayout): void {
+function systemLowest(score: StaffLayout, sys: Sys): number {
   const four = new Fraction(4);
   const eng = score.options;
   const chordLow = (ch: ChordLayout): number => {
@@ -377,51 +424,36 @@ function autoPlaceLyricsY(score: StaffLayout): void {
     if (ch.hasNotation(false)) low += 20;
     return low;
   };
-  const font = score.defaults.lyricFont;
-  const ascent = -font.metrics.ascent;
-  const row = Math.max(AUTO_LYRIC_ROW, font.size * 1.1);
-  for (const sys of score.systems) {
-    let maxDown = 40; // 谱表底线（cy 向下为正）
-    for (const mif of sys.measures) {
-      for (const part of score.parts) {
-        const md = part.measures[mif.index];
-        if (!md) continue;
-        for (const ch of md.chords) {
-          if (ch.grace || ch.rest || ch.notes[0]?.staff !== 0) continue;
-          maxDown = Math.max(maxDown, chordLow(ch));
-        }
-      }
-    }
+  let maxDown = 40; // 谱表底线（cy 向下为正）
+  for (const mif of sys.measures) {
     for (const part of score.parts) {
-      // 混排里 slur/tie 画在简谱层上方；这时候谱表记法还没定（formatMixedScore 在后头），按五线谱的画法量，
-      // 画在下方的才算数
-      const arcs = [
-        ...part.slurs.filter((sl) => sl.startNote?.staff === 0).map((sl) => slurEnds(sys, eng, sl, Notation.Normal)),
-        ...part.tied.filter((t) => t.startNote?.staff === 0).map((t) => tiedEnds(sys, eng, t, Notation.Normal)),
-      ];
-      for (const e of arcs) if (e && !e.above) maxDown = Math.max(maxDown, arcExtent(e)[1] + 2);
-      const fsScale = eng.musicFont.size / 40;
-      for (const t of part.tuplets) {
-        if (t.above || !t.startNote || t.startNote.staff !== 0) continue;
-        if (!sys.contains(t.startTick) || !sys.contains(t.endTick)) continue;
-        const [ly, ry] = t.staffEnds();
-        const g0 = Tuplet.makeNumber(t.timeModification.denominator)[0] ?? "";
-        const numH = (smuflTop(eng.meta, g0) - smuflBottom(eng.meta, g0)) * fsScale;
-        maxDown = Math.max(maxDown, (ly + ry) / 2 + numH / 2 + 2);
-      }
-    }
-    const base = Math.max(maxDown + AUTO_LYRIC_GAP, 40 + AUTO_LYRIC_STAFF_GAP) + ascent;
-    for (const mif of sys.measures) {
-      for (const part of score.parts) {
-        const md = part.measures[mif.index];
-        if (!md) continue;
-        for (const lrc of md.lyrics) {
-          const verse = Math.max(0, (parseInt(lrc.num, 10) || 1) - 1);
-          lrc.y = -(base + verse * row);
-        }
+      const md = part.measures[mif.index];
+      if (!md) continue;
+      for (const ch of md.chords) {
+        if (ch.grace || ch.rest || ch.notes[0]?.staff !== 0) continue;
+        maxDown = Math.max(maxDown, chordLow(ch));
       }
     }
   }
+  for (const part of score.parts) {
+    // 混排里 slur/tie 画在简谱层上方；这时候谱表记法还没定（formatMixedScore 在后头），按五线谱的画法量，
+    // 画在下方的才算数
+    const arcs = [
+      ...part.slurs.filter((sl) => sl.startNote?.staff === 0).map((sl) => slurEnds(sys, eng, sl, Notation.Normal)),
+      ...part.tied.filter((t) => t.startNote?.staff === 0).map((t) => tiedEnds(sys, eng, t, Notation.Normal)),
+    ];
+    for (const e of arcs) if (e && !e.above) maxDown = Math.max(maxDown, arcExtent(e)[1] + 2);
+    const fsScale = eng.musicFont.size / 40;
+    for (const t of part.tuplets) {
+      if (t.above || !t.startNote || t.startNote.staff !== 0) continue;
+      if (!sys.contains(t.startTick) || !sys.contains(t.endTick)) continue;
+      const [ly, ry] = t.staffEnds();
+      const g0 = Tuplet.makeNumber(t.timeModification.denominator)[0] ?? "";
+      const numH = (smuflTop(eng.meta, g0) - smuflBottom(eng.meta, g0)) * fsScale;
+      maxDown = Math.max(maxDown, (ly + ry) / 2 + numH / 2 + 2);
+    }
+  }
+  return maxDown;
 }
 
 /** 多谱表的谱（合唱 SATB、钢琴）：上一谱表往下伸的（歌词、低音、朝下符干）与本谱表往上伸的（高音、朝上符干）
@@ -904,6 +936,7 @@ export function finishMixedScore(score: StaffLayout, input: LayoutInput, partGro
   if (autoLayout) autoPlaceNotes(score);
   if (autoLayout) autoPlaceTuplets(score);
   if (autoLayout) autoPlaceLyricsY(score);
+  else clearLyricsBelowNotes(score);
   if (autoLayout) autoStaffDistances(score);
   updateEntPos(score);
   updateDataXPos(score);

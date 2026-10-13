@@ -140,11 +140,26 @@ export function drawNotesNormal(
     if (ch.beams.length === 0) {
       const flagCode = ch.tailSym(ch.stemUp);
       if (flagCode) {
-        const scale = ch.cue ? eng.cueSize : 1;
+        // 符尾与音符头同一个缩放（倚音也是小号，原先只认 cue，倚音的符尾是整号的、垂过音符头）
+        const scale = ch.cue || ch.grace || ch.notes.some((n) => n.size === 1) ? eng.cueSize : 1;
+        // 按 SMuFL 锚点接到符干末端（`stemUpNW` / `stemDownSW`），不是拿字形原点硬对
+        const anc = meta.getAnchor(flagCode);
+        const a = (ch.stemUp ? anc?.stemUpNW : anc?.stemDownSW) ?? [0, 0];
+        const sp = (fs / 4) * scale;
+        const fx = sx - a[0] * sp;
+        const fy = ty + a[1] * sp;
         if (scale !== 1) {
-          addSmuflScaled(chordGrp(), flagCode, sx, ty, fs, scale, scale);
+          addSmuflScaled(chordGrp(), flagCode, fx, fy, fs, scale, scale);
         } else {
-          addSmufl(chordGrp(), flagCode, sx, ty, fs);
+          addSmufl(chordGrp(), flagCode, fx, fy, fs);
+        }
+        // 短倚音（`<grace slash="yes">`）：符尾上那道斜线，两端照 SMuFL 锚点 graceNoteSlashSW/NE（向上）、NW/SE（向下）
+        if (ch.src.grace?.slash) {
+          const p0 = ch.stemUp ? anc?.graceNoteSlashSW : anc?.graceNoteSlashNW;
+          const p1 = ch.stemUp ? anc?.graceNoteSlashNE : anc?.graceNoteSlashSE;
+          if (p0 && p1) {
+            addLine(chordGrp(), fx + p0[0] * sp, fy - p0[1] * sp, fx + p1[0] * sp, fy - p1[1] * sp, eng.lineWidths.stem);
+          }
         }
       }
     }

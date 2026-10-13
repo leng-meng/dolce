@@ -188,6 +188,14 @@ export interface GlyphBBox {
 }
 
 export interface GlyphAnchor {
+  /** 符尾接符干的那一点（向上 / 向下的符尾）。 */
+  stemUpNW?: [number, number];
+  stemDownSW?: [number, number];
+  /** 短倚音斜线的两端（向上的符尾 SW→NE、向下的 NW→SE）。 */
+  graceNoteSlashSW?: [number, number];
+  graceNoteSlashNE?: [number, number];
+  graceNoteSlashNW?: [number, number];
+  graceNoteSlashSE?: [number, number];
   cutOutSE?: [number, number];
   cutOutNW?: [number, number];
   cutOutNE?: [number, number];

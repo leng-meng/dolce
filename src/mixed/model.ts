@@ -13,6 +13,8 @@ import { SlurTieBase, type SlurStyle } from "../layout/pageitem";
 import { MIXED_PUNCT, type CompressMode } from "../common/cjkpunct";
 import type { HarmonySeg } from "../engrave/chord";
 import type { AccidentalSide, AccidentalStyleKind } from "../engrave/spacing";
+import { STACK_GAP_DEFAULT } from "../engrave/stack";
+import { graceBlockTop } from "./jprow";
 import { MetaData, GlyphCodes } from "../smufl/smufl";
 import type { Chord as DocChord, Direction as DocDirection, Harmony as DocHarmony, Lyric as DocLyric, Mark as DocMark, Note as DocNote, Song } from "../model/doc";
 import { beamCount } from "../model/jianpu";
@@ -2034,6 +2036,9 @@ export class Tuplet extends SpanOverNotes {
   }
 }
 
+/** 倚音墨迹顶到其上和弦基线的净空（tenths）。 */
+const MIXED_GRACE_CHORD_GAP = 5;
+
 /** 混排里房号在简谱层之上占的高度（tenths）：竖脚 20 + 离简谱层 16 + 横线上方余量 4。 */
 export const MIXED_ENDING_BAND = 40;
 
@@ -2592,6 +2597,15 @@ export class SysStaff {
         else if (tiedEnd) yy += offset;
         if (yy > dy) dy = yy;
       }
+      // 倚音整块抬在主音之上（`jprow.ts::graceRow`），这一小节有和弦时和弦行要让开它的墨迹顶
+      //（和弦基线 = 简谱层原点之上 dy + 3，见 placeAboveStaff）。260《感恩的泪》的倚音 6 原先顶着 Bm
+      if (mixed && md.harmonies.length > 0) {
+        for (const ch of md.chords) {
+          if (!ch.grace || ch.rest) continue;
+          const top = graceBlockTop(eng, md, ch);
+          dy = Math.max(dy, -top - 3 + MIXED_GRACE_CHORD_GAP);
+        }
+      }
     }
 
     let yval = this.minY - eng.mixStaffDist - eng.mixStaffHeight;
@@ -2965,8 +2979,6 @@ export class MixedOptions {
   // Engraver（model.hpp:1049）常量原样照搬
   mixStaffHeight = 30;
   mixStaffDist = 5;
-  octaveDotDist = 6;
-  beamDistJP = 5;
   harmonyYPos = -60;
 
   hideBarNumber = false; // 对齐 musicpp model.hpp:1062（默认显示小节号）
@@ -3007,6 +3019,8 @@ export class MixedOptions {
   accidentalSide: AccidentalSide | undefined = undefined;
   /** 简谱层临时记号的样子（`engrave/spacing.ts::AccidentalStyleKind`）。样式键 `accidental-style`。 */
   accidentalStyle: AccidentalStyleKind = "csym";
+  /** `csym` 临时记号的大小倍数。样式键 `accidental-scale`。混排缺省小一号（用户口径：原先那个比例压过数字）。 */
+  accidentalScale = 0.75;
   /** 谱里没写 `<page-layout>` 时用的纸（pt，编辑器设置里那张）；`heightPt` 为 null 是长图（不分页）。
    *  不给就用 `MixedDefaults`（A4）。写了 `<page-layout>` 的谱（歌本、第三方）照用自己的，
    *  除非 `override`（用户在设置里明确换了纸/方向/边距）：那时连谱里的版面坐标一起不用，按新纸自动铺排。
@@ -3020,19 +3034,9 @@ export class MixedOptions {
   staffSizeMm: number | null = null;
   lyricPt: number | null = null;
   jpTopDy = 0;
-  // ── 简谱层附件相对数字的位置。缺省值即原排版程序的常量
-  //    （render.cpp::drawNotesJianPu 875-947、BeamLevelData::drawJianPu:159），单位 tenths；
-  //    `@staff` 里按 sp 写（1sp = 10 tenths，见 style/staff.ts）。
-  /** 高音点首点基线（render.cpp 的 `5-2`），再减 `jpTopDy` */
-  jpOctaveUpY = 3;
-  /** 低音点首点基线 = `mixStaffHeight + beamDistJP × 减时线层数` 再加这个（render.cpp 的 `-2`） */
-  jpOctaveDownDy = -2;
-  /** 第一层减时线基准 y，再按 `(40 − mixStaffHeight) × 0.8` 上提（render.cpp 的 `35 - diff*0.8`） */
-  jpBeamTopY = 35;
-  /** 附点笔位 = 数字左缘 + `(数字 advance/2 + 这个) × 0.75`（render.cpp 的 `width/2+10`，mix 再乘 0.75） */
-  jpDotDx = 10;
-  /** 附点基线 = `字号 × 0.75` 再加这个 */
-  jpDotDy = 0;
+  // ── 简谱层附件相对数字的位置。八度点、减时线走公共那一份（engrave/stack.ts，墨迹到墨迹等距）：
+  /** 叠层的空 ÷ 数字墨迹高。样式键 `stack-gap`。 */
+  stackGap = STACK_GAP_DEFAULT;
   jpGraceScale = 0.6;
   cueSize = 0.8;
 
@@ -3299,6 +3303,9 @@ export function slurTiedPosForJp(
   return [pl, pr];
 }
 
+/** 简谱层里 slur 罩着延音线时，两条弧之间（延音线弧顶 → slur 端点）留的空（tenths）。 */
+const JP_ARC_NEST_GAP = 2.5;
+
 // ---------------- slur / tie 画在哪（绘制与避让共用） ----------------
 
 /** 一条弧在本系统里的两端（系统内坐标，y 相对第一谱表顶线、向下为正）与朝向。 */
@@ -3431,6 +3438,19 @@ export function slurEnds(
     const [pl, pr] = slurTiedPosForJp(eng, chl, chr, true);
     plx = pl.x; ply = pl.y;
     prx = pr.x; pry = pr.y;
+    // 罩着延音线的 slur（同一个音起或止，或整条在里面）：两端整体抬到延音线**画出来的**弧顶之上一道空。
+    // 只抬固定的 5 不够——短延音线弧陡，两条弧在起点附近还是贴在一起（260《感恩的泪》`2⌒2 3 2`）
+    let tieTop = Infinity;
+    for (const t of chl.measure.part.tied) {
+      if (!t.startNote || fLt(t.startTick, slur.startTick) || fGt(t.endTick, slur.endTick)) continue;
+      const te = tiedEnds(sys, eng, t, Notation.JianPu);
+      if (te) tieTop = Math.min(tieTop, arcExtent(te)[0]);
+    }
+    const need = tieTop - JP_ARC_NEST_GAP;
+    if (ply > need) {
+      pry -= ply - need;
+      ply = need;
+    }
   } else {
     const [pl, pr] = slurTiedPos(eng, chl, chr, above);
     plx = pl.x; ply = pl.y;

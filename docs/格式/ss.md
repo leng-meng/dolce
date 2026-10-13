@@ -64,7 +64,7 @@
 混排里的那层简谱也归 `@jianpu`——写样式表不必知道内部是哪个排版器在跑。模式差异用 `@media (mode: …)` 限定。
 
 ```css
-@jianpu { beam-width: 1.5; octave-dot-dist: 0.6sp; }
+@jianpu { beam-width: 1.5; stack-gap: 0.2; }
 @staff  { staff-height: 30; stem: 1; beam: 5; barline: 1.5; }
 @media (mode: mixed) { @jianpu { legacy-time-sig: true; show-key-change: false; } }
 ```
@@ -72,13 +72,13 @@
 - 键名是 **kebab-case 逻辑键**，全表（以及各键在两个排版器上落到哪个字段）见 `src/style/keys.ts`。
   线宽是一级键（`stem` `beam` `leger` `barline` `final-barline` `staff-line`），只给宽度，颜色随 `@page { ink }`。
 - **块里没有字体**：字体写在角色上（§3）。
-- 认不出的键解析期报 `行:列`；某个模式不支持的键（如纯简谱下的 `beam-top-y`，那几处笔位由排版器自算）排版时告警忽略。
+- 认不出的键解析期报 `行:列`；某个模式不支持的键（如纯简谱下的 `grace-scale`，倚音缩放由排版器自算）排版时告警忽略。
 - 长度：`@staff` 与混排下的 `@jianpu` 裸数字是 tenths，带单位只收 `em`（= `smufl` 字号，出厂 40 tenths）/ `sp`（= 10 tenths）；
   纯简谱下 `em` = 音符字号，`sp` = 名义谱高 / 4。
 - 块上还可写 `preset`（`@jianpu { preset: pptx }`、`@staff { preset: musicpp }`）。
 - **成书**也读 `@jianpu`（`keys.ts` 的 `book` 一列，落到 `BookStyle.metrics` / `layout`）：间距类写 `em`
   （基准是音符字号；`lyric-gap` `slur-thickness` `barline` `final-barline` 按歌词字号），线宽类（`bracket-width`、
-  `repeat-dot-diameter`）写裸数 pt。例：`@jianpu { system-gap: 0.8575em; beam-top: 0.1393em; verse-numbers: auto; }`。
+  `repeat-dot-diameter`）写裸数 pt。例：`@jianpu { system-gap: 0.8575em; slur-gap: 0.154em; verse-numbers: auto; }`。
   数值原样存进字段、不在读样式表时乘字号，所以重排结果逐位不变。
 - **原样文档布局**（文本谱、MusicXML、多声部 123/ABC 的原样档）也读 `@jianpu`：`keys.ts` 的 `original` 一列，只给内置方言表用到的键配了
   （`beam-width` `lyric-gap` `lyric-stack` `system-gap`，及只有这一路有的 `voice-gap` `barline-height` `double-barline-gap`）。

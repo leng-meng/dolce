@@ -15,6 +15,7 @@ import type { HeaderFonts } from "../../style/header";
 import { SlurTieBase, type SlurStyle } from "../pageitem";
 import type { GraceMetrics, GraceNote } from "../../engrave/grace";
 import type { AccidentalSide, AccidentalStyleKind } from "../../engrave/spacing";
+import { STACK_GAP_DEFAULT, highDotY, lowDotY, type StackStyle } from "../../engrave/stack";
 import type { NoteElement } from "../../pu/ast";
 
 /**
@@ -54,14 +55,9 @@ export interface JianpuMetrics {
     beamedNoteStep: number;
     barlineSpace: number;
     augDotStep: number;
-    /** 同侧多个八度点之间的间距 */
-    octaveDotDist: number;
-    /** 附点圆心相对锚点的 x 偏移 */
-    dotDx: number;
     /** 附点与八度点**同样大小** */
     dotRadius: number;
-    /** 相邻两层减时线的间距、线宽，及左右各伸出锚点多少 */
-    beamDist: number;
+    /** 减时线线宽，及左右各伸出锚点多少（上下间距走叠层 `look.stackGap`） */
     beamWidth: number;
     beamHalfSpan: number;
     barlineHeight: number;
@@ -153,6 +149,10 @@ export interface JianpuMetrics {
     accidentalSide?: AccidentalSide;
     /** 临时记号的样子。样式键 `accidental-style`。 */
     accidentalStyle: AccidentalStyleKind;
+    /** `csym` 临时记号的大小倍数。样式键 `accidental-scale`。 */
+    accidentalScale: number;
+    /** 数字上下叠层（八度点、减时线）的空 ÷ 数字墨迹高（engrave/stack.ts）。样式键 `stack-gap`。 */
+    stackGap: number;
   };
   /** 字体族，键是角色名；`text` 是各类文字的底。页眉各项（设置面板「页眉」一组）不给 = `text`。 */
   font: {
@@ -172,11 +172,8 @@ export interface JianpuGrid extends JianpuMetrics {
   ink: {
     /** 数字「1」的**墨迹高**：纵向栅格（减时线、八度点、记号槽位）是贴着墨迹排的，拿它当内部单位。 */
     noteHeight: number;
-    /** 第一条减时线（rect 上缘）相对数字锚点的 y */
-    beamTopY: number;
-    /** 高音点 / 低音点中心相对数字锚点的 y（负为上） */
-    octaveUpY: number;
-    octaveDownY: number;
+    /** 数字上下那一摞的取尺（engrave/stack.ts），空已乘好墨迹高。 */
+    stack: StackStyle;
   };
 }
 
@@ -198,10 +195,7 @@ export const JIANPU_DEFAULTS: JianpuMetrics = {
     beamedNoteStep: 25,
     barlineSpace: 35,
     augDotStep: 12.5,
-    octaveDotDist: 5.5,
-    dotDx: 12.35,
     dotRadius: 2.2,
-    beamDist: 4.5,
     beamWidth: 2,
     beamHalfSpan: 6,
     barlineHeight: 29,
@@ -227,7 +221,7 @@ export const JIANPU_DEFAULTS: JianpuMetrics = {
     hairpinThickness: 1.3,
   },
   ratio: { graceScale: 0.5, cueScale: 0.72 },
-  look: { chordPlain: false, accidentalStyle: "csym" },
+  look: { chordPlain: false, accidentalStyle: "csym", accidentalScale: 1, stackGap: STACK_GAP_DEFAULT },
   size: {
     // 原版量到数字墨迹高 17.9；苹方粗体「1」墨迹占字号 0.714，折成字号 25.07，落整数
     note: 25,
@@ -267,33 +261,24 @@ function scaleGroup(g: Record<string, number | undefined>, k: number): void {
   for (const key of Object.keys(g)) if (g[key] !== undefined) g[key] = g[key]! * k;
 }
 
-/** 定稿：按数字字体实测的「墨迹高 ÷ 字号」算出数字墨迹高，再把减时线、八度点贴上去。
+/** 定稿：按数字字体实测的「墨迹高 ÷ 字号」算出数字墨迹高，再定数字上下那一摞的取尺。
  *  放在所有缩放（谱面 `FontSize:`、面板字号）之后做——那些只动字号，墨迹高跟着字号走。
- *
- * 数字墨迹 ↔ 第一条减时线、数字墨迹 ↔ 高/低音点，净距取**同一个值**：两条减时线的距离
- * （`noteMarkGap`，即减时线行距 `beamDist`）。用户口径：第一条减时线离音符太近，
- * 应与两条减时线的距离一样，八度点离音符也该是这个距离。故这三个 y 不单独落值，由它派生；
- * 低音点挂在减时线下时（`place.ts::noteInkBottom`）、延长记号离音符堆叠顶（painter）让的也是这一截。
- * 数字按墨迹竖直居中于基线画（墨迹底 = +noteHeight/2），减时线 rect 的上缘就是 beamTopY。 */
+ *  数字按墨迹竖直居中于基线画（墨迹顶 −noteHeight/2、底 +noteHeight/2），八度点与减时线的落点
+ *  走公共那一份（engrave/stack.ts：墨迹到墨迹等距，空 = `look.stackGap` × 墨迹高）。 */
 export function withDigitInk(m: JianpuMetrics, inkPerPt: number): JianpuGrid {
   const noteHeight = m.size.note * inkPerPt;
-  const gap = noteMarkGap(m);
-  const inkHalf = noteHeight / 2;
   return {
     ...cloneMetrics(m),
     ink: {
       noteHeight,
-      beamTopY: inkHalf + gap,
-      octaveUpY: -(inkHalf + gap + m.note.dotRadius),
-      octaveDownY: inkHalf + gap + m.note.dotRadius,
+      stack: { gap: m.look.stackGap * noteHeight, dotRadius: m.note.dotRadius, beamWidth: m.note.beamWidth },
     },
   };
 }
 
-// 数字墨迹底 → 第一条减时线**中心** = 两条减时线的中心距（beamDist）。用户两次复核：
-// 取两线净空（3.0）挨着粗体数字嫌近，取整个行距当净空（4.5）又嫌宽，中心对中心看着才一样。
-export function noteMarkGap(m: JianpuMetrics): number {
-  return m.note.beamDist - m.note.beamWidth / 2;
+/** 音符堆叠与挂在它上面的记号（延长记号等）之间让的空：就是叠层那道空。 */
+export function noteMarkGap(m: JianpuGrid): number {
+  return m.ink.stack.gap;
 }
 
 /** 版心宽度。 */
@@ -457,11 +442,12 @@ export function jianpuGraceMetrics(m: JianpuGrid): GraceMetrics {
   return {
     ink: m.ink.noteHeight,
     scale: m.ratio.graceScale,
-    octaveUpY: m.ink.octaveUpY,
-    octaveDownY: m.ink.octaveDownY,
-    octaveDotGap: m.note.octaveDotDist,
+    octaveUpY: highDotY(-m.ink.noteHeight / 2, 0, m.ink.stack),
+    octaveDownY: lowDotY(m.ink.noteHeight / 2, 0, 0, m.ink.stack),
+    octaveDotGap: m.ink.stack.gap + 2 * m.note.dotRadius,
     octaveDotRadius: m.note.dotRadius,
-    underlineGap: m.note.beamDist,
+    underlineGap: m.ink.stack.gap + m.note.beamWidth,
+    stackGap: m.look.stackGap,
   };
 }
 

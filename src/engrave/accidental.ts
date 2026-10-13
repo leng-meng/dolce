@@ -39,6 +39,8 @@ export interface AccidentalStyle {
   meta?: MetaData;
   /** 样子（样式键 `accidental-style`）。缺省 `csym`。 */
   kind?: AccidentalStyleKind;
+  /** `csym` 样子的大小 × 这个（样式键 `accidental-scale`，缺省 1 = 照混排）。 */
+  scale?: number;
 }
 
 /** 升降号挂在哪个数字上：数字的字、笔位与基线（调用方坐标），倚音那种整体缩小的给 `scale`。 */
@@ -86,7 +88,7 @@ export class AccidentalGlyph {
       const left = digit.x + d.left * sc;
       const bottom = digit.y + d.bottom * sc;
       const H = d.height * sc;
-      const font = style.music.makeWithSize(H * SIZE_PER_INK);
+      const font = style.music.makeWithSize(H * SIZE_PER_INK * (style.scale ?? 1));
       const glyph = GLYPH[kind];
       ink = musicInk(glyph, font, style.meta);
       t = musicText(glyph, font, style.color);
@@ -112,8 +114,8 @@ const INK_WIDTH: Record<AccidentalKind, number> = {
 
 /** 临时记号在数字墨迹左边占掉的宽（墨迹宽 + 与数字之间的空），横向排布给它让位用（`csym` 样子）。
  *  纯算术（不量字形），原样文档的定位（`place.ts`，不碰 DOM）也能调。 */
-export function accidentalLead(kind: AccidentalKind, digitInkHeight: number): number {
-  return (INK_WIDTH[kind] + GAP_PER_INK) * digitInkHeight;
+export function accidentalLead(kind: AccidentalKind, digitInkHeight: number, scale = 1): number {
+  return (INK_WIDTH[kind] * scale + GAP_PER_INK) * digitInkHeight;
 }
 
 /** 各字形墨迹高 ÷ 数字墨迹高（同上，csym 升降号约 1.4 个数字高）。 */
@@ -126,8 +128,8 @@ const INK_HEIGHT: Record<AccidentalKind, number> = {
 };
 
 /** 临时记号的墨迹顶高出数字墨迹顶多少（≥ 0）。弧、连音、记号要让开它；纯算术，不碰 DOM。 */
-export function accidentalRise(kind: AccidentalKind, digitInkHeight: number): number {
-  return Math.max(0, (BASE_ABOVE_INK_BOTTOM + INK_HEIGHT[kind] - 1) * digitInkHeight);
+export function accidentalRise(kind: AccidentalKind, digitInkHeight: number, scale = 1): number {
+  return Math.max(0, (BASE_ABOVE_INK_BOTTOM + INK_HEIGHT[kind] * scale - 1) * digitInkHeight);
 }
 
 /** 简谱记法里的升降号字符（`b` / `#` / `n`）→ 临时记号种类。 */

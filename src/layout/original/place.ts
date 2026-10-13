@@ -21,7 +21,8 @@ import type {
   VoiceGroup,
 } from "../../pu/ast";
 import { contentWidth, jianpuGraceMetrics, jianpuGraceNotes, jianpuSlurRise, type JianpuGrid } from "./metrics";
-import { graceAdvance } from "../../engrave/grace";
+import { graceAdvance, graceBottom, graceGeometry, type GraceGeom } from "../../engrave/grace";
+import { stackBottom, stackTop as stackTopOf } from "../../engrave/stack";
 import { ACCIDENTAL_CLEARANCE, accidentalLead, accidentalRise, type AccidentalKind } from "../../engrave/accidental";
 import { elementQuarters, takesLyric, tupletRatios } from "../../pu/ast";
 import { paginate, type SystemBlock } from "../../jianpu/vertical";
@@ -110,6 +111,8 @@ export interface PlacedVoice {
   layers: PlacedLayer[];
   /** 各段歌词的基线 y，与 voice.lyrics 平行 */
   lyricY: number[];
+  /** 和弦/注释那一槽的基线（相对音符基线，见 chordLane） */
+  chordY: number;
 }
 
 export interface PlacedGroup {
@@ -386,7 +389,7 @@ function layoutVoiceLine(
     // 变音记号写在数字前，得给它让出位置
     // 让出的宽 = 升降号墨迹宽 + 它与数字的空 + 与前一个音之间的空（engrave/accidental.ts，与画法、简谱引擎同一份比例）
     if (next?.kind === "note" && next.accidental !== undefined) {
-      advance += accidentalLead(next.accidental as AccidentalKind, m.ink.noteHeight) + m.ink.noteHeight * ACCIDENTAL_CLEARANCE;
+      advance += accidentalLead(next.accidental as AccidentalKind, m.ink.noteHeight, m.look.accidentalScale) + m.ink.noteHeight * ACCIDENTAL_CLEARANCE;
     }
     // 前倚音也排在数字左边，同样要让位——不让的话倚音会挤在前后两个音符正中间，
     // 看起来像挂在了左边那个音符上（原版给它让出的正是这么多）
@@ -556,15 +559,58 @@ function computeUnderlines(
   return out;
 }
 
-/** 和弦/注释那一行**墨迹顶**（相对音符基线，负为上）：基线在 annotationY，字往上长。 */
-function annotationTop(m: JianpuGrid): number {
-  return m.note.chordY - m.size.chord * 0.9;
+/** 和弦/注释那一行**墨迹顶**（相对音符基线，负为上）：基线在 `lane`（缺省 chordY），字往上长。 */
+function annotationTop(m: JianpuGrid, lane = m.note.chordY): number {
+  return lane - m.size.chord * 0.9;
 }
 
 /** 音符头顶那一槽的墨迹顶：和弦/注释一行，转调标签（`keyLabel`）与它们同在时叠到上一行。没有字返回 null */
-function noteTextTop(el: NoteElement, m: JianpuGrid): number | null {
+function noteTextTop(el: NoteElement, m: JianpuGrid, lane = m.note.chordY): number | null {
   const rows = (el.chord || el.annotation ? 1 : 0) + (el.keyLabel ? 1 : 0);
-  return rows === 0 ? null : annotationTop(m) - (rows - 1) * m.size.chord * 1.2;
+  return rows === 0 ? null : annotationTop(m, lane) - (rows - 1) * m.size.chord * 1.2;
+}
+
+/**
+ * 一组倚音画在哪（相对锚点 x、基线 baseline）。**画（compose.ts::paintGrace）与让位共用这一份**：
+ * 整块倚音（不含钩）的墨迹底离主音那一摞的顶一道空，与简谱引擎、混排同一条规则。
+ */
+export function graceLayout(note: NoteElement, side: "before" | "after", m: JianpuGrid, x: number, baseline: number): GraceGeom {
+  const list = side === "before" ? note.graceBefore : note.graceAfter;
+  const dir = side === "before" ? -1 : 1;
+  const gn = jianpuGraceNotes(list);
+  const gm = jianpuGraceMetrics(m);
+  const probe = graceGeometry(gn, gm, x, 0, dir, m.size.note, 0);
+  const centerY = baseline + stackTop(note, m) - m.ink.stack.gap - graceBottom(probe, gm);
+  return graceGeometry(gn, gm, x, baseline, dir, m.size.note, centerY);
+}
+
+/** 这个音符上倚音那几块的墨迹顶（相对基线，负为上）；没有倚音返回 null。 */
+export function graceTop(el: MusicElement, m: JianpuGrid): number | null {
+  if (el.kind !== "note" || (el.graceBefore.length === 0 && el.graceAfter.length === 0)) return null;
+  const gInk = m.ink.noteHeight * 0.5;
+  let top = Infinity;
+  for (const side of ["before", "after"] as const) {
+    const g = graceLayout(el, side, m, 0, 0);
+    for (const d of g.digits) top = Math.min(top, d.cy - gInk / 2);
+    for (const d of g.dots) top = Math.min(top, d.cy - d.r);
+    for (const a of g.accidentals) top = Math.min(top, a.inkCy - a.inkHeight / 2);
+  }
+  return Number.isFinite(top) ? top : null;
+}
+
+/**
+ * 这一行和弦/注释那一槽的基线（相对音符基线）。缺省是 `chordY`；行里有倚音时整行一起往上抬，
+ * 抬到倚音墨迹顶之上 0.3 个数字墨迹高——和弦是固定一槽（原版观感），倚音不让开它就压到字上（260《感恩的泪》）。
+ * 整行同抬，一行的和弦才仍在一条线上。
+ */
+export function chordLane(voice: ScoreLine, m: JianpuGrid): number {
+  let lane = m.note.chordY;
+  for (const el of voice.elements) {
+    const t = graceTop(el, m);
+    // 净空按文字算（和弦是字，叠层那道空对字太紧，看着还是挨着）
+    if (t !== null) lane = Math.min(lane, t - m.ink.noteHeight * 0.3);
+  }
+  return lane;
 }
 
 /**
@@ -572,18 +618,21 @@ function noteTextTop(el: NoteElement, m: JianpuGrid): number | null {
  * 临时伴奏），不预留就会压到上一组的歌词。
  */
 function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
-  let top = m.note.chordY; // 注释/和弦这一槽是常备的
+  // 注释/和弦这一槽是常备的（行里有倚音时整槽抬高，见 chordLane）
+  let top = Math.min(m.note.chordY, ...group.voices.map((v) => chordLane(v, m)));
   const consider = (v: number): void => {
     if (v < top) top = v;
   };
   for (const voice of group.voices) {
+    const lane = chordLane(voice, m);
     for (const mark of voice.marks) {
       const level = Math.max(1, mark.level);
       if (mark.type === "volta") consider(m.note.voltaY - (level - 1) * m.note.levelStep);
       else if (mark.type === "crescendo" || mark.type === "decrescendo") {
         consider(m.note.hairpinY - (level - 1) * m.note.levelStep - m.note.hairpinOpening / 2);
       } else {
-        consider(-m.ink.noteHeight / 2 - m.note.slurGap - (level - 1) * m.note.slurLevelStep - jianpuSlurRise(m));
+        const nest = isArcMark(mark) ? arcNestDepth(mark, voice.marks) * (jianpuSlurRise(m) + m.note.slurLevelStep / 2) : 0;
+        consider(-m.ink.noteHeight / 2 - m.note.slurGap - (level - 1) * m.note.slurLevelStep - jianpuSlurRise(m) - nest);
       }
     }
     for (const el of voice.elements) {
@@ -591,9 +640,11 @@ function groupHeadroom(group: VoiceGroup, m: JianpuGrid): number {
       // 和弦/注释画在 annotationY 那条**基线**上，字还要往上长一截——只留 annotationY
       // 的话，system 间距一收紧（gapGroup 按无和弦的底本量得）和弦就顶进上一组的低音点。
       // 再往上让一个数字高：只让到墨迹顶是「不打架」，两组之间还得看得出是两组。
-      const nt = el.kind === "note" ? noteTextTop(el, m) : null;
+      const nt = el.kind === "note" ? noteTextTop(el, m, lane) : null;
       if (nt !== null) consider(nt - m.ink.noteHeight);
-      if (el.kind === "sustain" && el.chord) consider(annotationTop(m) - m.ink.noteHeight);
+      if (el.kind === "sustain" && el.chord) consider(annotationTop(m, lane) - m.ink.noteHeight);
+      const gt = graceTop(el, m);
+      if (gt !== null) consider(gt);
       if (el.kind === "note" || el.kind === "sustain" || el.kind === "barline") {
         for (const orn of el.ornaments) {
           // 换气的 V 有自己的高度（照原版放在基线上方两个墨迹高），不走记号槽
@@ -625,13 +676,17 @@ function voiceHeadroom(voice: ScoreLine, m: JianpuGrid): number {
     } else {
       // 弧线现在贴着音符堆叠顶（见 placeMarks），头顶只需留这么高
       // （jianpuSlurRise 与 painter 实际画的弧同源，见 metrics.ts::jianpuSlurStyle）
-      consider(-m.ink.noteHeight / 2 - m.note.slurGap - (level - 1) * m.note.slurLevelStep - jianpuSlurRise(m));
+      const nest = isArcMark(mark) ? arcNestDepth(mark, voice.marks) * (jianpuSlurRise(m) + m.note.slurLevelStep / 2) : 0;
+      consider(-m.ink.noteHeight / 2 - m.note.slurGap - (level - 1) * m.note.slurLevelStep - jianpuSlurRise(m) - nest);
     }
   }
+  const lane = chordLane(voice, m);
   for (const el of voice.elements) {
-    const nt = el.kind === "note" ? noteTextTop(el, m) : null;
+    const nt = el.kind === "note" ? noteTextTop(el, m, lane) : null;
     if (nt !== null) consider(nt);
-    if (el.kind === "sustain" && el.chord) consider(annotationTop(m)); // 增时线上的和弦同样要留头顶
+    if (el.kind === "sustain" && el.chord) consider(annotationTop(m, lane)); // 增时线上的和弦同样要留头顶
+    const gt = graceTop(el, m);
+    if (gt !== null) consider(gt);
     if (el.kind === "note" || el.kind === "sustain" || el.kind === "barline") {
       for (const orn of el.ornaments) {
         if (orn.name === "hx") consider(-m.ink.noteHeight * 1.05);
@@ -651,28 +706,23 @@ export function stackTop(el: MusicElement | undefined, m: JianpuGrid): number {
   const inkTop = -m.ink.noteHeight / 2;
   if (el?.kind !== "note") return inkTop;
   // 临时记号比数字高出一截（engrave/accidental.ts），弧与连音要让开它
-  const accTop = el.accidental !== undefined ? inkTop - accidentalRise(el.accidental as AccidentalKind, m.ink.noteHeight) : inkTop;
+  const accTop = el.accidental !== undefined ? inkTop - accidentalRise(el.accidental as AccidentalKind, m.ink.noteHeight, m.look.accidentalScale) : inkTop;
   if (el.octave <= 0) return accTop;
-  return Math.min(accTop, m.ink.octaveUpY - (el.octave - 1) * m.note.octaveDotDist - m.note.dotRadius);
+  return Math.min(accTop, stackTopOf(-m.ink.noteHeight / 2, el.octave, m.ink.stack));
 }
 
 
 /**
  * 一个音符**最低的墨迹**（相对基线）：数字墨迹底、减时线最下一层、低音点，取最低的那个。
- * 低音点的落点与 `painter` 里画点用的是同一个公式（`.jpwabc` 的 entryBottom 规则），
- * 两处必须一致，否则歌词避让会按错的底算。
+ * 落点走公共那一份（engrave/stack.ts），与画点、简谱引擎的 entryBottom 同一套。
  */
 export function noteInkBottom(note: NoteElement, m: JianpuGrid): number {
-  const beams = Math.max(0, Math.round(Math.log2(note.duration / 4)));
-  const beamBottom =
-    beams > 0
-      ? m.ink.beamTopY + (beams - 1) * m.note.beamDist + m.note.beamWidth
-      : m.ink.noteHeight / 2;
-  if (note.octave >= 0) return Math.max(m.ink.noteHeight / 2, beamBottom);
-  // 减时线下缘到低音点让的净距 = 数字墨迹底到低音点的净距（见 metrics.ts::alignNoteMarks）
-  const dotGap = m.ink.octaveDownY - m.ink.noteHeight / 2;
-  const firstDot = Math.max(m.ink.octaveDownY, beamBottom + dotGap);
-  return firstDot + (-note.octave - 1) * m.note.octaveDotDist + m.note.dotRadius;
+  return stackBottom(m.ink.noteHeight / 2, noteBeams(note), Math.max(0, -note.octave), m.ink.stack);
+}
+
+/** 音符下面有几层减时线（按时值：八分 1、十六分 2……）。 */
+export function noteBeams(note: NoteElement): number {
+  return Math.max(0, Math.round(Math.log2(note.duration / 4)));
 }
 
 /**
@@ -783,7 +833,35 @@ function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid): Place
     if (a.dy !== undefined && b.dy !== undefined) placed.dy = a.dy;
     out.push(placed);
   }
+  // **弧套弧**（slur 罩着延音线、同一个音起的两条弧）：外面那条整条抬到里面那条弧顶之上一道空。
+  // 从短的排起，外层才看得到里层定下的高度（260《感恩的泪》`2⌒2 3 2` 两条弧原先同一个起点、贴在一起）
+  const arcs = out.filter((p) => p.y !== undefined && isArcMark(p.mark));
+  arcs.sort((p, q) => (p.mark.end - p.mark.start) - (q.mark.end - q.mark.start));
+  const rise = jianpuSlurRise(m);
+  for (const [i, outer] of arcs.entries()) {
+    for (const inner of arcs.slice(0, i)) {
+      if (!nests(inner.mark, outer.mark)) continue;
+      outer.y = Math.min(outer.y!, inner.y! - rise - m.note.slurLevelStep / 2);
+    }
+  }
   return out;
+}
+
+function isArcMark(mk: Mark): boolean {
+  return mk.type === "slur" || mk.type === "tuplet";
+}
+
+/** `inner` 整条落在 `outer` 的跨度里（不是同一条）。 */
+function nests(inner: Mark, outer: Mark): boolean {
+  return inner !== outer && inner.start >= outer.start && inner.end <= outer.end
+    && (inner.start !== outer.start || inner.end !== outer.end);
+}
+
+/** 这条弧外面套着几层（里面每多一层弧，它就得多抬一层）。 */
+function arcNestDepth(mk: Mark, marks: readonly Mark[]): number {
+  let depth = 0;
+  for (const o of marks) if (isArcMark(o) && nests(o, mk)) depth = Math.max(depth, arcNestDepth(o, marks) + 1);
+  return depth;
 }
 
 /** 内联层：`{bz}` 是上方小字号行，`{dsb}` 是与主旋律并排的一块（见 PlacedLayer）。 */
@@ -1035,6 +1113,7 @@ export function layoutSong(
           layers,
           marks,
           lyricY,
+          chordY: chordLane(voice, m),
         });
         // 下一声部：先让过本声部的歌词块，再按「有没有歌词」取不同的间距
         //（歌词字块的下缘比数字低，所以它之后要多让一点）

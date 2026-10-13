@@ -1147,12 +1147,6 @@ export class Line {
   private tiedTop(ent: NoteEntry, opt: LayoutOptions, left: boolean): number {
     const res = ent.slurRung(opt);
     const nt = ent.chord.notes[0];
-    // **旧式档（PPT）不在这里为三连音让位**：括线与弧同属上方带 layer 0，谁在下面
-    // 由跨度定（`Line.stackAbove`）。这里再预先抬半个 em，就抬了两回——158《一件礼物》
-    // 第二个三连音底下那条弧因此离基线 41pt（该是 27pt），括线跟着又被顶高一截
-    //（用户口径：「三连音在 slur 之上，不应该抬高 slur」）。
-    // 新式栅格照旧（成书那条路的观感不动）。
-    if (opt.jpGridLegacy) return res;
     const rung = opt.jpDotRung;
     if (left && nt.tupletBegin) return res - rung;
     if (!left && nt.tupletEnd) return res - rung;
@@ -1161,15 +1155,13 @@ export class Line {
   private slurTop(ent: NoteEntry, opt: LayoutOptions, left: boolean): number {
     let res = ent.slurRung(opt);
     const nt = ent.chord.notes[0];
-    const rung = opt.jpGridLegacy ? opt.numberSize / 8 : opt.jpDotRung;
+    const rung = opt.jpDotRung;
     if (left) {
       if (nt.tieStart) res -= rung;
     } else {
       if (nt.tieEnd) res -= rung;
     }
-    // 三连音括线不在这里避了（**两个栅格都是**）：它与弧同属上方带 layer 0，
-    // 谁在下面由跨度定（范围小的在下），见 Line.stackAbove。旧式档从前在这里
-    // 先退半个 em，与堆叠叠加就抬了两回，见 tiedTop 那儿的注释。
+    // 三连音括线不在这里避：它与弧同属上方带 layer 0，谁在下面由跨度定（范围小的在下），见 Line.stackAbove。
     return res;
   }
   private addSlur(opt: LayoutOptions): void {

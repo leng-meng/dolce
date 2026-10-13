@@ -45,8 +45,6 @@ export interface BookMetrics {
   bracketFootEm?: number;
 
   // —— 纵向栅格（减时线，见 docs/实现/简谱纵向栅格.md）——
-  divLineGapEm: number; // 音符墨迹下缘 → 第一条减时线（inventory 的 divLine）
-  divLineStepEm: number; // 相邻减时线间距
 
   // —— 反复 ——
   repeatDotDiam: number; // pt
@@ -90,9 +88,11 @@ export interface BookMetrics {
   barlineWidthEm: number; // × 歌词字号
   finalBarlineWidthEm: number; // × 歌词字号
 
-  /** 统一层距（em）：高音点上距 / 低音点下距 / 减时线首层距三者的均值，校准 LayoutOptions.jpStackGap。
-   *  三者差得多时 stats 报 ⚠（见 bookstyle 报告）。 */
+  /** 弧 / 上方带离叠层顶的空（em），原书量的（高音点上距 / 低音点下距 / 减时线首层距三者的均值）。
+   *  → LayoutOptions.jpStackGap。样式键 `slur-gap`。 */
   stackGapEm: number;
+  /** 叠层（八度点、减时线）的空 ÷ 数字墨迹高；不给 = 各引擎同一个缺省。样式键 `stack-gap`。 */
+  stackGap?: number;
 }
 
 export interface PageMargin {
@@ -307,8 +307,6 @@ export function defaultBookStyle(): BookStyle {
       lyricGapEm: 0.1,
       bracketWidth: 0,
       bracketFootEm: 0,
-      divLineGapEm: 0.17,
-      divLineStepEm: 0.17,
       repeatDotDiam: 1.6,
       chordToNoteEm: 1.3,
       chordPlain: true,
