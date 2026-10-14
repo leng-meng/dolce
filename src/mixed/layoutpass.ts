@@ -270,8 +270,8 @@ function tupletSpans(score: StaffLayout, mi: number): { s: Fraction; e: Fraction
 const AUTO_CROSS_VOICE_GAP = 12;
 
 /**
- * 连音段要多宽：段内 x 随时间线性走，每个音到**同一声部**下一个音（或段末）的距离要放得下它自己的槽宽
- * （时值 + 本声部挂在它上面的歌词），整段宽就是各声部按比例折算后的最大值。别的声部的字不算——
+ * 连音段要多宽：段内 x 随时间线性走，每个音到**同一声部**下一个音的距离要放得下它自己的槽宽、每个字到同一段下一个字
+ * 要放得下字宽，整段宽就是各行按比例折算后的最大值（下一件在段外的按时间比例分摊）。别的声部的字不算——
  * 它们排在各自的歌词行上，按拍位合并的字宽只会把组里某一截撑大。
  * `onsets` 是段内各拍位，后面多带一个段后的拍位（没有就到段末为止）；和弦符号与倚音按全体拍位相邻算。
  */
@@ -282,31 +282,43 @@ function tupletSpanWidth(
   const s = span.s.toFloat(), e = span.e.toFloat(), len = e - s;
   const inSpan = (t: number) => t >= s - 1e-9 && t < e - 1e-9;
   let w = 0;
-  const need = (a: number, b: number, width: number) => { if (b > a + 1e-9) w = Math.max(w, (width * len) / (Math.min(b, e) - a)); };
-  // 一行里相邻的两件东西：各声部的音（按时值）、各声部各段的歌词（按字宽）。拍位 → 这一拍要的宽
-  const rows = new Map<string, Map<number, number>>();
-  const put = (key: string, t: number, width: number) => {
+  /** 拍位 a 到 b 之间要 width 宽：b 在段外时只按段内那截时间的比例分摊（跨过组尾的长音不把整个槽宽压进这一段） */
+  const need = (a: number, b: number, width: number) => { if (b > a + 1e-9) w = Math.max(w, (width * len) / (b - a)); };
+  // 一行里相邻的两件东西：各声部的音（按时值）、各声部各段的歌词（按字宽）。拍位 → 这一拍要的宽与它的终点
+  const rows = new Map<string, Map<number, { width: number; end: number }>>();
+  const put = (key: string, t: number, width: number, end: number) => {
     if (!inSpan(t)) return;
-    const m = rows.get(key) ?? new Map<number, number>();
+    const m = rows.get(key) ?? new Map<number, { width: number; end: number }>();
     rows.set(key, m);
-    m.set(t, Math.max(m.get(t) ?? 0, width));
+    const cur = m.get(t);
+    m.set(t, { width: Math.max(cur?.width ?? 0, width), end: Math.max(cur?.end ?? 0, end) });
   };
   score.parts.forEach((part, pi) => {
     const md = part.measures[mi];
     if (!md) return;
+    const endOf = (ch: ChordLayout) => ch.offset.plus(ch.dur).toFloat();
     for (const ch of md.chords) {
-      if (!ch.grace) put(`n${pi}/${ch.src.staff}/${ch.voice}`, ch.offset.toFloat(), autoSlotWidth(ch.dur.toFloat()));
+      if (!ch.grace) put(`n${pi}/${ch.src.staff}/${ch.voice}`, ch.offset.toFloat(), autoSlotWidth(ch.dur.toFloat()), endOf(ch));
     }
-    for (const l of md.lyrics) if (!l.empty) put(`l${pi}/${l.num}`, l.offset.toFloat(), l.width + AUTO_LYRIC_SPACE);
+    for (const l of md.lyrics) if (!l.empty) put(`l${pi}/${l.num}`, l.offset.toFloat(), l.width + AUTO_LYRIC_SPACE, endOf(l.chord));
   });
-  for (const m of rows.values()) {
+  // 行内下一件也在本小节的就到它为止（段外的照样按比例），最后一件到它那个音的终点
+  const after = new Map<string, number>();
+  score.parts.forEach((part, pi) => {
+    const md = part.measures[mi];
+    if (!md) return;
+    const near = (key: string, t: number) => { if (t >= e - 1e-9) after.set(key, Math.min(after.get(key) ?? Infinity, t)); };
+    for (const ch of md.chords) if (!ch.grace) near(`n${pi}/${ch.src.staff}/${ch.voice}`, ch.offset.toFloat());
+    for (const l of md.lyrics) if (!l.empty) near(`l${pi}/${l.num}`, l.offset.toFloat());
+  });
+  for (const [key, m] of rows) {
     const ts = [...m.keys()].sort((a, b) => a - b);
-    ts.forEach((t, i) => need(t, ts[i + 1] ?? e, m.get(t)!));
+    ts.forEach((t, i) => need(t, ts[i + 1] ?? after.get(key) ?? m.get(t)!.end, m.get(t)!.width));
   }
   // 全体相邻拍位：不同声部的音不叠在一起，和弦符号、倚音的地方照留
   const ts = onsets.map((o) => o.toFloat());
   ts.forEach((t, i) => {
-    if (inSpan(t)) need(t, ts[i + 1] ?? e, Math.max(AUTO_CROSS_VOICE_GAP, harmAt.get(onsets[i]!.toString()) ?? 0) + gracesAfter(i));
+    if (inSpan(t)) need(t, Math.min(ts[i + 1] ?? e, e), Math.max(AUTO_CROSS_VOICE_GAP, harmAt.get(onsets[i]!.toString()) ?? 0) + gracesAfter(i));
   });
   return w;
 }
