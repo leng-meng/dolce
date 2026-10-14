@@ -27,6 +27,8 @@ export function bookJianpuStyle(s: BookStyle): JianpuStyle {
   st.font.lyric = face("lyric");
   st.font.note = face("note");
   st.font.smufl = face("smufl");
+  // 和弦、段号、转调标签量宽用的西文字取 `chord` 那档（Times）：PDF 按角色落字就是它，量宽用缺省中文字的话行首和弦收进版心时差出零点几
+  st.font.text = face("chord");
   st.size.lyric = lyric;
   st.size.note = note;
   st.vertical.barlineHeight = (note * 4) / 3; // 成书小节线照字号推（−1 em / +1/3 em），不跟构造字号（歌词）

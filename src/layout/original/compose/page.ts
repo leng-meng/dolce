@@ -93,8 +93,24 @@ function systemMetrics(c: OriginalCtx, group: PlacedGroup, page?: PlacedPage): {
     slotWidth > 0 ? firstCharHalf + labelToLyric + slotWidth + lineToLabel : 0;
   const thinX = notesLeft - Math.max(labelSlot, m.note.barlineSpace * 0.55, lead > 0 ? firstCharHalf + labelToLyric : 0);
   const braceX = thinX - m.ink.noteHeight * 0.55;
-  const labelLeft =
-    labelWidth > 0 ? notesLeft - (firstCharHalf + labelToLyric + labelWidth) : notesLeft;
+  // 段号实际落在哪：同 `lyric.ts::paintLyricAnnotations`，右对齐到本行歌词首字**实际画出来**的左缘、隔 `annotationGap`。
+  // 按「首字居中于版心左缘」估会多让出行首音符离左缘那一截（整份版心左缘跟着多让，成书 355 因此少放一小节）
+  let labelLeft = notesLeft;
+  for (const v of group.voices) {
+    v.voice.lyrics.forEach((line, verse) => {
+      if (!line.annotation) return;
+      const w = labelFont.measureText(line.annotation);
+      const gap = Math.max(line.annotationGap / 100, 0.1) * m.style.size.lyric;
+      const first = v.items.find((it) => it.syllables[verse]);
+      let x0 = notesLeft - firstCharHalf;
+      if (first) {
+        const syl = first.syllables[verse]!;
+        const run = syllableRun(syl.text + (syl.trailingPunctuation ?? ""), lyricFont, m.style.look.punctCompress);
+        x0 = notesLeft + first.x - run.lead - run.body / 2;
+      }
+      labelLeft = Math.min(labelLeft, x0 - gap - w);
+    });
+  }
   return { notesLeft, thinX, braceX, labelLeft, labelFont };
 }
 

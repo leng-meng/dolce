@@ -20,7 +20,9 @@ import type { FitMetric } from "../score/applybreaks";
 import { clearBreaks, type JScore } from "../layout/input";
 import type { MetaData } from "../smufl/smufl";
 import { Font } from "../layout/font";
-import type { ScoreDoc } from "../model/doc";
+import type { Direction, DirectionPart, ScoreDoc } from "../model/doc";
+import { SECTION_WORD_RE } from "../score/phraseinput";
+import { normEndingText } from "../engrave/ending";
 import { loadScoreDoc } from "../model/fromxml";
 import { keepFirstPart } from "../model/melodyonly";
 import { clearSongBreaks } from "../model/breaks";
@@ -99,7 +101,10 @@ function roleOfItem(it: TextFrame, opt?: LayoutOptions): StyleRole {
 }
 
 /** 原样文档引擎排的成书页：文字叶子的角色（`pageItemsToDrawPage` 的 `roleOf`）。 */
-export const bookRoleOf = (it: TextFrame): StyleRole => roleOfItem(it);
+export const bookRoleOf = (it: TextFrame): StyleRole =>
+  // 段号（`1.`，`compose/lyric.ts::paintLyricAnnotations`）：引擎按西文字（`font.text`）量宽、右对齐到首字，落笔也得是那个字——
+  // 归 `verseNum`（成书样式里是 Times），随歌词的话 PDF 换成报宋，宽度对不上、伸出版心
+  it.classes.size === 0 && !(it instanceof Lyric) && /^\d+\.$/.test(it.text) ? "verseNum" : roleOfItem(it);
 
 export interface ToDrawOptions {
   style?: BookStyle;
@@ -362,8 +367,47 @@ export function measureCellsPerLine(score: JScore, style: BookStyle, smuflMeta?:
 export function bookDocOf(xml: string): ScoreDoc {
   const doc = loadScoreDoc(xml);
   doc.songs = doc.songs.slice(0, 1);
-  for (const song of doc.songs) keepFirstPart(song);
+  for (const song of doc.songs) {
+    keepFirstPart(song);
+    // 谱里自带的段落词文字（「（副歌）」）不印：成书的段落词只认书级元数据（`putSectionWords`），同简谱引擎 `jianpuinput.ts::directionMarks` 的认法
+    for (const part of song.parts) for (const m of part.measures) if (m.directions) m.directions = m.directions.flatMap(dropSectionWords);
+    // 歌词字前印的段号（MusicXML 把「1.」写进首字）去掉：段号由引擎按行挂（同简谱引擎 `ignoreVerseNumber`）
+    for (const part of song.parts) for (const m of part.measures) for (const el of m.elements) {
+      if (el.kind !== "chord") continue;
+      for (const l of el.lyrics ?? []) {
+        const at = l.text.search(/[^0-9.]/);
+        if (at > 0) l.text = l.text.slice(at);
+      }
+    }
+    // 房号规整成 `1.2`（原书口径，同简谱引擎；原样档照原文印）
+    for (const part of song.parts) for (const m of part.measures) for (const b of m.barlines ?? []) if (b.ending?.text) b.ending.text = normEndingText(b.ending.text);
+  }
   return doc;
+}
+
+/** 一条 `<direction>` 去掉段落词文字（与只有标点的文字）之后剩下的（没剩就整条不要） */
+function dropSectionWords(d: Direction): Direction[] {
+  const isWord = (p: DirectionPart): boolean => {
+    if (p.type !== "words") return false;
+    const t = (p.text ?? "").trim();
+    const bare = t.replace(/^[（(]\s*/, "").replace(/\s*[）)]$/, "");
+    // 只剩标点的（「(副歌)」拆成「(」与「副歌)」两条 `<words>`，006）也不要：同 `jianpuinput.ts::directionMarks`
+    return SECTION_WORD_RE.test(t) || SECTION_WORD_RE.test(bare) || !/[\p{L}\p{N}]/u.test(t);
+  };
+  const more = (d.more ?? []).filter((p) => !isWord(p));
+  let out: Direction;
+  if (!isWord(d)) out = { ...d };
+  else {
+    const head = more.shift();
+    if (!head) return [];
+    // 头一项换成剩下的第一项：子元素那几个字段整套换掉（不留被删那条文字的 text）
+    out = { ...d, type: head.type };
+    for (const k of ["text", "tempo", "spanType", "wedgeType", "line"] as const) delete out[k];
+    Object.assign(out, head);
+  }
+  if (more.length) out.more = more;
+  else delete out.more;
+  return [out];
 }
 
 /**
