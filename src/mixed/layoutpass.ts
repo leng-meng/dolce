@@ -130,8 +130,14 @@ function autoMeasureSlots(score: StaffLayout, mi: number): Slot[] {
   const graceLead = new Map<string, number>();
   const graceTail = new Map<string, number>();
   const textAt = new Map<string, number>();
+  /** 只算和弦符号要的槽宽（连音段里歌词按各自的行另算） */
+  const harmAt = new Map<string, number>();
   const harms: { t: number; w: number }[] = [];
   const minText = (key: string, w: number) => textAt.set(key, Math.max(textAt.get(key) ?? 0, w));
+  const minHarm = (key: string, w: number) => {
+    minText(key, w);
+    harmAt.set(key, Math.max(harmAt.get(key) ?? 0, w));
+  };
   const eng = score.options;
   const harmFont = new Font(eng.wordFont, eng.harmonySize / score.scaling);
   for (const part of score.parts) {
@@ -187,27 +193,122 @@ function autoMeasureSlots(score: StaffLayout, mi: number): Slot[] {
     if (b.t <= c1 + 1e-9) {
       // a、b 在同一个音的槽里（或 b 正落在下一个音上）：slot × (b − a)/(c1 − c0) ≥ need
       const f = (b.t - a.t) / (c1 - c0 || 1);
-      if (f > 0) minText(entries[ia]!.offset.toString(), need / f);
+      if (f > 0) minHarm(entries[ia]!.offset.toString(), need / f);
     }
   }
   for (const h of harms) {
     const e = entries.find((x) => Math.abs(x.offset.toFloat() - h.t) < 1e-9);
-    if (e) minText(e.offset.toString(), h.w + AUTO_HARMONY_SPACE);
+    if (e) minHarm(e.offset.toString(), h.w + AUTO_HARMONY_SPACE);
   }
   const slots: Slot[] = [];
   // 首音带前倚音：整串往右让出那截
   let nat = entries.length ? graceLead.get(entries[0]!.offset.toString()) ?? 0 : 0;
-  entries.forEach((e, k) => {
-    const key = e.offset.toString();
-    // 槽宽 = 自己的时值/字宽，再加后倚音与**下一个音的前倚音**要的那截（倚音不挤占音符之间的节奏距离）
+  /** 后倚音与**下一个音的前倚音**要的那截（倚音不挤占音符之间的节奏距离） */
+  const gracesAfter = (k: number): number => {
     const next = entries[k + 1];
-    const graces = (graceTail.get(key) ?? 0) + (next ? graceLead.get(next.offset.toString()) ?? 0 : 0);
-    const slot = Math.max(autoSlotWidth(e.dur), textAt.get(key) ?? 0) + graces;
+    return (graceTail.get(entries[k]!.offset.toString()) ?? 0) + (next ? graceLead.get(next.offset.toString()) ?? 0 : 0);
+  };
+  const spans = tupletSpans(score, mi);
+  for (let k = 0; k < entries.length; k++) {
+    const e = entries[k]!;
+    const span = spans.find((sp) => !sp.s.compareTo(e.offset));
+    if (span) {
+      // 连音组（与别的声部重叠的几组并成一段）：段内 x 随时间线性走——组内等分，与外部拍位只在组首组尾对齐。
+      // 逐拍位累加槽宽的话，三连音八分（0、⅓、⅔）与另一声部的普通八分（0、½）合成四个槽，三个音排得一疏一密
+      let j = k;
+      while (j + 1 < entries.length && entries[j + 1]!.offset.compareTo(span.e) < 0) j++;
+      const w = tupletSpanWidth(score, mi, span, entries.slice(k, j + 2).map((x) => x.offset), (i) => gracesAfter(k + i), harmAt);
+      const s = span.s.toFloat(), len = span.e.toFloat() - s;
+      const x0 = nat;
+      for (let i = k; i <= j; i++) {
+        const at = x0 + (w * (entries[i]!.offset.toFloat() - s)) / len;
+        if (i > k) slots[slots.length - 1]!.slot = at - slots[slots.length - 1]!.nat;
+        slots.push({ offset: entries[i]!.offset, nat: at, slot: 0 });
+      }
+      // 组尾之后：组尾正好是下一个拍位就落在段末；不是（另一声部的长音跨过组尾）就照常按末音的槽宽再取大
+      const last = slots[slots.length - 1]!;
+      const tail = Math.max(autoSlotWidth(entries[j]!.dur), textAt.get(entries[j]!.offset.toString()) ?? 0) + gracesAfter(j);
+      nat = Math.max(x0 + w, last.nat + tail);
+      last.slot = nat - last.nat;
+      k = j;
+      continue;
+    }
+    const slot = Math.max(autoSlotWidth(e.dur), textAt.get(e.offset.toString()) ?? 0) + gracesAfter(k);
     slots.push({ offset: e.offset, nat, slot });
     nat += slot;
-  });
+  }
   cache[mi] = slots;
   return slots;
+}
+
+/** 本小节里的连音组跨度 [组首, 组尾音的终点)，各声部重叠的并成一段；跨小节、零长的不算。 */
+function tupletSpans(score: StaffLayout, mi: number): { s: Fraction; e: Fraction }[] {
+  const raw: { s: Fraction; e: Fraction }[] = [];
+  for (const part of score.parts) {
+    const md = part.measures[mi];
+    if (!md) continue;
+    for (const t of part.tuplets) {
+      if (!t.startNote || !t.endNote) continue;
+      const a = t.startChord(), b = t.endChord();
+      if (a.measure !== md || b.measure !== md || a.grace || b.grace) continue;
+      const e = b.offset.plus(b.dur);
+      if (e.compareTo(a.offset) > 0) raw.push({ s: a.offset, e });
+    }
+  }
+  raw.sort((x, y) => x.s.compareTo(y.s));
+  const out: { s: Fraction; e: Fraction }[] = [];
+  for (const r of raw) {
+    const prev = out[out.length - 1];
+    if (prev && r.s.compareTo(prev.e) < 0) {
+      if (r.e.compareTo(prev.e) > 0) prev.e = r.e;
+    } else out.push({ s: r.s, e: r.e });
+  }
+  return out;
+}
+
+/** 两个不同声部的音挨得再近也要留的距离（tenths，约一个符头宽）：段内线性铺开时另一声部的音会插在组内两音之间 */
+const AUTO_CROSS_VOICE_GAP = 12;
+
+/**
+ * 连音段要多宽：段内 x 随时间线性走，每个音到**同一声部**下一个音（或段末）的距离要放得下它自己的槽宽
+ * （时值 + 本声部挂在它上面的歌词），整段宽就是各声部按比例折算后的最大值。别的声部的字不算——
+ * 它们排在各自的歌词行上，按拍位合并的字宽只会把组里某一截撑大。
+ * `onsets` 是段内各拍位，后面多带一个段后的拍位（没有就到段末为止）；和弦符号与倚音按全体拍位相邻算。
+ */
+function tupletSpanWidth(
+  score: StaffLayout, mi: number, span: { s: Fraction; e: Fraction },
+  onsets: Fraction[], gracesAfter: (i: number) => number, harmAt: ReadonlyMap<string, number>,
+): number {
+  const s = span.s.toFloat(), e = span.e.toFloat(), len = e - s;
+  const inSpan = (t: number) => t >= s - 1e-9 && t < e - 1e-9;
+  let w = 0;
+  const need = (a: number, b: number, width: number) => { if (b > a + 1e-9) w = Math.max(w, (width * len) / (Math.min(b, e) - a)); };
+  // 一行里相邻的两件东西：各声部的音（按时值）、各声部各段的歌词（按字宽）。拍位 → 这一拍要的宽
+  const rows = new Map<string, Map<number, number>>();
+  const put = (key: string, t: number, width: number) => {
+    if (!inSpan(t)) return;
+    const m = rows.get(key) ?? new Map<number, number>();
+    rows.set(key, m);
+    m.set(t, Math.max(m.get(t) ?? 0, width));
+  };
+  score.parts.forEach((part, pi) => {
+    const md = part.measures[mi];
+    if (!md) return;
+    for (const ch of md.chords) {
+      if (!ch.grace) put(`n${pi}/${ch.src.staff}/${ch.voice}`, ch.offset.toFloat(), autoSlotWidth(ch.dur.toFloat()));
+    }
+    for (const l of md.lyrics) if (!l.empty) put(`l${pi}/${l.num}`, l.offset.toFloat(), l.width + AUTO_LYRIC_SPACE);
+  });
+  for (const m of rows.values()) {
+    const ts = [...m.keys()].sort((a, b) => a - b);
+    ts.forEach((t, i) => need(t, ts[i + 1] ?? e, m.get(t)!));
+  }
+  // 全体相邻拍位：不同声部的音不叠在一起，和弦符号、倚音的地方照留
+  const ts = onsets.map((o) => o.toFloat());
+  ts.forEach((t, i) => {
+    if (inSpan(t)) need(t, ts[i + 1] ?? e, Math.max(AUTO_CROSS_VOICE_GAP, harmAt.get(onsets[i]!.toString()) ?? 0) + gracesAfter(i));
+  });
+  return w;
 }
 
 // 断行的代价（整体最优，见 autoLayoutWidths）。按下面两个用例校准：
