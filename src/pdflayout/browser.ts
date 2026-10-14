@@ -1,6 +1,6 @@
 // B 路（从乐谱数据重排）的浏览器侧：样式注入 + 页面树 → DrawList。
 //
-// **这是唯一碰 measure/DOM 的重排件**，所以不能进 dist-cli（见 src/cli/index.ts 的头注释）。
+// **这是唯一碰 measure/DOM 的重排件**，所以不能进 out/cli（见 src/cli/index.ts 的头注释）。
 // Node 侧的 scripts/rebuild.mjs 通过 window.__book 调它，拿回纯数据的 DrawPage[]，再交
 // scripts/pdfwrite.mjs 出 PDF。
 //

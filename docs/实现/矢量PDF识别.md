@@ -30,13 +30,13 @@ PDF → extractVectorPage      src/omrkit/vector.ts       路径对象 + ctm + c
 命令（全部纯 Node，只有 `../dev/scripts/vector-shot.mjs` 因为要像素比对才起浏览器）：
 
 ```bash
-npm run build:cli                  # 把 src/ 打成 dist-cli/index.js 供 .mjs import
+npm run build:cli                  # 把 src/ 打成 out/cli/index.js 供 .mjs import
 node ../dev/scripts/vector-shot.mjs 60            # 矢量重绘 vs pdfjs 光栅渲染，逐像素核对抽取正确性
 node ../dev/scripts/gen-pagemap.mjs               # 页 → 曲 映射 → testdata/500/pagemap.json
 node ../dev/scripts/gen-glyphdict.mjs             # 字形字典自举 → testdata/500/glyphdict.json
-node ../dev/scripts/pdf-diff.mjs                  # 全书对比 → pdf-diff.csv + pdf-diff/<曲号>.txt
+node ../dev/scripts/pdf-diff.mjs                  # 全书对比 → out/pdf-diff.csv + out/pdf-diff/<曲号>.txt
 node ../dev/scripts/gen-glyphocr.mjs              # 字典的 OCR 兜底（唯一要起浏览器的建库步骤）
-node ../dev/scripts/page-report.mjs               # 逐页排版信息 → pdf-layout.json + pdf-pages.csv + pdf-pages/
+node ../dev/scripts/page-report.mjs               # 逐页排版信息 → out/pdf-layout.json + out/pdf-pages.csv + out/pdf-pages/
 node ../dev/scripts/relayout.mjs --mode=outline   # 保真复现 + 对象级核对（验收）
 node ../dev/scripts/relayout.mjs --mode=text      # 出 666 页文字版 PDF（可选中/可搜索）
 ```
@@ -435,7 +435,7 @@ p2 / p665 / p666 空白；p6 是整页内嵌位图。
 把每一处差异盖回**原件**上，供人工核对：
 
 ```
-node ../dev/scripts/pdf-diff.mjs && node ../dev/scripts/pdf-mark.mjs      # → pdf-out/diff-marked.pdf（只出有标记的页）
+node ../dev/scripts/pdf-diff.mjs && node ../dev/scripts/pdf-mark.mjs      # → out/pdf/diff-marked.pdf（只出有标记的页）
 node ../dev/scripts/pdf-mark.mjs 279 135                   # 只出这几首所在的页
 node ../dev/scripts/pdf-mark.mjs --all                     # 全书 666 页
 ```
@@ -447,7 +447,7 @@ node ../dev/scripts/pdf-mark.mjs --all                     # 全书 666 页
   否则整段没印时几十个字会叠在同一点上；太长的截断加省略号，黄底半透明让原文仍看得见。
 - **橙** —— 字形没读出来（`�`）。是本工具的局限，不是录错，与红分开。
 
-位置由 pdf-diff 写的 `pdf-diff-marks.json` 提供，那里只记「哪一页、`inv.objs` 里第几个」；
+位置由 pdf-diff 写的 `out/pdf-diff-marks.json` 提供，那里只记「哪一页、`inv.objs` 里第几个」；
 轮廓由 pdf-mark 现取（只跑要标的页），**不写进 json**——全书两千多处，写进去就是几 MB。
 取轮廓要用 `toSvgPathTransformed(data, ctm)`：`data` 是局部坐标，不乘 ctm 会全堆在页角。
 pdf-lib 的原点在左下、y 朝上，页面坐标是 SVG 那套，故 `drawSvgPath(d, { x: 0, y: 页高 })`。
@@ -569,7 +569,7 @@ pdf-lib 的原点在左下、y 朝上，页面坐标是 SVG 那套，故 `drawSv
 | **页码按样子认**：版心最底下、两个小圆点夹着两三个数字（`·259·`），跨度二十来点 | 与原先「按空隙认」那条并行，哪条认出来都算。空隙那条挡不住末行歌词的标点掉到页码那一带——一掉下来「与上一行隔着一行以上」就不成立，整个页码漏进歌词（215 首）。点是版式的一部分、跟着数字走，比空隙可靠 |
 | **倚音**：小号数字（0.5~0.75 字高）**底下紧跟着一两条与它同宽的短横** | 它是实打实的音符，GT 记作 `<grace>`。**光按尺寸认不行**——三连音的 `3`、变拍号的数字与倚音字号完全重叠（都 4.8~5.5 高），试过只按尺寸收，音符差异 27→70。那条短横才分得开：变拍号的分数线比数字宽一大截（9.1 对 3.7），三连音与房号数字底下没有这样一条横。260 首 22→2 项、264 首 2→0 |
 | 并偏旁时**两个部件都得满格高**：尾随标点只占字格下部（`，` 3.1 高，字格 10.5），不是偏旁 | 它又窄又矮，「必须有一个部件明显窄于字格」那条拦不住，于是被并进前一个字里；合起来的形状字典里没有，整个字读不出、连带标点也少一个（009 首的「赞，」）。全书歌词差异 608→589 |
-| 完全没事可说的曲子**不出报告文件**；全量跑先清空 `pdf-diff/` | 202 首一处要核对的都没有（568→366 个文件），留着只会让人在几百个文件里翻找哪几个是有事的；不清空的话上一轮留下的旧报告会一直残着。**「版面」那一节不算数**——它自己就写着「记录，不算差异」：剔掉几个非歌词对象、花边框多少字、反复房号数量对不上（识别侧只有几何，判据本来就粗），都不是要人去核对的东西（272 首整个文件只有一行「房号 GT 0 / PDF 14」）。例外是里头那两条确实是问题的：有歌词行一个汉字都读不出、段数对不上 |
+| 完全没事可说的曲子**不出报告文件**；全量跑先清空 `out/pdf-diff/` | 202 首一处要核对的都没有（568→366 个文件），留着只会让人在几百个文件里翻找哪几个是有事的；不清空的话上一轮留下的旧报告会一直残着。**「版面」那一节不算数**——它自己就写着「记录，不算差异」：剔掉几个非歌词对象、花边框多少字、反复房号数量对不上（识别侧只有几何，判据本来就粗），都不是要人去核对的东西（272 首整个文件只有一行「房号 GT 0 / PDF 14」）。例外是里头那两条确实是问题的：有歌词行一个汉字都读不出、段数对不上 |
 | 标点差异改成**逐段比**，标记版 PDF 上单出一色（蓝）、**默认不画**（`--punct` 才画） | 拼成一整串比，某一段多一个逗号后面所有段就全错位。颜色要单列：标点跟着排版走，属「表述或结构不一致」，混进红色里会把真正的录错淹掉；七百多处铺满大半本书，页数从 148 涨到 310、体积翻倍，故默认关掉，明细照旧进报告 |
 | 标点**拿整段原文（汉字 + 标点）对齐，再挑出与标点有关的编辑**，不拿标点串对齐 | 一段里五六个「，」一模一样，DP 把插入摆在哪个位置距离都一样，落点全凭回溯先后——007 首每段真正少的是句末那个「；」，按标点串比却指到段首那个「，」，标记版 PDF 也跟着标错字。汉字把标点钉死在原位，落点才对得上；顺带**位置差异也报得出来了**（按标点串比时两个「，」直接对上，根本看不见） |
 | **形状类按 32×32 签名归并**，**放在自举之前**（`../dev/scripts/gen-glyphdict.mjs`；`../dev/scripts/gen-glyphmerge.mjs` 是 OCR 之后的补刀） | `shapeKey` 把轮廓按高度归一到 50 格再取整，一个汉字上千个坐标，页面上同一个字印在不同位置时坐标差着零点零几点——单看每个坐标都不影响取整，上千个里总有一两个正好卡在 .5 上翻过去，键就变了。全书 16234 个类按签名只剩 10019 组，**近四千个类是同一字形的分身**。分身各学各的字就会打架：011 首「晨光著现」印两遍，两个字的路径 501 段只差末位四舍五入、32×32 签名逐位相同，却一个被投成「着」一个「著」，同一段里前后不一。归并后全书歌词差异 589→561、标题 16→15 |

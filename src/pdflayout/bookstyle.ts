@@ -4,7 +4,7 @@
 //   A 路（relayout --mode=text，文字原位替换）  位置来自原件 PageSpec，样式来自这里
 //   B 路（rebuild，从 musicxml 数据重排）        位置由排版引擎算，样式也来自这里
 //
-// 值一律由 `stats.ts` 从原书 `pdf-layout.json` 统计**中位数**得来（见 scripts/gen-bookstyle.mjs），
+// 值一律由 `stats.ts` 从原书 `out/pdf-layout.json` 统计**中位数**得来（见 scripts/gen-bookstyle.mjs），
 // 不是拍脑袋的常量——「保留原书的字体与间距特征」就落在这里。
 //
 // 单位约定（**改字段前先看这条**）：

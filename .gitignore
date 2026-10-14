@@ -8,22 +8,11 @@ pnpm-debug.log*
 lerna-debug.log*
 
 node_modules
-dist
-dist-ssr
-dist-cli
 *.local
 
-# OMR 批量测试输出
-measure-all.csv
-pdf-diff.csv
-pdf-diff/
-pdf-diff-marks.json
-pdf-pages.csv
-pdf-pages/
-pdf-layout.json
-pdf-out/
-staff-out/
-pptx-out/
+# 程序产出统一放 out/：dist（网页构建）、cli（Node 侧构建）、pkg（OMR 包）、vision-ocr，
+# 以及回归/成书脚本的报告与缓存（pdf、staff、pptx、pdf-diff、pdf-pages、phrase-cache …）
+/out/
 
 # 测试语料与 GT 不入本仓库（语料本身是版权材料），实体在同级私有仓库 dev/testdata/，这里是指过去的符号链接。
 # testdata/ 只放语料与 GT；回归基线、快照、报告等派生数据在 dev/data/。
@@ -43,10 +32,6 @@ public/redist/pdfjs
 *.sln
 *.sw?
 
-# 乐句排版回归的 musicxml 缓存（scripts/phrase-lines.mjs）
-.phrase-cache
-
-
 # 国标（简谱/五线谱通用规范）原件与转出的 md，本地参考，不入库
 docs/规范/
 
@@ -54,9 +39,6 @@ docs/规范/
 # ss 语法收敛的待办（本地保留，不入库）
 docs/ss-收敛待办.md
 
-# Swift 工具的编译产物（源码在 tools/*.swift，编译命令见 CLAUDE.md）
-tools/vision-ocr
-dist-pkg
 
 # 回归脚本、语料与歌本样式：本地私有仓库（与本仓库同级的 dev/），不入库
 dev/

@@ -23,7 +23,7 @@ function copyPdfjsWasm(): Plugin {
 // 界面默认英文，见 i18n/index.ts），带 data-i18n* 的静态文字按英文词典预译（爬虫拿到的正文就是英文）。
 // 资源引用都是 base 绝对路径，两页共用同一套产物。
 function emitEnPage(): Plugin {
-  let outDir = "dist";
+  let outDir = "out/dist";
   const dict = en as Record<string, string>;
   const esc = (v: string) => v.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
   return {
@@ -73,6 +73,8 @@ export default defineConfig(async () => ({
   base,
   plugins: [copyPdfjsWasm(), emitEnPage()],
   define: { __APP_VERSION__: JSON.stringify(pkgVersion) },
+  // 程序产出一律放 out/（构建、脚本报告、缓存），web 根下不再散落输出目录
+  build: { outDir: "out/dist", emptyOutDir: true },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
@@ -98,8 +100,8 @@ export default defineConfig(async () => ({
         }
       : undefined,
     watch: {
-      // 3. tell Vite to ignore watching `src-tauri`
-      ignored: ["**/src-tauri/**"],
+      // 3. tell Vite to ignore watching `src-tauri`；out/ 是构建与脚本产出，写报告不该触发重载
+      ignored: ["**/src-tauri/**", "**/out/**"],
     },
   },
 }));

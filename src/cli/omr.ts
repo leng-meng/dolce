@@ -1,5 +1,5 @@
 // Node CLI 侧的简谱 OMR 入口：图片字节 → 123 / 文本谱，**全程不起浏览器**。
-// 由 `npm run build:cli` 打成 dist-cli/omr.js，供 scripts/omr-cli.mjs 与 OMR 回归脚本 import。
+// 由 `npm run build:cli` 打成 out/cli/omr.js，供 scripts/omr-cli.mjs 与 OMR 回归脚本 import。
 //
 // 与 cli/index.ts 的分工：那个是**矢量 PDF 版面**那一摊（vector/inventory/pdflayout），
 // 这个是**位图简谱识别**这一条（decode → jianpu → emit）。PDF 输入不走这里。

@@ -1955,7 +1955,7 @@ rec 全被按在一个弱核上、按歌词条数累积的形状。
 node scripts/omr-cli.mjs a.jpg b.jpg 谱子目录/ -o 出目录/
 ```
 
-或者把 `dist-cli/omr.js` 当库 `import` 进常驻服务（`recognizeImage`），只加载一次模型。
+或者把 `out/cli/omr.js` 当库 `import` 进常驻服务（`recognizeImage`），只加载一次模型。
 
 ### 命令
 
@@ -1989,7 +1989,7 @@ execFile 不走 shell 找不到裸 `npm`，Git Bash 里也一样）与 tar，体
 `--options zip:compression=deflate`，否则 `-a` 默认 store、85M 的包原样存成 85M；GNU tar 不认
 zip 格式，那种环境才回退到 `zip`。
 
-产物 `dist-pkg/dolce-omr-<版本>-<os>-<cpu>[-musl].{tar.gz|zip}`（Windows 出 zip），
+产物 `out/pkg/dolce-omr-<版本>-<os>-<cpu>[-musl].{tar.gz|zip}`（Windows 出 zip），
 内含 `omr.js` + 共享 chunk + `omr-cli.mjs`（Windows 另附 `omr-cli.cmd`）+ `models/` + `node_modules/`。
 
 | 目标 | 目录 | 压缩包 |
@@ -2057,7 +2057,7 @@ zip 格式，那种环境才回退到 `zip`。
 同一个坑在**桌面安装包**上也踩了一次：干净的 Windows 上装完 NSIS 包，一开就弹
 「由于找不到 MSVCP140_1.dll，无法继续执行代码」。原因是 `ort` 静态链进来的 ONNX Runtime 是
 微软用 `/MD` 编的，`dolce.exe` 于是**自己**导入 `MSVCP140*`/`VCRUNTIME140*`。（CLI 包那套只
-管 `dist-pkg`，跟桌面包是两条打包路径，别指望其中一条覆盖另一条。）
+管 `out/pkg`，跟桌面包是两条打包路径，别指望其中一条覆盖另一条。）
 
 做法与 CLI 包同源，都用 `vcredist.mjs` 抠 DLL，只是投放方式换成 Tauri 的资源机制：
 

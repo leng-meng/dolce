@@ -32,7 +32,7 @@ import { fileURLToPath } from "node:url";
 import { inflateRawSync } from "node:zlib";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
-/** 下载缓存：node_modules 下，不入库、也不会被清 dist-pkg 时带走。 */
+/** 下载缓存：node_modules 下，不入库、也不会被清 out/pkg 时带走。 */
 const CACHE = join(ROOT, "node_modules", ".cache", "vcredist");
 /** 打包目标 cpu → vc_redist 包名 / CAB 里的架构后缀。 */
 const ARCH = { x64: { pkg: "x64", suffix: "amd64" }, arm64: { pkg: "arm64", suffix: "arm64" } };

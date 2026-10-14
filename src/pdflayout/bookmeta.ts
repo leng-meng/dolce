@@ -1,7 +1,7 @@
 // 书级元数据：原书上那些 musicxml 装不下的内容。
 //
 // 出处与去处：
-//   scripts/page-report.mjs → pdf-layout.json（666 个 PageSpec）→ **本文件** → 校对.db
+//   scripts/page-report.mjs → out/pdf-layout.json（666 个 PageSpec）→ **本文件** → 校对.db
 //   → scripts/rebuild.mjs（B 路重排）照着排回去
 //
 // 装不下的是哪些：调号拍号原文（`1=♭B 4/4 (1=A)`，musicxml 只有 fifths/beats，

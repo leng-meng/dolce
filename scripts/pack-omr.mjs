@@ -15,7 +15,7 @@
 // tar（Win10 1803+ 自带 bsdtar；GNU tar 不认 zip，那种环境回退到 zip 命令），体积统计走 Node
 // 自己遍历，不依赖 du。
 //
-// 产物：dist-pkg/dolce-omr-<版本>-<os>-<cpu>[-musl].{tar.gz|zip}
+// 产物：out/pkg/dolce-omr-<版本>-<os>-<cpu>[-musl].{tar.gz|zip}
 //
 // ## 交叉打包靠什么成立
 // 两个原生依赖都是**预编译分发**，不在安装时编译：
@@ -39,7 +39,7 @@ import { crtLibrary, crtClosure, peImports } from "./vcredist.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const NAME = "dolce-omr";
-const OUT = join(ROOT, "dist-pkg");
+const OUT = join(ROOT, "out/pkg");
 
 /** ORT 有预编译二进制的目标（`node_modules/onnxruntime-node/bin/napi-v6/` 下的实际目录）。 */
 const TARGETS = ["darwin-arm64", "linux-x64", "linux-arm64", "win32-x64", "win32-arm64"];
@@ -65,8 +65,8 @@ for (const t of targets) {
     process.exit(1);
   }
 }
-if (!existsSync(join(ROOT, "dist-cli", "omr.js"))) {
-  console.error("缺 dist-cli/omr.js —— 先跑 npm run build:cli");
+if (!existsSync(join(ROOT, "out", "cli", "omr.js"))) {
+  console.error("缺 out/cli/omr.js —— 先跑 npm run build:cli");
   process.exit(1);
 }
 
@@ -98,7 +98,7 @@ async function copyWithChunks(dir, entry) {
   const walk = async (name) => {
     if (seen.has(name)) return;
     seen.add(name);
-    const src = join(ROOT, "dist-cli", name);
+    const src = join(ROOT, "out/cli", name);
     await cp(src, join(dir, name));
     const code = await readFile(src, "utf-8");
     for (const m of code.matchAll(/(?:from|import\()\s*["'](\.\/[^"']+\.js)["']/g)) await walk(m[1].slice(2));

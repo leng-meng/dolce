@@ -1,5 +1,5 @@
 // Node CLI 侧的 123 格式入口：`.123` 文本 ↔ `ScoreDoc` ↔ 其它格式，**不起浏览器**。
-// 由 `npm run build:cli` 打成 dist-cli/j123.js，供 scripts/j123-*.mjs import。
+// 由 `npm run build:cli` 打成 out/cli/j123.js，供 scripts/j123-*.mjs import。
 //
 // 与另两个入口的分工：`cli/index.ts` 是矢量 PDF 版面那一摊、`cli/omr.ts` 是位图简谱识别，
 // 这个是**格式与语义模型**这一条。

@@ -1,5 +1,5 @@
 // Node CLI 侧的入口：汇出矢量路需要的模块，由 `npm run build:cli`（vite --ssr）打成
-// dist-cli/index.js 供仓库根的 .mjs 脚本 import。
+// out/cli/index.js 供仓库根的 .mjs 脚本 import。
 //
 // **这里只能汇出不碰 DOM 的模块**——scripts/page-report.mjs / scripts/pdf-diff.mjs 不起浏览器。
 // 碰 canvas/OffscreenCanvas/document 的（decode.ts、paddleocr.ts、lyrics.ts 的 buildStrip、

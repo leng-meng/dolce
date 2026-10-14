@@ -57,8 +57,8 @@ function usage(emitters) {
       两边不一致处打到 stderr，--lyrics-report 另落 JSON。`);
 }
 
-// 两种布局都要认：仓库里是 ../dist-cli/omr.js，打包产物里是同目录的 ./omr.js。
-const CLI_URL = ["./omr.js", "../dist-cli/omr.js"]
+// 两种布局都要认：仓库里是 ../out/cli/omr.js，打包产物里是同目录的 ./omr.js。
+const CLI_URL = ["./omr.js", "../out/cli/omr.js"]
   .map((r) => new URL(r, import.meta.url))
   .find((u) => existsSync(fileURLToPath(u)));
 if (!CLI_URL) { console.error("找不到 omr.js —— 仓库里先跑 npm run build:cli"); process.exit(1); }
