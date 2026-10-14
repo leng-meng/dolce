@@ -27,6 +27,7 @@ import { loadScoreDoc } from "../model/fromxml";
 import { keepFirstPart } from "../model/melodyonly";
 import { clearSongBreaks } from "../model/breaks";
 import { jianpuStyleOf } from "../style/jianpu";
+import type { JianpuStyle } from "../engrave/jianpustyle";
 import { layoutOriginalDocument, type OriginalDocumentLayout } from "../layout/original/compose";
 
 /** 2D 仿射：[a b c d e f]，与 SVG 的 matrix(a b c d e f) 同序。 */
@@ -416,7 +417,7 @@ function dropSectionWords(d: Direction): Direction[] {
  */
 export function layoutBookDoc(doc: ScoreDoc, style: BookStyle, pageH: number, measure = false): OriginalDocumentLayout & { naturalH: number } {
   const r = layoutOriginalDocument(doc, {
-    style: jianpuStyleOf(bookConfig(style).style!),
+    style: bookStyleOf(style),
     page: { width: style.page.w, height: pageH, continuous: false },
     userMargins: false,
     foot: null,
@@ -424,6 +425,11 @@ export function layoutBookDoc(doc: ScoreDoc, style: BookStyle, pageH: number, me
     measure,
   });
   return Object.assign(r, { naturalH: r.placed.pages[0]?.natural ?? 0 });
+}
+
+/** 成书这一路的尺子（原样文档引擎吃的那份 `JianpuStyle`；dev 的 style-snapshot 快照它）。 */
+export function bookStyleOf(style: BookStyle): JianpuStyle {
+  return jianpuStyleOf(bookConfig(style).style!);
 }
 
 /** 真实坐标量一遍（同 `measureChordSpans`）：清掉原谱的换行、整首不折，量每个音（键为元素 id）的自然横向区间与版心宽。 */
