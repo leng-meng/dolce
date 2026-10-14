@@ -14,6 +14,7 @@ import { ACCIDENTAL_CLEARANCE, accidentalLead, type AccidentalKind } from "../..
 import { BarlineGlyph } from "../../../engrave/barline";
 import { timeSigWidth } from "../../../engrave/timesig";
 import { puBarlineSpec } from "../barspec";
+import { BARLINE_MARKS } from "../../../pu/glyph";
 import type { InkMeasurer, PlacedItem } from "./model";
 import { type ChordSpan, lineStartIndex, sectionWordOf, sectionWordSlot } from "./sectionword";
 
@@ -283,11 +284,13 @@ export function placeColumns(
     const cap = m.style.spacing.maxHorizontalScale * r;
     return width - r > cap ? { extra: cap, capped: true } : { extra: width - r, capped: false };
   };
-  const words = new SectionWordRoom(lines, cols, m, ink, width);
-  words.spread(X, lyricRight, rightOf, (xs) => {
+  const justified = (xs: number[]): void => {
     const r = rightOf();
     if (width > r) justify(cols, xs, extraOf(r).extra);
-  });
+  };
+  const words = new SectionWordRoom(lines, cols, m, ink, width);
+  words.spread(X, lyricRight, rightOf, justified);
+  new BarEndRoom(lines, cols, m, ink, width).spread(X, lyricRight, rightOf, justified);
   const right = rightOf();
   if (width > right) {
     const { extra, capped } = extraOf(right);
@@ -345,17 +348,7 @@ class SectionWordRoom {
 
   private slot(w: { items: PlacedItem[]; i: number; ink: { left: number; right: number } }, X: readonly number[]) {
     const xOf = (it: PlacedItem): number => X[this.colOf.get(it)!]!;
-    const chords: ChordSpan[] = [];
-    for (const it of w.items) {
-      const el = it.element;
-      const text = el.kind === "note" || el.kind === "sustain" ? el.chord : undefined;
-      if (!text) continue;
-      const r = this.ink.chord(text);
-      if (!r.ink) continue;
-      const x = xOf(it) - r.advance / 2;
-      chords.push({ x0: x + r.ink.left, x1: x + r.ink.right, at: it });
-    }
-    return sectionWordSlot(w.items, w.i, xOf, chords, w.ink, this.m, this.width);
+    return sectionWordSlot(w.items, w.i, xOf, previewChords(w.items, xOf, this.ink), w.ink, this.m, this.width);
   }
 
   spread(X: number[], lyricRight: number[], rightOf: () => number, justified: (xs: number[]) => void): void {
@@ -402,6 +395,96 @@ class SectionWordRoom {
       const denom = n - 2 - ca;
       if (denom <= 0) continue;
       for (let k = ca + 1; k < n; k++) X[k] = X[k]! + (slot.shortfall * (n - 1 - k)) / denom;
+    }
+  }
+}
+
+/** 撑开预演用的和弦墨迹范围：按各自锚点居中、没做横向让位（`band.ts::spreadChords` 在带里才跑），同简谱引擎的预演。 */
+function previewChords(items: readonly PlacedItem[], xOf: (it: PlacedItem) => number, ink: InkMeasurer): ChordSpan[] {
+  const chords: ChordSpan[] = [];
+  for (const it of items) {
+    const el = it.element;
+    const text = el.kind === "note" || el.kind === "sustain" ? el.chord : undefined;
+    if (!text) continue;
+    const r = ink.chord(text);
+    if (!r.ink) continue;
+    const x = xOf(it) - r.advance / 2;
+    chords.push({ x0: x + r.ink.left, x1: x + r.ink.right, at: it });
+  }
+  return chords;
+}
+
+/**
+ * 小节线上的跳转字（`Fine` / `D.S.` / `D.C.`）要的横向地方（搬 `Line.spreadForBarEndMarks`）：跳转字右缘贴着小节线墨迹右缘
+ * （`band.ts::placeDirections`），本小节末尾有和弦挤着就让不开，原书是并排印的——用户口径「需要的话把小节撑宽」。
+ * 净空用带里判撞那把尺子（`placeDirection` 的 0.35 个和弦字号），撑够了带里就不会再抬。
+ * 同段落词：先问 justify 之后放不放得下，放得下不撑；放不下把本小节最后一个音之后的各列按份右移、小节线及其后整体右移；
+ * 撑出版心就不撑（维持抬一层）。
+ */
+class BarEndRoom {
+  private readonly colOf = new Map<PlacedItem, number>();
+  private readonly marks: Array<{ items: PlacedItem[]; bar: PlacedItem; width: number; barRight: number }> = [];
+  private readonly size: number;
+
+  constructor(
+    lines: ReadonlyArray<{ items: PlacedItem[] }>,
+    private readonly cols: readonly Column[],
+    m: JianpuGrid,
+    private readonly ink: InkMeasurer,
+    private readonly width: number,
+  ) {
+    this.size = m.style.size.chord > 0 ? m.style.size.chord : m.style.size.note * 0.6;
+    cols.forEach((c, ci) => { for (const { it } of c.members) this.colOf.set(it, ci); });
+    for (const l of lines) {
+      for (const it of l.items) {
+        const el = it.element;
+        if (el.kind !== "barline" || it.dy !== undefined) continue;
+        const texts = el.ornaments.map((o) => BARLINE_MARKS[o.name]?.text).filter((t): t is string => !!t);
+        if (texts.length === 0) continue;
+        // 一组横排、各段之间 0.25 个字号（同 `placeDirections`）
+        const w = texts.reduce((a, t) => a + Math.max(ink.text(t, "jump").advance, ink.text(t, "jump").ink.right), 0)
+          + (texts.length - 1) * this.size * 0.25;
+        this.marks.push({ items: l.items, bar: it, width: w, barRight: barlineBox(el, m)?.right ?? 0 });
+      }
+    }
+  }
+
+  /** 跳转字离左边的和弦还差多少（≤ 0 = 放得下） */
+  private shortfall(k: { items: PlacedItem[]; bar: PlacedItem; width: number; barRight: number }, X: readonly number[]): number {
+    const xOf = (it: PlacedItem): number => X[this.colOf.get(it)!]!;
+    const barX = xOf(k.bar);
+    let rightMost = -Infinity;
+    // 和弦挨上了会被 `band.ts::spreadChords` 往右挪（0.28 个字号的空、最多挪 1.2 个字号）——小节末那个和弦常被前一个顶过去，
+    // 按居中算就以为放得下、不撑，带里照样撞上抬一层。这里照那条挪一遍再量
+    const chords = previewChords(k.items, xOf, this.ink).sort((a, b) => a.x0 - b.x0);
+    for (let i = 1; i < chords.length; i++) {
+      const need = chords[i - 1]!.x1 + this.size * 0.28 - chords[i]!.x0;
+      if (need <= 0) continue;
+      const dx = Math.min(need, this.size * 1.2);
+      chords[i] = { ...chords[i]!, x0: chords[i]!.x0 + dx, x1: chords[i]!.x1 + dx };
+    }
+    for (const c of chords) if (xOf(c.at) < barX) rightMost = Math.max(rightMost, c.x1);
+    return rightMost + this.size * 0.35 + k.width - (barX + k.barRight);
+  }
+
+  spread(X: number[], lyricRight: number[], rightOf: () => number, justified: (xs: number[]) => void): void {
+    for (const k of this.marks) {
+      const probe = [...X];
+      justified(probe);
+      if (this.shortfall(k, probe) <= 0) continue;
+      const need = this.shortfall(k, X);
+      if (need <= 0) continue;
+      if (rightOf() + need > this.width) continue;
+      const cb = this.colOf.get(k.bar)!;
+      // 本小节最后一个音：它之后（长音的增时线）到小节线按份分
+      let ca = cb - 1;
+      while (ca > 0 && !this.cols[ca]!.members.some(({ it }) => it.element.kind === "note")) ca--;
+      const steps = cb - ca;
+      X.forEach((x, i) => {
+        const d = i <= ca ? 0 : i >= cb ? need : (need * (i - ca)) / steps;
+        X[i] = x + d;
+        if (d > 0 && lyricRight[i]! > -Infinity) lyricRight[i] = lyricRight[i]! + d;
+      });
     }
   }
 }

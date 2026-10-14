@@ -391,7 +391,10 @@ function placeDirections(
     // 纵向：本行没有和弦时退回音符上方（那一摞的墨迹顶之上一个和弦字号，`chordGap` 设了就用它）
     const above = el.kind === "note" ? Math.min(-nh / 2, stackTop(el, m)) : -nh / 2;
     const fallback = above - (m.style.vertical.chordGap > 0 ? m.style.vertical.chordGap : size) + dy;
-    placeDirection(chords, boxes, fallback, barLeft ? barLeft.right : 0, size, gap, move, gx, gTop, gBottom, gw);
+    // 挂在小节线上的右缘贴着线：线右边下一小节的和弦隔着线，不算挡路（它离线只有和弦让线那道空，按净空判永远撞上，
+    // 跳转字就总被抬一层，`BarEndRoom` 撑开本小节也白撑）
+    const own = atBar && barRight ? chords.filter((c) => c.x0 < barRight.right) : chords;
+    placeDirection(own, boxes, fallback, barLeft ? barLeft.right : 0, size, gap, move, gx, gTop, gBottom, gw);
     if (atBar && barRight) {
       // 线比数字高出一截：照和弦基线摆会压在线头上，整块抬到线顶之上一道空
       const barTop = barlineSpan(m).top + barRight.dy;

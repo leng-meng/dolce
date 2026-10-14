@@ -71,6 +71,7 @@ export function layoutSong(
   //（末个音符的字面右缘、或末条小节线）贴右缘，同简谱引擎
   const width = contentWidth(m);
   moveTrailingSectionWords(song);
+  autoVerseNumbers(song, m);
 
   const bottomLimit = m.page.height - m.page.margin.bottom;
   // 拍号一路带过来：头部 `1=D4/4 3/4 5/4` 这类混合拍只有首个是起头拍号，其余由曲中
@@ -358,6 +359,30 @@ function shiftGroup(g: PlacedGroup, dy: number): void {
  * 副歌是从下一行开始唱的）——挪到下一行（同一声部）行首那个音符上，那里已有段落词就不挪（同简谱引擎 `Line.layout` 那一段）。
  * 只改行视图（`docView` 每次排版现做的那份），不改 ScoreDoc。
  */
+/**
+ * **自动段号**（搬 `Line.addVerseNumbers`，样式键 `verse-numbers`）：叠排的几段歌词在每一行行首标「1.」「2.」…，
+ * 只给源里没写说明的行补（源里有 `<1.>`、`<狼:1.>` 的那一行照源印，一行里只要有一段写了就整行不补）。
+ * `never` 不标；`auto` 全曲段数多于 `verse-number-auto-min` 才标；这一行有字的段不到两段不标。
+ * 补出来的就是一条普通的说明（`LyricLine.annotation`），画法、版心左缘让出（`compose/index.ts` 量伸出量）都同源里写的。
+ * 只改行视图，不改 ScoreDoc。
+ */
+function autoVerseNumbers(song: PuSong, m: JianpuGrid): void {
+  const mode = m.style.look.verseNumbers;
+  if (mode === "never") return;
+  const voices = song.pages.flatMap((p) => p.groups).flatMap((g) => g.voices);
+  const sung = (l: { syllables: ReadonlyArray<{ text: string } | null> }): boolean => l.syllables.some((x) => !!x?.text);
+  if (mode === "auto") {
+    const verses = Math.max(0, ...voices.map((v) => v.lyrics.filter(sung).length));
+    if (verses <= m.style.look.verseNumberAutoMin) return;
+  }
+  for (const v of voices) {
+    if (v.lyrics.filter(sung).length < 2 || v.lyrics.some((l) => l.annotation)) continue;
+    v.lyrics.forEach((l, k) => {
+      if (sung(l)) l.annotation = `${k + 1}.`;
+    });
+  }
+}
+
 function moveTrailingSectionWords(song: PuSong): void {
   const groups = song.pages.flatMap((p) => p.groups);
   const notes = (els: readonly MusicElement[]) => els.filter((e): e is NoteElement => e.kind === "note" && !e.placeholder);
