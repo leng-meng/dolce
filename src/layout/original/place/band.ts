@@ -9,7 +9,7 @@ import { Slur } from "../../pageitem";
 import { bandTop, stackUpperBand, type BandItem } from "../../../engrave/upperband";
 import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
 import { tupletDigits } from "../../../engrave/tuplet";
-import { endingDrop, endingLabelDx, labelBaselineOf, normEndingText } from "../../../engrave/ending";
+import { endingDrop, endingLabelDx, labelBaselineOf } from "../../../engrave/ending";
 import { stackBottom, stackTop as stackTopOf } from "../../../engrave/stack";
 import { barlineSpan, bracketLineWidth, jianpuSlurStyle, type JianpuGrid } from "../metrics";
 import type { InkMeasurer, PlacedItem, PlacedLayer, PlacedMark, PlacedText } from "./model";
@@ -549,7 +549,7 @@ function placeEndings(
   /** 房号墨迹（相对横线左端、横线心 y = 0）；跨行续过来的那一段不印 */
   const labelInk = (mk: PlacedMark): Rect | null => {
     if (mk.openLeft || !mk.mark.caption) return null;
-    const r = ink.text(normEndingText(mk.mark.caption), "ending").ink;
+    const r = ink.text(mk.mark.caption, "ending").ink;
     return r.offset(dx, labelBaselineOf(r.top, labelSize, lw));
   };
   const span = barlineSpan(m);

@@ -2,7 +2,7 @@
 import { Font } from "../../font";
 import { Point } from "../../../common/geom";
 import { BeamLine, Group, Slur } from "../../pageitem";
-import { addEndingBracket, endingDrop, endingLabelDx, normEndingText } from "../../../engrave/ending";
+import { addEndingBracket, endingDrop, endingLabelDx } from "../../../engrave/ending";
 import { TupletGlyph } from "../../../engrave/tuplet";
 import { sustainDash } from "../../../engrave/dash";
 import { beamY, highDotY, lowDotY } from "../../../engrave/stack";
@@ -99,7 +99,8 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
       const size = m.style.size.ending;
       const foot = m.style.vertical.bracketFoot;
       const lw = bracketLineWidth(m);
-      const showLabel = !!mk.mark.caption && !mk.openLeft; // 跨行续过来的房子不再重复房号
+      // 房号照原文印（`1,2` 就是 `1,2`，用户定：原样档不规整；简谱引擎才按 `normEndingText` 统一成 `1.2`）。跨行续过来的房子不再重复房号
+      const showLabel = !!mk.mark.caption && !mk.openLeft;
       addEndingBracket(root, {
         x0, x1, top: y, drop: endingDrop(foot, size),
         leftFoot: !mk.openLeft,
@@ -107,7 +108,7 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
         rightFoot: !mk.openRight && mk.mark.openEnd !== true,
         lineWidth: lw, color: c.ink,
         label: showLabel
-          ? { text: normEndingText(mk.mark.caption!), font: c.digitFont.makeWithSize(size), dx: endingLabelDx(lw, size, foot) }
+          ? { text: mk.mark.caption!, font: c.digitFont.makeWithSize(size), dx: endingLabelDx(lw, size, foot) }
           : undefined,
         classes: { line: "ending-line", label: "ending" },
       });
