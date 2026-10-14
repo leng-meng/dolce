@@ -2,6 +2,7 @@
 import type { MusicElement, PuSong } from "../../../pu/ast";
 import { contentWidth, type JianpuGrid } from "../metrics";
 import { naturalColumns } from "./spacing";
+import { fillLines } from "./expand";
 import type { InkMeasurer, PlacedItem } from "./model";
 import { assignLyrics, layoutVoiceLine } from "./voice";
 
@@ -92,4 +93,86 @@ export function reflowLineStarts(
     for (let j = n; j > 0; j = prev[j]!) cuts.unshift(prev[j]!);
     return cuts.filter((i) => i > 0).map((i) => bars[i]!.first).filter((id): id is string | number => id !== null);
   });
+}
+
+/** 一行里从第 `from` 个元素起第一个音符 / 增时线的元素 id（行首落点，`model/breaks.ts::applyBreaks` 按它写换行） */
+function startIdOf(els: readonly MusicElement[], from: number, idOf: ReadonlyMap<MusicElement, string | number>): string | number | null {
+  for (let i = from; i < els.length; i++) {
+    const el = els[i]!;
+    if (el.kind !== "note" && el.kind !== "sustain") continue;
+    const id = idOf.get(el);
+    if (id !== undefined) return id;
+  }
+  return null;
+}
+
+/**
+ * **成书的折行**（同简谱引擎成书：照断点成行，单行放不下才在行内折，`layout.ts::Line.doLineBreak`）：源里每一行按自然宽逐行装满
+ * （`expand.ts::fillLines`），折出新行首。有折的就返回每首的全部行首（源里原有的行首也在内，`applyBreaks` 是整份替换），都放得下返回 null。
+ * 只看每组第一个声部（成书只排旋律）。
+ */
+export function foldLineStarts(
+  songs: readonly PuSong[],
+  idOf: ReadonlyMap<MusicElement, string | number>,
+  m: JianpuGrid,
+  ink: InkMeasurer,
+): Array<Array<string | number>> | null {
+  const width = contentWidth(m);
+  if (!(width > 0)) return null;
+  let folded = false;
+  const out = songs.map((song) => {
+    const starts: Array<string | number> = [];
+    let firstGroup = true;
+    for (const page of song.pages) {
+      for (const group of page.groups) {
+        const row = group.voices[0];
+        if (!row) continue;
+        const lines = fillLines(row, new Map(), m, ink, width, song.metadata.meters[0]);
+        if (lines.length > 1) folded = true;
+        lines.forEach((l, n) => {
+          if (n === 0 && firstGroup) return;
+          const id = startIdOf(row.elements, l.start, idOf);
+          if (id !== null) starts.push(id);
+        });
+        firstGroup = false;
+      }
+    }
+    return starts;
+  });
+  return folded ? out : null;
+}
+
+/**
+ * 整首的**自然**横向区间（紧排 + 歌词避让，不分行、不两端对齐）：成书断句判「一行放不放得下」的尺子
+ * （同简谱引擎 `Line.naturalSpans`）。键是元素 id；增时线算进它前面那个音（一个音的区间罩住它的增时线与歌词）。
+ * 调用方先清掉换行，整首就是一组；源里有多组时各组各量（组内坐标）。
+ */
+export function naturalSpans(
+  song: PuSong,
+  idOf: ReadonlyMap<MusicElement, string | number>,
+  m: JianpuGrid,
+  ink: InkMeasurer,
+): Map<string | number, { x0: number; x1: number }> {
+  const out = new Map<string | number, { x0: number; x1: number }>();
+  for (const page of song.pages) {
+    for (const group of page.groups) {
+      const row = group.voices[0];
+      if (!row) continue;
+      const laid = layoutVoiceLine(row, m, { meter: song.metadata.meters[0] });
+      for (const it of laid.items) it.syllables = new Array(row.lyrics.length).fill(null);
+      assignLyrics(laid.items, row.lyrics);
+      const nat = naturalColumns([laid], m, ink);
+      let owner: string | number | null = null;
+      for (const it of laid.items) {
+        if (it.element.kind === "note") owner = idOf.get(it.element) ?? null;
+        else if (it.element.kind !== "sustain") continue;
+        if (owner === null) continue;
+        const x0 = nat.leftOf.get(it) ?? 0;
+        const x1 = nat.rightOf.get(it) ?? 0;
+        const prev = out.get(owner);
+        out.set(owner, prev ? { x0: Math.min(prev.x0, x0), x1: Math.max(prev.x1, x1) } : { x0, x1 });
+      }
+    }
+  }
+  return out;
 }

@@ -4,7 +4,8 @@
 // 两边的和弦**按元素 id 对上**。断点直接写成引擎输入里的换行条目，数据一路不落地成文本。
 //
 // 无 DOM 依赖。
-import type { ElementId } from "../model/doc";
+import type { Chord, ElementId, Measure, Song } from "../model/doc";
+import { applyBreaks, type LineStart } from "../model/breaks";
 import type { JChord, JMeasure } from "../layout/input";
 import { breakAfterChord, breakAtMeasureEnd } from "../model/jianpuinput";
 import { chordsOf, type PhraseChord, type PhrasePart } from "./phraseinput";
@@ -99,6 +100,104 @@ export function applyPhraseBreaks(
   return { lines, pages };
 }
 
+
+/** 原样文档引擎量出来的自然跨度（键是元素 id，`layoutBookDoc` 的 `measure`）换成按断句输入的和弦。 */
+export function fitForIds(
+  fit: { width: number; spans: ReadonlyMap<string | number, { x0: number; x1: number }> },
+  idOf: ReadonlyMap<PhraseChord, ElementId>,
+): FitMetric {
+  const spans = new Map<PhraseChord, { x0: number; x1: number }>();
+  for (const [c, id] of idOf) {
+    const sp = fit.spans.get(id);
+    if (sp) spans.set(c, sp);
+  }
+  return { width: fit.width, spans };
+}
+
+/** 小节里第 `from` 个元素起第一个正经和弦（不是倚音）的 id：新行从它起 */
+function chordIdFrom(m: Measure, from: number): ElementId | null {
+  for (let i = from; i < m.elements.length; i++) {
+    const el = m.elements[i]!;
+    if (el.kind === "chord" && !el.grace) return el.id;
+  }
+  return null;
+}
+
+/**
+ * 断句的断点写进文档（成书在原样文档引擎上排，`song` 是 `ScoreDoc` 克隆里的那首）：换成行首交 `model/breaks.ts::applyBreaks`，
+ * **替换**原有的换行。口径同 `applyPhraseBreaks`（小节一一对应、和弦按元素 id 对上，对不上抛错；`linesPerPage` 0 = 不按行数换页）。
+ */
+export function applyPhraseBreaksToDoc(
+  song: Song, input: PhrasePart, idOf: ReadonlyMap<PhraseChord, ElementId>, breaks: PhraseBreaks,
+  opt: ApplyBreakOptions = {},
+): ApplyBreakResult {
+  const measures = song.parts[0]?.measures ?? [];
+  if (measures.length !== input.measures.length) {
+    throw new Error(`断句输入与文档小节数对不上：${input.measures.length} / ${measures.length}`);
+  }
+  const linesPerPage = opt.linesPerPage ?? 4;
+  const sectionNewPage = opt.sectionNewPage ?? false;
+  const useMidBreaks = opt.useMidBreaks ?? true;
+  const starts: LineStart[] = [];
+  let lines = 0;
+  let pages = 1;
+  let justPaged = false;
+  const brk = (id: ElementId | null, forcePage: boolean): void => {
+    if (id === null) return;
+    lines++;
+    const page = forcePage || (linesPerPage > 0 && !justPaged && lines % linesPerPage === 0);
+    starts.push(page ? { id, page } : { id });
+    if (page) {
+      pages++;
+      lines = 0;
+    }
+    justPaged = page;
+  };
+  for (let i = 0; i < measures.length; i++) {
+    const m = measures[i]!;
+    if (useMidBreaks) {
+      for (const c of chordsOf(input.measures[i]!)) {
+        if (!breaks.midBreaks.has(c) && !breaks.sectionCutChords.has(c)) continue;
+        const id = idOf.get(c);
+        const at = m.elements.findIndex((el) => el.id === id);
+        if (at < 0) throw new Error(`断句输入的和弦在文档里找不到（id ${id}）`);
+        brk(chordIdFrom(m, at + 1), sectionNewPage && breaks.sectionCutChords.has(c));
+      }
+    }
+    const next = i + 1;
+    if (next < measures.length && (breaks.measureBreaks.has(next) || breaks.sectionStarts.has(next))) {
+      brk(chordIdFrom(measures[next]!, 0), sectionNewPage && breaks.sectionStarts.has(next));
+    }
+  }
+  applyBreaks(song, starts, { mid: "inline", pages: "write" });
+  return { lines, pages };
+}
+
+/**
+ * 成书的段落词（原书印在和弦带里的「（副歌）」）：按原书音符序号（`note_ordinal`，数的是正经和弦、休止也算，倚音不算）
+ * 写到文档的和弦上（`Chord.sectionWord`），排版引擎自己去摆。副歌那一条优先挂到断句输入里**副歌的起句**
+ * （`phrasedoc.ts` 推的 `refrain`）：重排后序号常差几个音（023 首曾落在副歌前一行）。
+ */
+export function putSectionWords(
+  song: Song, input: PhrasePart, idOf: ReadonlyMap<PhraseChord, ElementId>, rows: ReadonlyArray<{ text: string; note_ordinal: number }>,
+): void {
+  if (!rows.length) return;
+  const chords: Chord[] = [];
+  for (const m of song.parts[0]?.measures ?? []) for (const el of m.elements) if (el.kind === "chord" && !el.grace) chords.push(el);
+  let refrainId: ElementId | undefined;
+  for (const m of input.measures) {
+    for (const c of chordsOf(m)) {
+      if (refrainId !== undefined) break;
+      if (c.notes[0]?.lyrics.some((l) => l.refrain && l.text)) refrainId = idOf.get(c);
+    }
+  }
+  const refrainAt = refrainId === undefined ? -1 : chords.findIndex((c) => c.id === refrainId);
+  for (const r of rows) {
+    const at = /副歌/.test(r.text) && refrainAt >= 0 ? refrainAt : Math.min(r.note_ordinal, chords.length - 1);
+    const c = chords[at];
+    if (c) c.sectionWord = r.text;
+  }
+}
 
 /**
  * 容量保险：把**放不下的行**按乐句子句断点切开。

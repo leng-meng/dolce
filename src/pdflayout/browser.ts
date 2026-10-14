@@ -19,6 +19,13 @@ import { walkPageItem, type ItemVisitor } from "../layout/walk";
 import type { FitMetric } from "../score/applybreaks";
 import { clearBreaks, type JScore } from "../layout/input";
 import type { MetaData } from "../smufl/smufl";
+import { Font } from "../layout/font";
+import type { ScoreDoc } from "../model/doc";
+import { loadScoreDoc } from "../model/fromxml";
+import { keepFirstPart } from "../model/melodyonly";
+import { clearSongBreaks } from "../model/breaks";
+import { jianpuStyleOf } from "../style/jianpu";
+import { layoutOriginalDocument, type OriginalDocumentLayout } from "../layout/original/compose";
 
 /** 2D 仿射：[a b c d e f]，与 SVG 的 matrix(a b c d e f) 同序。 */
 type Mat6 = [number, number, number, number, number, number];
@@ -53,10 +60,17 @@ function dashInkShift(opt: LayoutOptions): number {
   return (nb.top + nb.bottom) / 2 - (db.top + db.bottom) / 2;
 }
 
+/** 同上，按增时线自己的字量（原样文档引擎那一路没有 `LayoutOptions`）。 */
+function dashInkShiftOf(font: Font): number {
+  const nb = font.charBound("1");
+  const db = font.charBound("-");
+  return (nb.top + nb.bottom) / 2 - (db.top + db.bottom) / 2;
+}
+
 /** 透到 `DrawText.cls` 的那几个 class（顺序即优先级）。 */
 const CLS_TAGS = ["ending", "ending-line", "section-word", "key-change", "chord", "direction", "tuplet-line", "grace", "grace-line", "artic"];
 
-function roleOfItem(it: TextFrame, opt: LayoutOptions): StyleRole {
+function roleOfItem(it: TextFrame, opt?: LayoutOptions): StyleRole {
   // 和弦是 engrave/chord.ts 造的普通 TextFrame，只有 classes 认得出来（见那边的注释）
   if (it.classes.has("chord-music") || it.classes.has("smufl")) return "smufl";
   if (it.classes.has("chord")) return "chord";
@@ -76,11 +90,16 @@ function roleOfItem(it: TextFrame, opt: LayoutOptions): StyleRole {
   if (it instanceof SmuflText) return "smufl";
   if (it instanceof JpNumber || it instanceof JpOctaveDot) return "note";
   if (it instanceof Lyric) return "lyric";
+  // 原样文档引擎的成书页上没有标题、署名（整本那一层排），剩下的文字（段号等）都随歌词
+  if (!opt) return "lyric";
   const s = it.font?.size ?? 0;
   if (s >= opt.titleSize * 0.9) return "title";
   if (s >= opt.creditSize * 0.9) return "credit";
   return "lyric";
 }
+
+/** 原样文档引擎排的成书页：文字叶子的角色（`pageItemsToDrawPage` 的 `roleOf`）。 */
+export const bookRoleOf = (it: TextFrame): StyleRole => roleOfItem(it);
 
 export interface ToDrawOptions {
   style?: BookStyle;
@@ -149,10 +168,11 @@ export function pageItemsToDrawPage(root: PageItem | undefined, w: number, h: nu
       // 只在**画的时候**补这一下——排版度量（entry 高度、纵向栅格、行容量）不能动，
       // 那是「简谱纵向栅格」那把统一的尺子。
       const role0 = (o.roleOf ? o.roleOf(it) : roleOfItem(it, o.options!)) as StyleRole;
+      const dash = role0 === "note" && (it.text === "-" || it.text === "\u2013");
       // 语义标记：**只给 scripts/line-check.mjs 用**，不参与度量。房号与段号同归 verseNum、
       // 转调标记混在 lyric 里，光看 role 分不开（见 DrawText.cls）。
       const cls = CLS_TAGS.find((c) => it.classes.has(c));
-      const dy = o.options && role0 === "note" && (it.text === "-" || it.text === "\u2013") ? dashInkShift(o.options) : 0;
+      const dy = !dash ? 0 : o.options ? dashInkShift(o.options) : it.font ? dashInkShiftOf(it.font) : 0;
       const y = applyY(m, 0, 0);
       const t: DrawText = {
         t: "text",
@@ -334,4 +354,47 @@ export function measureCellsPerLine(score: JScore, style: BookStyle, smuflMeta?:
   const counts = [...byRow.values()].map((r) => r.length).sort((a, b) => a - b);
   const cells = counts.length ? counts[counts.length - 1] : 0;
   return Math.max(6, cells || Math.floor(cw / opt.lrcFont.measureText("国")));
+}
+
+// ───────────────── 原样文档引擎这一路（子计划 6；rebuild.mjs `--one-engine`） ─────────────────
+
+/** 成书读谱：MusicXML → 文档，只留第一首、第一个声部（主旋律，同 `jianpuInputOfXml` 只投 `parts[0]`）。 */
+export function bookDocOf(xml: string): ScoreDoc {
+  const doc = loadScoreDoc(xml);
+  doc.songs = doc.songs.slice(0, 1);
+  for (const song of doc.songs) keepFirstPart(song);
+  return doc;
+}
+
+/**
+ * 成书这一路排一首（原样文档引擎）：按 BookStyle 排到宽 `style.page.w`、高 `pageH` 的纸上，没有标题页（书级装饰由整本那一层加）。
+ * 断点由调用方先写进 `doc`（`applyPhraseBreaksToDoc`）；单行放不下引擎自己折。`naturalH` 是首页谱行自然叠起来的高（半页起排、紧排用）。
+ */
+export function layoutBookDoc(doc: ScoreDoc, style: BookStyle, pageH: number, measure = false): OriginalDocumentLayout & { naturalH: number } {
+  const r = layoutOriginalDocument(doc, {
+    style: jianpuStyleOf(bookConfig(style).style!),
+    page: { width: style.page.w, height: pageH, continuous: false },
+    userMargins: false,
+    foot: null,
+    book: true,
+    measure,
+  });
+  return Object.assign(r, { naturalH: r.placed.pages[0]?.natural ?? 0 });
+}
+
+/** 真实坐标量一遍（同 `measureChordSpans`）：清掉原谱的换行、整首不折，量每个音（键为元素 id）的自然横向区间与版心宽。 */
+export function measureBookSpans(doc: ScoreDoc, style: BookStyle): { width: number; spans: Map<string | number, { x0: number; x1: number }> } {
+  for (const song of doc.songs) clearSongBreaks(song);
+  return layoutBookDoc(doc, style, style.page.h, true).spans ?? { width: 0, spans: new Map() };
+}
+
+/** 空排一遍量「一行放得下几格」（同 `measureCellsPerLine`：清掉原谱换行、按宽度塞满折行，装得最多的那一行就是容量）。 */
+export function bookCellsPerLine(doc: ScoreDoc, style: BookStyle): number {
+  for (const song of doc.songs) clearSongBreaks(song);
+  const r = layoutBookDoc(doc, style, style.page.h);
+  const dps = r.pages.map((g, i) => pageItemsToDrawPage(g, style.page.w, style.page.h, { style, roleOf: bookRoleOf, pageNo: i + 1, meta: { kind: "score", songs: [] } }));
+  const cells = maxStaffRowCells(dps);
+  const m = r.metrics;
+  const cw = m.page.width - m.page.margin.left - m.page.margin.right;
+  return Math.max(6, cells || Math.floor(cw / new Font(m.style.font.lyric.family, m.style.size.lyric).measureText("国")));
 }

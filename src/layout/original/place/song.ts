@@ -66,7 +66,7 @@ export function layoutSong(
   songIndex = 0,
   headerBottom = 0,
   ink: InkMeasurer,
-  /** 展开档（`place/expand.ts` 展开过的行视图）：谱行按简谱引擎展开档的口径码页，见下面的 `slideBlock` */
+  /** 展开档（`place/expand.ts` 展开过的行视图）与成书：谱行按简谱引擎展开档的口径码页，见下面的 `slideBlock` */
   expanded = false,
 ): PlacedPage[] {
   // 行占满版心：行首最左的内容（数字落笔原点、升降号、歌词左缘）贴左缘，两端对齐后行末的占位右缘
@@ -256,7 +256,7 @@ export function layoutSong(
     firstTop = headerBottom + m.style.size.lyric - inkTop;
   }
   const otherTop = m.page.margin.top + m.page.firstSystemTop * 0.35;
-  // 展开档：同简谱引擎 `Layout.layoutVertically`——块按占位盒紧挨着码（块间 `staffDist`），放不满的页把行距摊开到 `systemSpread`、整块居中
+  // 展开档、成书：同简谱引擎 `Layout.layoutVertically`——块按占位盒紧挨着码（块间 `staffDist`），放不满的页把行距摊开到 `systemSpread`、整块居中
   const laid = expanded ? paginate(blocks, {
     pageTop: () => m.page.margin.top,
     bottom: bottomLimit,
@@ -272,6 +272,8 @@ export function layoutSong(
   return laid.map((pg, i) => ({
     song: songIndex,
     firstOfSong: i === 0,
+    // 成书量「这一页自然叠起来多高」（半页起排、两首同页紧排用，同简谱引擎各行盒高之和 + 行距下限）
+    ...(expanded ? { natural: pg.reduce((h, { block }) => h + block.bottom - block.top, 0) + Math.max(0, pg.length - 1) * m.style.vertical.staffDist } : {}),
     groups: pg.map(({ block, y }) => {
       shiftGroup(block.group, y);
       return block.group;

@@ -265,8 +265,8 @@ function rowOf(
  * 逐行装满（同 `Line.doLineBreak`）：按自然宽（紧排 + 歌词避让，不两端对齐）往行里收，放不下就退回到本行最后一条小节线之后断
  * （`‖:` 断在它前面）；本行一条小节线都没有才在小节中间断。只剩小节线的行并回上一行。返回各行在这一遍里的起点。
  */
-function fillLines(
-  row: RowView, forced: ReadonlyMap<number, boolean>, m: JianpuGrid, ink: InkMeasurer, width: number,
+export function fillLines(
+  row: ScoreLine, forced: ReadonlyMap<number, boolean>, m: JianpuGrid, ink: InkMeasurer, width: number,
   meter: SongView["metadata"]["meters"][number] | undefined,
 ): Array<{ start: number; page: boolean }> {
   const laid = layoutVoiceLine(row, m, { meter });

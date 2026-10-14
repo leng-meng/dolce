@@ -12,7 +12,7 @@
 //
 // 播放逐字高亮与双向定位：绘制时把每个音符与每个歌词音节的 PageItem 按**元素 id** 记进索引，
 // 由 ScorePainter 直接按 id 取用，不必反查 SVG，也不依赖对象身份（重新解析一遍 id 不变）。
-import { applyDocOptions, gridOf, keyLabelSize, type GridPage, type JianpuGrid } from "../metrics";
+import { applyDocOptions, contentWidth, gridOf, keyLabelSize, type GridPage, type JianpuGrid } from "../metrics";
 import { Font } from "../../font";
 import { Group } from "../../pageitem";
 import { syllableRun } from "../../../engrave/syllable";
@@ -27,7 +27,7 @@ import { originalInputOf } from "../input";
 import { applyBreaks } from "../../../model/breaks";
 import type { InkMeasurer, InkTextRole, PlacedScore } from "../place/model";
 import { layoutDocument } from "../place/song";
-import { reflowLineStarts } from "../place/reflow";
+import { foldLineStarts, naturalSpans, reflowLineStarts } from "../place/reflow";
 import type { OriginalCtx } from "./ctx";
 import { paintPage, systemLeft } from "./page";
 import { footerSpan, layoutFooters } from "./footer";
@@ -54,6 +54,11 @@ export interface OriginalDocumentConfig {
   readonly expanded?: boolean;
   /** 展开档：`.jpwabc` 的 `.Layout` 分页描述 */
   readonly breakDesc?: string | null;
+  /** 成书（`pdflayout/browser.ts::layoutBookDoc`）：原样档的内容，成行与纵向同展开档——照源断点成行、单行放不下才折（`foldLineStarts`），
+   *  谱行占位盒紧挨着码、放不满摊开，数字共基线、增时线「-」字；不放页眉、页脚、标题页（书级装饰由整本那一层加） */
+  readonly book?: boolean;
+  /** 成书量宽：不折行，另给第一首的自然横向区间（`OriginalDocumentLayout.spans`，调用方先清掉换行） */
+  readonly measure?: boolean;
 }
 
 /** 一份文档排好的原样页面与身份索引。 */
@@ -69,6 +74,8 @@ export interface OriginalDocumentLayout {
   readonly placed: PlacedScore;
   /** 展开档各首实际走的演唱顺序（`page-check` 的 P5 按它数遍数）；原样档为 null */
   readonly plans: ReadonlyArray<readonly PlayItem[] | null> | null;
+  /** `measure` 时：第一首各音（键为元素 id）的自然横向区间与版心宽 */
+  readonly spans?: { width: number; spans: Map<string | number, { x0: number; x1: number }> };
 }
 
 /** 排一份文档并生成全部页面（原 `PuPainter.load`）。 */
@@ -79,8 +86,9 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   const style = applyDocOptions(cfg.style, meta0?.fontSizes ?? [], meta0?.margins ?? [], cfg.userMargins);
   const m = gridOf(style, cfg.page);
   if (cfg.leftIndent) m.page.margin.left += cfg.leftIndent;
-  // 展开档的谱页不叠页眉：首组贴着上边距起（同简谱引擎 `fromScore`）
-  if (cfg.expanded) m.page.firstSystemTop = 0;
+  // 展开档、成书的谱页不叠页眉：首组贴着上边距起（同简谱引擎 `fromScore`）
+  const slide = !!(cfg.expanded || cfg.book);
+  if (slide) m.page.firstSystemTop = 0;
   // 展开档的演唱顺序：同简谱引擎展开档那一份（`forExpanded`：带歌词的声部在前、同号歌词顺延）
   const plays = cfg.expanded ? source.songs.map((_, i) => playDataOfSong(source, i, { forExpanded: true })) : null;
   const plans = plays ? plays.map((pd) => pd?.measures ?? null) : null;
@@ -95,11 +103,11 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     ink: style.page.color,
     lyricInk: style.page.color,
     foot: cfg.foot,
-    ...(cfg.expanded ? { slide: true } : {}),
+    ...(slide ? { slide: true } : {}),
   };
   // 展开档的谱页不叠页眉（标题另起一页）
   const headMeasure = headerMeasurer(m);
-  c.heads = cfg.expanded ? [] : input.songs.map((song) => placeHeader(song.metadata, m, headMeasure));
+  c.heads = slide ? [] : input.songs.map((song) => placeHeader(song.metadata, m, headMeasure));
   const headerBottoms = c.heads.map((h) => h.bottom);
   // 量具注入给排版（它不碰字体）。歌词量的是**画出来的**那串：与 paintSyllables 同一串挤压后的笔位，
   // 首尾留白的口径同简谱引擎的 `Lyric.headBlank / tailBlank`（横向避让的判据从那边整段搬来，见 place/spacing.ts）
@@ -166,19 +174,20 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   // 展开档：按演唱顺序逐遍切出、逐行装满（已按版心宽断好，不再走窄纸重断）
   const doc = plays ? expandView(input, plays, m, ink, cfg.breakDesc ?? null) : input;
   c.doc = doc;
-  if (!cfg.noReflow && !plans) {
-    const starts = reflowLineStarts(doc.songs, doc.idOf, m, ink);
+  // 成书：只折放不下的那几行，折点原位记（小节中间折的是一行里一条小节线都没有的长行）
+  if (!cfg.noReflow && !cfg.measure && !plans) {
+    const starts = cfg.book ? foldLineStarts(doc.songs, doc.idOf, m, ink) : reflowLineStarts(doc.songs, doc.idOf, m, ink);
     if (starts) {
       const clone = structuredClone(source);
       let changed = false;
       clone.songs.forEach((song, i) => {
         const ls = starts[i];
-        if (ls && applyBreaks(song, ls.map((id) => ({ id: id as ElementId })), { mid: "source", pages: "keep" })) changed = true;
+        if (ls && applyBreaks(song, ls.map((id) => ({ id: id as ElementId })), { mid: cfg.book ? "inline" : "source", pages: "keep" })) changed = true;
       });
       if (changed) return layoutOriginalDocument(clone, { ...cfg, noReflow: true, reflowSource: cfg.reflowSource ?? source });
     }
   }
-  const placed = layoutDocument(doc.songs, m, headerBottoms, ink, doc.songs.map((_, i) => footerSpan(c, i)), !!plans);
+  const placed = layoutDocument(doc.songs, m, headerBottoms, ink, doc.songs.map((_, i) => footerSpan(c, i)), slide);
   // 展开档：第一页是标题页（谱页从第二页起，页码不含它）
   if (plans) placed.pages.unshift({ groups: [], song: 0, firstOfSong: false, titlePage: true });
   c.placed = placed;
@@ -242,5 +251,6 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     view: doc,
     placed,
     plans,
+    ...(cfg.measure && doc.songs[0] ? { spans: { width: contentWidth(m), spans: naturalSpans(doc.songs[0], doc.idOf, m, ink) } } : {}),
   };
 }

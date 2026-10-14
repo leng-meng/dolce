@@ -144,6 +144,8 @@ export interface PlacedPage {
   headers?: Array<{ song: number; dy: number }>;
   /** 展开档的标题页（没有谱行，`compose` 按 `placeTitlePage` 画） */
   titlePage?: true;
+  /** 展开档、成书：本页各谱行占位盒高之和 + 行距下限（不摊开时的自然高） */
+  natural?: number;
 }
 
 export interface PlacedScore {

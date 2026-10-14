@@ -171,7 +171,8 @@ export function jianpuInputOfXml(song: Song): JScore {
   return { parts: [{ measures }], title, credit, playData };
 }
 
-function xmlTitleOf(song: Song): string {
+/** MusicXML 的曲名：`title` 类 credit 的首行，没有就 `work-title` / `movement-title`（成书取它，同 `jianpuInputOfXml` 的 `JScore.title`） */
+export function xmlTitleOf(song: Song): string {
   for (const c of song.credits ?? []) {
     if (c.type?.trim() !== "title") continue;
     const t = (c.words?.[0] ?? c.text.split("\n")[0]!).trim();

@@ -111,6 +111,11 @@ function clearBreaks(song: Song, pages: ApplyBreaksOptions["pages"]): void {
   }
 }
 
+/** 清掉整首的换行与换页（成书量容量、量自然宽之前：量的是「自然排下来」，不是原书怎么断）。 */
+export function clearSongBreaks(song: Song): void {
+  clearBreaks(song, "write");
+}
+
 /**
  * 把一组行首写进模型的换行位，**替换**原有的断行。改的是传进来的这首。
  *
