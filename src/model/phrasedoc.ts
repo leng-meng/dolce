@@ -10,10 +10,11 @@
 
 import { Fraction } from "../common/fraction";
 import type { BarStyle, StartStopDiscontinue } from "../score/enums";
-import { SECTION_WORD_RE, type PhraseChord, type PhraseMeasure } from "../score/phraseinput";
+import type { PhraseChord, PhraseMeasure } from "../score/phraseinput";
 import type { PlayMeasure } from "../score/playorder";
 import type { TimelineMeasure } from "../score/timeline";
 import type { Chord, ElementId, Measure, Song } from "./doc";
+import { sectionMarkOf } from "./helpers";
 import { midiPitch, topNote } from "./jianpu";
 
 interface LyricOut { text: string; number: number; refrain: boolean }
@@ -183,11 +184,7 @@ function measureOf(
       } else out.endingRight = b.ending.type as StartStopDiscontinue;
     }
   }
-  for (const d of m.directions ?? []) {
-    const t = (d.text ?? "").trim();
-    if (!t) continue;
-    if (d.type === "rehearsal" || (d.type === "words" && SECTION_WORD_RE.test(t))) out.sectionMark = t;
-  }
+  out.sectionMark = sectionMarkOf(m);
 
   const at = onsets(m);
   for (const el of m.elements) {

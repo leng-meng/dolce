@@ -7,13 +7,14 @@
 // 断点集合以这里拼出的对象为键，`idOf` 把它们换回元素 id。
 
 import { Fraction } from "../common/fraction";
-import type { ElementId, ScoreDoc } from "../model/doc";
+import type { ElementId, Measure as DocMeasure, ScoreDoc } from "../model/doc";
+import { sectionMarkOf } from "../model/helpers";
 import { BarStyle, StartStopDiscontinue } from "../score/enums";
 import { MusicCommon, applyJpPitch, type JpKeyState } from "../score/jppitch";
 import type { PhraseChord, PhraseMeasure, PhrasePart } from "../score/phraseinput";
 import { linesOfVoice, marksAt, nextSyllables, takesLyric, voiceNumbers } from "./ast";
 import type { LyricLine, Mark, NoteElement, ScoreLine } from "./ast";
-import { docView } from "./slots";
+import { docView, type SlotRef } from "./slots";
 
 /** `extend`：续记号，只试听填（`model/playsong.ts::markExtends`） */
 interface LyricOut { text: string; number: number; refrain: boolean; extend?: boolean }
@@ -187,7 +188,10 @@ export function buildMeasures(
     return m;
   };
 
+  /** 已读过段落标记的模型小节（小节中间换行时一个模型小节跨两行，只在头一段读） */
+  const sectionSeen = new Set<DocMeasure>();
   for (const line of lines) {
+    const refs = (line as ScoreLine & { refs?: readonly SlotRef[] }).refs;
     const lyrics: readonly LyricLine[] = renumberVerses ? distinctVerses(line.lyrics) : line.lyrics;
     const cursors = lyrics.map(() => 0);
     const voltas = line.marks.filter((mk) => mk.type === "volta");
@@ -270,6 +274,12 @@ export function buildMeasures(
       }
       closeVolta(mea);
       noteJumps(mea, false);
+      // 段落标记从模型小节读（`sectionMarkOf`，与 MusicXML 那条路 `phrasedoc.ts` 同一个判据）
+      const dm = refs?.[index]?.measure;
+      if (dm && !sectionSeen.has(dm)) {
+        sectionSeen.add(dm);
+        mea.sectionMark ??= sectionMarkOf(dm);
+      }
 
       const number = el.sound === "rhythm" ? "0" : String(el.pitch);
       const ch: ChordOut = {

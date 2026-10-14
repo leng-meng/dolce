@@ -127,6 +127,47 @@ export function measureDuration(measure: Measure): number {
   return max;
 }
 
+// ───────────────────────── 段落标记 ─────────────────────────
+
+/** 段落词（流行/敬拜谱常见的段落方框标记）。`<words>` 也用于表情记号(rit./dolce)，故只认这些词，
+ *  免把普通文字当段落；`<rehearsal>` 本就是排练/段落记号，一律收下。 */
+export const SECTION_WORD_RE =
+  /^(intro|verse|chorus|pre-?chorus|bridge|coda|outro|ending|interlude|solo|refrain|tag|前奏|主歌|副歌|间奏|尾奏|尾声|桥段|插曲)\s*\d*$/i;
+
+/** 段落词里标副歌起头的那几个。 */
+export const REFRAIN_WORD_RE = /^(chorus|refrain|副歌)/i;
+
+/** 一段文字是不是段落词：去掉谱面常见的括号（「【Chorus】」「(副歌)」「[Verse 2]」）再认。是就返回去掉括号的词。 */
+export function sectionWordOf(text: string | undefined): string | null {
+  const t = (text ?? "").trim().replace(/^[【\[（(]\s*/, "").replace(/\s*[】\]）)]$/, "");
+  return t && SECTION_WORD_RE.test(t) ? t : null;
+}
+
+/**
+ * 这一小节的段落标记（Intro/Verse/Chorus…），没有返回 null。**各格式同一个判据**，按乐句排版的段界、
+ * 展开档副歌前换页都从这里读：MusicXML 的 `<rehearsal>` / 段落词 `<words>` 在 `Measure.directions` 上，
+ * 123/ABC（`"^Chorus"`）与文本谱的段落注记在和弦（或增时线）的 `sectionWord` 上。
+ * 标记具体挂在哪个音上不作数（常挂在下一段的弱起、甚至上一句收尾那个音上）：消费者只把它当大致位置，
+ * 真正的段界由断句按乐句定（`phrase.ts::aroundSectionPickup`）、展开档就近对到行首。
+ */
+export function sectionMarkOf(m: Measure): string | null {
+  for (const d of m.directions ?? []) {
+    const t = (d.text ?? "").trim();
+    if (!t) continue;
+    if (d.type === "rehearsal") return t;
+    const w = d.type === "words" ? sectionWordOf(t) : null;
+    if (w !== null) return w;
+  }
+  for (const el of m.elements) {
+    if (el.kind !== "chord") continue;
+    for (const host of [el, ...(el.sustains ?? [])]) {
+      const w = sectionWordOf(host.sectionWord);
+      if (w !== null) return w;
+    }
+  }
+  return null;
+}
+
 // ───────────────────────── 换行口径 ─────────────────────────
 
 /** 换行种类。 */

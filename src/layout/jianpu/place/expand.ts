@@ -8,6 +8,8 @@ import { walkPlay } from "../../../jianpu/expand";
 import { Fraction } from "../../../common/fraction";
 import type { PlayItem } from "../../../score/playorder";
 import { distinctVerses } from "../../../pu/phrasesong";
+import type { Measure as DocMeasure } from "../../../model/doc";
+import { REFRAIN_WORD_RE, sectionMarkOf } from "../../../model/helpers";
 import { elementQuarters, takesLyric, tupletRatios, voiceNumbers, type BarlineElement, type ScoreLine, type LyricLine, type LyricSyllable, type Mark, type MusicElement } from "../../../pu/ast";
 import type { DocView, PageView, RowView, SongView, SystemView } from "../../../pu/slots";
 import { contentWidth, type JianpuGrid } from "../metrics";
@@ -572,19 +574,35 @@ export function expandSong(
   }
   const width = contentWidth(m);
   const meter = song.metadata.meters[0];
-  // 副歌起头的小节：标了「副歌」，或这一小节起只剩一行词、前面有字的小节不止一行（250《主，差遣我》）
+  // 副歌起头的小节：这一小节起只剩一行词、前面有字的小节不止一行（250《主，差遣我》），在它前面断行、换页。
+  // 标了副歌的（模型小节上的段落标记 `sectionMarkOf`，各格式同一个判据：123 的 `"^Chorus"`、文本谱的「(副歌)」、
+  // MusicXML 的段落词）**只当大致位置**：标记常挂在副歌弱起上、甚至上一句收尾的那个小节里（「脚步」的【Chorus】
+  // 标在「路。求给我」那一小节），逐音去认弱起不稳——换页落在离它最近的行首（源里的行首、按乐句重排后就是乐句起头），
+  // 即标记小节或下一小节里起头的第一行（`refrainMark`）；源里那附近没有行首的才照旧在标记小节前断行
   const slotKey = (sl: Slot): string => `${sl.row}:${sl.idx}`;
   const measureOf = new Map<string, number>();
   slices.forEach((sl, k) => { for (const x of sl) measureOf.set(slotKey(x), k); });
   const refrainStart = new Set<number>();
+  const refrainMark = new Set<number>();
   {
+    // 源里各行起头落在哪个小节（行的第一个符号所在的那一小节）
+    const rowStartMeasures = new Set<number>();
+    const seenRow = new Set<number>();
+    slices.forEach((sl, k) => { for (const x of sl) if (!seenRow.has(x.row)) { seenRow.add(x.row); rowStartMeasures.add(k); } });
     let prevLines = 0;
+    const seenMeasure = new Set<DocMeasure>();
     slices.forEach((sl, k) => {
       const withText = new Set<LyricLine>();
       let marked = false;
       for (const x of sl) {
-        const el = rows[x.row]!.elements[x.idx]!;
-        if (el.kind === "note" && el.annotation?.includes("副歌")) marked = true;
+        const ref = rows[x.row]!.refs[x.idx];
+        if (ref && !seenMeasure.has(ref.measure)) {
+          seenMeasure.add(ref.measure);
+          if (REFRAIN_WORD_RE.test(sectionMarkOf(ref.measure) ?? "")) {
+            if (rowStartMeasures.has(k) || rowStartMeasures.has(k + 1)) refrainMark.add(k);
+            else marked = true;
+          }
+        }
         const c = cursorOf[x.row]![x.idx]!;
         if (c >= 0) for (const l of lyricsOf[x.row]!) if (l.syllables[c]?.text) withText.add(l);
       }
@@ -622,7 +640,15 @@ export function expandSong(
     const whole = rowOf(pass, 0, pass.slots.length, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners, bars(pass));
     const lines = fillLines(whole, pass.breaks, m, ink, width, meter, { hard: pass.hard, skipShort: !layout });
     // 没有 `.Layout` 的：一页最多 4 行，优先在副歌起头处换页，否则按行数均分（不留一页一行）
-    if (!layout) pageByRows(lines, (n) => refrainStart.has(measureOf.get(slotKey(pass.slots[lines[n]!.start]!)) ?? -1));
+    if (!layout) {
+      const startMeasure = (n: number): number => measureOf.get(slotKey(pass.slots[lines[n]!.start]!)) ?? -1;
+      const markHeads = new Set<number>();
+      for (const k of refrainMark) {
+        const n = lines.findIndex((_, n) => startMeasure(n) >= k);
+        if (n > 0 && startMeasure(n) <= k + 1) markHeads.add(n);
+      }
+      pageByRows(lines, (n) => markHeads.has(n) || refrainStart.has(startMeasure(n)));
+    }
     // 一遍一页起头；遍内源里的换页另起一页
     let groups: SystemView[] = [];
     lines.forEach((l, n) => {
