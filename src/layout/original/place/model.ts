@@ -24,6 +24,8 @@ export interface PlacedItem {
   dy?: number;
   /** 小节线不画（分声部前的空声部，见 song.ts::hideEmptyBarlines）；占位照旧 */
   noBarline?: true;
+  /** 小节线上端截到这里（相对基线，只往下截）：弧罩住它时停在弧底之下（`marks.ts::clipBarlinesUnderSlurs`） */
+  clipTop?: number;
 }
 
 /** 一条跨若干符号的记号（弧线 / 多连音 / 跳房子 / 渐强渐弱），已换算成行内坐标。 */
@@ -35,6 +37,8 @@ export interface PlacedMark {
   x1: number;
   /** 纵向落点（相对该声部的音符基线，负为上）：弧线/多连音是弧端那条线（`placeMarks`），松叶是底边、房号是横线（`band.ts`） */
   y?: number;
+  /** 弧罩住的音符够多（`arc.flatNotes`，成书用），不论跨度都画扁平式（同 `Line.addSlurTie`） */
+  flat?: true;
   /** 嵌套层数或 `+` 抬高级别 */
   level: number;
   /** 左端续自上一行 / 右端续到下一行（弧线与跳房子支持跨行） */

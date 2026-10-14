@@ -8,6 +8,7 @@ import { Point, Rect } from "../../../common/geom";
 import { Slur } from "../../pageitem";
 import { bandTop, stackUpperBand, type BandItem } from "../../../engrave/upperband";
 import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
+import { JP_HAIRPIN, jpHairpinLineWidth } from "../../../engrave/hairpin";
 import { tupletDigits } from "../../../engrave/tuplet";
 import { endingDrop, endingLabelDx, labelBaselineOf } from "../../../engrave/ending";
 import { stackBottom, stackTop as stackTopOf } from "../../../engrave/stack";
@@ -15,6 +16,7 @@ import { barlineSpan, bracketLineWidth, jianpuSlurStyle, type JianpuGrid } from 
 import type { InkMeasurer, PlacedItem, PlacedLayer, PlacedMark, PlacedText } from "./model";
 import { articStack, entryTop, noteBeams, stackTop } from "./vertical";
 import { type ChordSpan, sectionWordOf, sectionWordSlot } from "./sectionword";
+import { clipBarlinesUnderSlurs } from "./marks";
 import { barlineBox } from "./spacing";
 
 /** 一个声部（或并排块上行）的上方带排完的结果。 */
@@ -223,7 +225,9 @@ export function placeBand(
   }
 
   // ---- 层 1.5：松叶（用户定：松叶在和弦之上——起始落点贴音，跨度里有和弦、注释撞上才抬到它们之上） ----
-  const hairpinGap = Math.max(gap, nh * 0.3) + m.style.stroke.hairpin / 2;
+  // 起始落点同简谱引擎（`Line.addWedges`）：跨度里音符那一摞的墨迹顶之上一道叠层的空；开口与线宽见 `engrave/hairpin.ts::JP_HAIRPIN`
+  const hairpinLw = jpHairpinLineWidth(m.style.stroke.hairpin, nh);
+  const hairpinHeight = nh * JP_HAIRPIN.half * 2 + hairpinLw;
   for (const mk of marks) {
     if (mk.mark.type !== "crescendo" && mk.mark.type !== "decrescendo") continue;
     let top = Infinity;
@@ -232,11 +236,11 @@ export function placeBand(
       top = Math.min(top, entryTop(it.element, m) + (it.dy ?? 0));
     }
     if (!Number.isFinite(top)) top = -nh / 2 + (mk.dy ?? 0);
-    // `y` 记松叶的**底边**（compose/marks.ts 照它画）
-    mk.y = top - hairpinGap - (mk.level - 1) * m.note.levelStep;
+    // `y` 记松叶墨迹的**底边**（compose/marks.ts 照它画）
+    mk.y = top - m.ink.stack.gap - (mk.level - 1) * m.note.levelStep;
     const x1 = Math.max(mk.x1, mk.x0 + 6);
     boxes.push({
-      key: mk, x0: mk.x0, x1, top: mk.y - m.note.hairpinOpening - m.style.stroke.hairpin, bottom: mk.y,
+      key: mk, x0: mk.x0, x1, top: mk.y - hairpinHeight, bottom: mk.y,
       layer: 1.5, rank: x1 - mk.x0, kind: "wedge", ...lower(mk),
     });
   }
@@ -293,6 +297,8 @@ export function placeBand(
   for (const mk of marks) {
     if (mk.y !== undefined && mk.dy !== undefined && mk.mark.type !== "slur" && mk.mark.type !== "tuplet") mk.y -= mk.dy;
   }
+  // 弧定死（堆叠可能抬过）之后，罩住的小节线上端截到弧底之下
+  clipBarlinesUnderSlurs(items, marks, m);
 
   // ---- 头顶：音符那一摞、换气、伴奏括弧、带里一切 ----
   let top = -nh / 2;

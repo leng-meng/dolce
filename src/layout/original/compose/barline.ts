@@ -1,6 +1,7 @@
 // 小节线（含反复点、跳转记号）的绘制。
 import { Font } from "../../font";
 import { Group } from "../../pageitem";
+import { Point } from "../../../common/geom";
 import { BarlineGlyph } from "../../../engrave/barline";
 import { puBarlineSpec } from "../barspec";
 import { TIME_SIG_PAD_EM } from "../place/spacing";
@@ -61,6 +62,11 @@ export function paintBarline(c: OriginalCtx,
     dotRadius: m.style.dot.repeat,
     color: c.ink,
   });
+  // 弧罩住的线上端截到弧底之下（定位端定的 `clipTop`，只往下截、不越过下缘）；只截竖线，反复点仍按整条线的中段摆
+  if (it.clipTop !== undefined) {
+    const top = Math.max(span.top, Math.min(it.clipTop, span.bottom));
+    for (const l of r.lines) l.p0 = new Point(l.p0.x, top);
+  }
   // BarlineGlyph 的 x 从 0 起；文本谱的小节线是**居中于锚点**的
   const ox = x - r.width / 2;
   // 临时拍号：`|"p:2/4"`，画在这条小节线组的右缘之后、前空一格（占位同口径，见 place/spacing.ts::barlineBox / meterAdvance）

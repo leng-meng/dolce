@@ -13,7 +13,7 @@ import type { Font } from "./font";
 import { measureDuration, type JChord, type JDirection, type JMeasure, type JNote, type JScore } from "./input";
 import { DYNAMIC_SIZE } from "../engrave/dynamics";
 import { getOrNull, PageItem, Group, GraphicPath, TextFrame, SmuflText, JpNumber, Lyric, Tie, BeamLine, type SlurTieBase } from "./pageitem";
-import { hairpinPath } from "../engrave/hairpin";
+import { hairpinPath, JP_HAIRPIN, jpHairpinHalves, jpHairpinLineWidth } from "../engrave/hairpin";
 import { latinWordBreak } from "../engrave/syllable";
 import { beatGroupIndex, beatGroupSize, pickupOffset } from "../engrave/beatgroup";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, arcRise, jpArcY, type SlurStyle } from "../engrave/arc";
@@ -1358,16 +1358,15 @@ export class Line {
   /**
    * 渐强/渐弱：画在音符上方（同原样文档），底边落在这一段音符最高的那一摞（含弧端让位）之上，
    * 与弧、三连音、奏法记号一起进上方带第 0 层堆叠（`collectBandItems`）。
-   * 跨行的照弧的口径：起头那行画到行末、开口只张到六成；收尾那行从行首接着张到全开。
-   * 尺寸按数字墨迹高 H：全开口 0.7 H（原样文档 7pt / 约 10pt 墨迹高），线宽 0.07 H。
+   * 几何（起止、开口、线宽、跨行那两截）见 `engrave/hairpin.ts::JP_HAIRPIN`，与原样文档同一份。
    */
   private addWedges(opt: LayoutOptions): void {
     const notes = this.entries.filter((e): e is NoteEntry => e instanceof NoteEntry);
     if (!notes.length) return;
     const H = opt.numberBound("1").height;
-    const half = H * 0.35, lw = opt.hairpinWidth > 0 ? opt.hairpinWidth : H * 0.07, part = 0.6;
+    const lw = jpHairpinLineWidth(opt.hairpinWidth, H);
     const cxOf = (e: NoteEntry): number => e.group.x + e.number!.x + e.number!.cx;
-    const draw = (x0: number, x1: number, type: "crescendo" | "diminuendo", f0: number, f1: number): void => {
+    const draw = (x0: number, x1: number, type: "crescendo" | "diminuendo", openLeft: boolean, openRight: boolean): void => {
       if (x1 <= x0) return;
       let bottom = Infinity;
       for (const e of notes) {
@@ -1376,8 +1375,9 @@ export class Line {
         bottom = Math.min(bottom, this.arcTop(e, opt, false) - opt.stack.gap); // 行坐标：数字基线在 0，同弧（`addSlurTie`）
       }
       if (!Number.isFinite(bottom)) return;
+      const half = H * JP_HAIRPIN.half;
       const y = bottom - half;
-      const [h0, h1] = type === "crescendo" ? [half * f0, half * f1] : [half * f1, half * f0];
+      const [h0, h1] = jpHairpinHalves(type, H, openLeft, openRight);
       const item = hairpinPath({ x0, x1, y, half0: h0, half1: h1, lineWidth: lw, color: opt.color });
       item.classes.add("hairpin");
       this.group.add(item);
@@ -1388,15 +1388,15 @@ export class Line {
     for (const e of new Set(this.chordEntry.values())) {
       for (const w of e.chord.wedges ?? []) {
         const end = this.chordEntry.get(w.end);
-        const x0 = cxOf(e) - H * 0.3;
-        if (end) draw(x0, cxOf(end) + H * 0.3, w.type, 0, 1);
-        else draw(x0, lineRight, w.type, 0, part);
+        const x0 = cxOf(e) - H * JP_HAIRPIN.pad;
+        if (end) draw(x0, cxOf(end) + H * JP_HAIRPIN.pad, w.type, false, false);
+        else draw(x0, lineRight, w.type, false, true);
       }
     }
     for (const w of this.carriedWedges) {
       const end = this.chordEntry.get(w.end);
       if (!end) continue;
-      draw(Math.max(0, cxOf(notes[0]!) - H * 0.9), cxOf(end) + H * 0.3, w.type, part, 1);
+      draw(Math.max(0, cxOf(notes[0]!) - H * JP_HAIRPIN.carryLead), cxOf(end) + H * JP_HAIRPIN.pad, w.type, true, false);
     }
   }
 

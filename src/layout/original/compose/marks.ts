@@ -6,9 +6,7 @@ import { addEndingBracket, endingDrop, endingLabelDx } from "../../../engrave/en
 import { TupletGlyph } from "../../../engrave/tuplet";
 import { sustainDash } from "../../../engrave/dash";
 import { beamY, highDotY, lowDotY } from "../../../engrave/stack";
-import { hairpinPath } from "../../../engrave/hairpin";
-import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
-import { DYNAMICS } from "../../../pu/glyph";
+import { hairpinPath, JP_HAIRPIN, jpHairpinHalves, jpHairpinLineWidth } from "../../../engrave/hairpin";
 import { bracketLineWidth, jianpuSlurStyle } from "../metrics";
 import type { PlacedLayer, PlacedMark } from "../place/model";
 import { noteBeams } from "../place/vertical";
@@ -18,9 +16,10 @@ import { paintVoice } from "./page";
 
 /** 弧线：直接用简谱谱面那套 SlurTieBase（月牙形，中间厚两端尖），两处观感一致。
  *  弧高（含超长跨度改扁平的阈值）由 jianpuSlurStyle 定，与 layout 的纵向预留同源。 */
-function paintArc(c: OriginalCtx, root: Group, x0: number, x1: number, y: number): Slur {
+function paintArc(c: OriginalCtx, root: Group, x0: number, x1: number, y: number, flat = false): Slur {
   const arc = new Slur();
-  arc.init(new Point(x0, y), new Point(x1, y), jianpuSlurStyle(c.metrics, c.ink));
+  const style = jianpuSlurStyle(c.metrics, c.ink);
+  arc.init(new Point(x0, y), new Point(x1, y), flat ? { ...style, forceFlat: true } : style);
   arc.update();
   root.add(arc);
   return arc;
@@ -33,7 +32,7 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
   switch (mk.mark.type) {
     case "slur": {
       const y = baseline + (mk.y ?? -m.ink.noteHeight / 2);
-      const arc = paintArc(c, root, x0, x1, y);
+      const arc = paintArc(c, root, x0, x1, y, mk.flat === true);
       // 弧没有自己的 id，可视化编辑按「起点:终点」认它（同 `Tie.startId`）。
       // **不能用 `mk.mark.start/end`**——那是行内下标，元素 id 要从两端实际落在的符号上取
       const sid = mk.startEl && c.doc?.idOf.get(mk.startEl);
@@ -64,31 +63,14 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
     }
     case "crescendo":
     case "decrescendo": {
-      const half = m.note.hairpinOpening / 2;
-      // `mk.y` 是松叶底边（上方带按墨迹堆好的，place/band.ts）
-      const y = baseline + (mk.y ?? -m.ink.noteHeight / 2) - half - m.style.stroke.hairpin / 2;
-      const open = mk.mark.type === "crescendo";
-      // 起点音上有力度（`9>&mf`）：松叶从力度字右边起（同原版 `mf>`），不从音符左边压过去
-      // 收尾音上有力度（`9)!&pp`）同理：松叶收在力度字左边
-      let hx0 = x0;
-      let hx1 = x1;
-      const dynFont = new Font("Bravura", c.digitFont.size * DYNAMIC_SIZE);
-      const dynOf = (el: PlacedMark["startEl"]) => el?.kind === "note" ? el.ornaments.find((o) => DYNAMICS[o.name]) : undefined;
-      const spread = m.ink.noteHeight * 0.55; // placeMarks 给松叶往外扩的那半个字宽
-      const d0 = mk.openLeft ? undefined : dynOf(mk.startEl);
-      if (d0) {
-        const after = x0 + spread + dynFont.measureText(DYNAMICS[d0.name]!) / 2 + m.ink.noteHeight * 0.25;
-        if (after < hx1 - m.ink.noteHeight) hx0 = after;
-      }
-      const d1 = mk.openRight ? undefined : dynOf(mk.endEl);
-      if (d1) {
-        const before = x1 - spread - dynFont.measureText(DYNAMICS[d1.name]!) / 2 - m.ink.noteHeight * 0.25;
-        if (before > hx0 + m.ink.noteHeight) hx1 = before;
-      }
+      // 横向范围（含让开起止音上的力度字）与 `mk.y`（松叶墨迹底边）都在定位端定好（place/marks.ts::wedgeSpan、place/band.ts）；
+      // 开口与线宽同简谱引擎（engrave/hairpin.ts::JP_HAIRPIN），跨行那两截各张到几成见 `jpHairpinHalves`
+      const nh = m.ink.noteHeight;
+      const lw = jpHairpinLineWidth(m.style.stroke.hairpin, nh);
+      const y = baseline + (mk.y ?? -nh / 2) - lw / 2 - nh * JP_HAIRPIN.half;
+      const [half0, half1] = jpHairpinHalves(mk.mark.type === "crescendo" ? "crescendo" : "diminuendo", nh, mk.openLeft, mk.openRight);
       // 画法走公共那一份（engrave/hairpin.ts，与五线谱同一笔）
-      const hp = hairpinPath({
-        x0: hx0, x1: hx1, y, half0: open ? 0 : half, half1: open ? half : 0, lineWidth: m.style.stroke.hairpin, color: c.ink,
-      });
+      const hp = hairpinPath({ x0, x1, y, half0, half1, lineWidth: lw, color: c.ink });
       hp.classes.add("hairpin"); // 同简谱引擎（`Line.addWedges`）；叶子的类名不进 SVG，只给页面树上的检查脚本认
       root.add(hp);
       break;

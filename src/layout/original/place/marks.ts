@@ -4,7 +4,10 @@ import { jianpuSlurRise, type JianpuGrid } from "../metrics";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, jpArcY } from "../../../engrave/arc";
 import type { InkMeasurer, PlacedItem, PlacedMark } from "./model";
 import { articStack, stackTop } from "./vertical";
-import { barlineLines } from "./spacing";
+import { barlineBox, barlineLines } from "./spacing";
+import { JP_HAIRPIN } from "../../../engrave/hairpin";
+import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
+import { DYNAMICS } from "../../../pu/glyph";
 
 /** 把记号的元素下标区间换算成行内 x 区间；弧线、多连音的 y 也在这里定（跳房子、松叶的 y 见 band.ts）。 */
 export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid, ink: InkMeasurer): PlacedMark[] {
@@ -40,10 +43,9 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid,
     const dx = isArc ? m.ink.noteHeight / 0.7 / ARC_CHAIN_INSET_DIV : 0;
     const chainedLeft = voice.marks.some((o) => o !== mark && o.end === mark.start);
     const chainedRight = voice.marks.some((o) => o !== mark && o.start === mark.end);
-    // 渐强渐弱要**包住**起止音符（原版里楔尖就落在音符下方），所以往外扩半个字宽；
-    // 跳房子同样往外扩；弧线相反，端点落在墨迹中心。
+    // 跳房子往外扩；弧线相反，端点落在墨迹中心。松叶另算（`wedgeSpan`）
     const isWedge = mark.type === "crescendo" || mark.type === "decrescendo";
-    const spread = isWedge ? m.ink.noteHeight * 0.55 : m.note.beamHalfSpan;
+    const spread = m.note.beamHalfSpan;
     const padLeft = isArc ? (chainedLeft ? dx : 0) : -spread;
     const padRight = isArc ? (chainedRight ? dx : 0) : -spread;
     // 跳房子的竖脚**对齐小节线的线位**（同简谱引擎 `Line.endingSpan`）：起点取房内首音之前那条线的最后一根、
@@ -68,6 +70,7 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid,
       startEl: a.element,
       endEl: b.element,
     };
+    if (isWedge) Object.assign(placed, wedgeSpan(items, a, b, openLeft, openRight, m, ink));
     if (mark.type === "tuplet" && m.style.look.tupletStyle === "bracket") {
       // 连音括线（同 `Line.addTuplet`）：**跨度里每个音**那一摞（含高八度点、临时记号、奏法记号）的墨迹顶之上一道空，
       // 不只看两端（中间那个音带升号时只看两端，括线就压在升号上）。两段弧风格仍按下面的「简谱弧只看起止」
@@ -80,6 +83,14 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid,
       if (!Number.isFinite(top)) top = Math.min(stackTop(a.element, m), stackTop(b.element, m));
       placed.y = top - gap - (level - 1) * m.note.levelStep;
     } else if (mark.type === "slur" || mark.type === "tuplet") {
+      // **按罩住的音符数改扁**（`slur-flat-notes`，同 `Line.slurNoteCount`）：跨度那条阈值是物理宽度，音符密的谱行上够不着
+      // （91《我灵镇静》罩着五六个十六分音符的弧）。数的是音符（含两端），增时线不另算
+      const flatNotes = m.style.arc.flatNotes;
+      if (mark.type === "slur" && flatNotes > 0) {
+        let n = 0;
+        for (const it of items) if (it.srcIndex >= a.srcIndex && it.srcIndex <= b.srcIndex && it.element.kind === "note") n++;
+        if (n >= flatNotes) placed.flat = true;
+      }
       // 简谱弧（engrave/arc.ts，三条简谱路同一条；多连音的两段弧也是弧）：只看起止两个音——两摞的墨迹顶
       // （终点算上临时记号）取高者，再往上一道叠层的空；源码里的 `+` 抬高级别照旧按 level 上移
       placed.y = jpArcY(stackTop(a.element, m, false), stackTop(b.element, m), m.ink.stack.gap)
@@ -103,6 +114,66 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid,
   }
   // 跳房子、松叶的 y 按上方带堆叠的结果定（band.ts::placeBand）
   return out;
+}
+
+/**
+ * 松叶的横向范围（搬 `Line.addWedges`，几何见 `engrave/hairpin.ts::JP_HAIRPIN`）：起止在音符墨迹中心外 0.3 个墨迹高；
+ * 跨到下一行的画到行末那个音的右缘，续过来的从行首第一个音左 0.9 个墨迹高起。
+ * 起止音上有力度（`9>&mf`）：从力度字右边起、收在力度字左边（同原版 `mf>`；力度字居中在音上，见 band.ts::placeDirections），
+ * 让完太短（不足一个墨迹高）就不让。
+ */
+function wedgeSpan(
+  items: readonly PlacedItem[], a: PlacedItem, b: PlacedItem, openLeft: boolean, openRight: boolean, m: JianpuGrid, ink: InkMeasurer,
+): { x0: number; x1: number } {
+  const nh = m.ink.noteHeight;
+  const notes = items.filter((it) => it.element.kind === "note" || it.element.kind === "sustain");
+  const firstNote = notes[0] ?? a;
+  const lastNote = notes[notes.length - 1] ?? b;
+  let x0 = openLeft ? Math.max(0, firstNote.x - nh * JP_HAIRPIN.carryLead) : a.x - nh * JP_HAIRPIN.pad;
+  let x1 = openRight ? lastNote.x + ink.digit("1").advance / 2 : b.x + nh * JP_HAIRPIN.pad;
+  const dynWidth = (it: PlacedItem): number => {
+    const el = it.element;
+    if (el.kind !== "note") return 0;
+    const fs = m.style.size.note * DYNAMIC_SIZE;
+    const ws = el.ornaments.filter((o) => DYNAMICS[o.name]).map((o) => ink.smufl(DYNAMICS[o.name]!, fs).width);
+    return ws.length ? Math.max(...ws) : 0;
+  };
+  const w0 = openLeft ? 0 : dynWidth(a);
+  if (w0 > 0) {
+    const after = a.x + w0 / 2 + nh * 0.25;
+    if (after < x1 - nh) x0 = after;
+  }
+  const w1 = openRight ? 0 : dynWidth(b);
+  if (w1 > 0) {
+    const before = b.x - w1 / 2 - nh * 0.25;
+    if (before > x0 + nh) x1 = before;
+  }
+  return { x0, x1 };
+}
+
+/**
+ * **弧下截小节线**（搬 `Line.clipBarlinesUnderSlurs`）：小节线顶在基线上 3/4 个小节线高，比不带高音点的弧端还高，
+ * 跨小节线的弧（上小节末音连到下小节，最常见）会被线从上面戳穿。弧（含延音线、多连音的两段弧）罩住的小节线，
+ * 上端截到弧底之下半道叠层的空。弧底按弧端那条线（加半个弧端线宽）取，不解贝塞尔：保守、绝不相交。
+ * 要在上方带堆叠之后调（弧可能被抬）；并排块里只截同一行（`dy` 相同）的线。
+ */
+export function clipBarlinesUnderSlurs(items: readonly PlacedItem[], marks: readonly PlacedMark[], m: JianpuGrid): void {
+  const arcs = marks.filter((mk) => mk.y !== undefined && isArcMark(mk.mark)
+    && !(mk.mark.type === "tuplet" && m.style.look.tupletStyle === "bracket"));
+  if (arcs.length === 0) return;
+  const pad = m.style.stroke.slurOutline / 2 + m.ink.stack.gap / 2;
+  for (const it of items) {
+    if (it.element.kind !== "barline") continue;
+    const box = barlineBox(it.element, m);
+    if (!box) continue;
+    const x0 = it.x - box.left, x1 = it.x + box.right;
+    let top = -Infinity;
+    for (const mk of arcs) {
+      if ((mk.dy ?? 0) !== (it.dy ?? 0) || mk.x1 < x0 || mk.x0 > x1) continue;
+      top = Math.max(top, mk.y! + pad);
+    }
+    if (Number.isFinite(top)) it.clipTop = top;
+  }
 }
 
 export function isArcMark(mk: Mark): boolean {

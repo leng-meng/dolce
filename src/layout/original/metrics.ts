@@ -44,8 +44,6 @@ export interface JianpuMetrics {
     beamHalfSpan: number;
     /** 源码里 `+` 抬高级别每级上移多少（记号先按级预抬再进上方带堆叠，place/band.ts） */
     levelStep: number;
-    /** 渐强渐弱楔形的开口高度 */
-    hairpinOpening: number;
   };
   /** 页头逐项落位（基线 y）。 */
   head: {
@@ -81,7 +79,6 @@ const GRID = {
     augDotStep: 12.5,
     beamHalfSpan: 6,
     levelStep: 6,
-    hairpinOpening: 7,
   },
   head: { titleBaseline: 110, creditBaseline: 175, creditLineHeight: 21, keyMeterBaseline: 176 },
 } as const;
