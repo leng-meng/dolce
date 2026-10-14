@@ -2215,7 +2215,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   private _puPhraseMeasure(): FitMeasure | null {
     const view = this.layoutMode;
     if (view === "original") {
-      const doc = this.currentScoreDoc();
+      const doc = this.docFormat === "jpwabc" ? this._jpwDoc : this.currentScoreDoc();
       if (this.docFormat === "pu" || !doc || !singleVoice(doc)) return null;
     }
     const sheet = this.styleOf(view);

@@ -885,7 +885,9 @@ function cutsThroughSpan(part: PhrasePart, mi: number): boolean {
  */
 function evenLayout(part: PhrasePart, breaks: PhraseBreaks, cells: number, fit?: FitMetric): PhraseBreaks {
   const out = cloneBreaks(breaks);
-  if (cells <= 0 || !part.measures.length) return out;
+  // 有真实尺子时格数可以是 0（编辑器那条路只给尺子）：照尺子切，别原样返回——否则放不下的乐句行原样交出去，
+  // 原样档整首按宽度重断、乐句全丢（「脚步」123 在原样档）
+  if (!new Fit(fit, cells).on || !part.measures.length) return out;
   applyCapacityCuts(part, out, cells, { useMidBreaks: true, avoidSpans: true, fit });
   mergeSliverLines(part, out, true, cells, fit);
   return out;

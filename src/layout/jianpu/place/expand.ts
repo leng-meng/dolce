@@ -66,11 +66,11 @@ interface Pass {
 
 /**
  * 源里的换行：每行（末行除外）收尾处断，行是源里一页的末行就换页（`[fenye]`，同 `pageEnds`）。返回「这个符号之后断」→ 是否换页。
- * 断在哪：`.jpwabc` 断在行末那个符号之后（同 `jianpuinput.ts` 的 `breakAfterChord`），其余格式断在行末所在那个小节的末尾
+ * 断在哪：`exact(r)` 的行断在行末那个符号之后（同 `jianpuinput.ts` 的 `breakAfterChord`），其余断在行末所在那个小节的末尾
  * （同 `rowsPart` 的 `breakAtMeasureEnd`，行在小节中间结束就断在小节末）。小节被 `limit` 截掉尾巴时，断点随尾巴一起不要（同 `Line.load`）。
  */
 function sourceBreaks(
-  slices: readonly Slot[][], rows: readonly RowView[], pageEndRows: ReadonlySet<number>, exact: boolean,
+  slices: readonly Slot[][], rows: readonly RowView[], pageEndRows: ReadonlySet<number>, exact: (r: number) => boolean,
 ): Map<string, boolean> {
   const measureOf = new Map<string, number>();
   slices.forEach((sl, k) => { for (const s of sl) measureOf.set(`${s.row}:${s.idx}`, k); });
@@ -78,7 +78,7 @@ function sourceBreaks(
   rows.forEach((row, r) => {
     if (r === rows.length - 1 || row.elements.length === 0) return;
     let key = `${r}:${row.elements.length - 1}`;
-    if (!exact) {
+    if (!exact(r)) {
       const sl = slices[measureOf.get(key) ?? -1];
       const last = sl?.[sl.length - 1];
       if (!last) return;
@@ -554,7 +554,13 @@ export function expandSong(
       if (inline || atMeasure) pageEndRows.add(r);
     });
   }
-  const breaks = sourceBreaks(slices, rows, pageEndRows, exactBreaks);
+  // 行在小节中间收尾的：`.jpwabc` 一律原位断；其余格式只在源文写明了小节中间换行（行末那个和弦带 `lineBreakAfter`，
+  // 123/ABC 小节中间的 `$`、按乐句重排写回的断点）时原位断——文本谱一行排不下自己在小节中间折的不算，照旧顺延到小节末
+  const inlineEnd = (r: number): boolean => {
+    const chord = [...rows[r]!.refs].reverse().find((ref) => ref.chord)?.chord;
+    return !!chord && (chord.lineBreakAfter !== undefined || (chord.sustains ?? []).some((su) => su.lineBreakAfter !== undefined));
+  };
+  const breaks = sourceBreaks(slices, rows, pageEndRows, (r) => exactBreaks || inlineEnd(r));
   const marks = logicalMarks(rows);
   const seen = new Set<number>();
   let unrolled = false;

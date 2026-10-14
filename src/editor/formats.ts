@@ -145,7 +145,7 @@ type RelayoutPart =
      * （`score/phrase.ts`），各格式的差别只在写回那一步：文本谱只搬原文片段（`pu/relayout.ts`），
      * 123/ABC 把断点写进模型再整份重出，`.jpwabc` 只挪 `.Voice` 里的 `$`（见 `model/relayout.ts`）。
      *
-     * @param measure 行长尺子（展开档才有；没有就按出厂的小节数目标断，也就是一句一行）
+     * @param measure 行长尺子（文本谱与多声部的原样档不给，见 `App._puPhraseMeasure`；没有就按出厂的小节数目标断，也就是一句一行）
      * @returns 新原文；没有可重排的曲行时原样返回 `text`
      */
     relayoutText(text: string, measure: FitMeasure | null): string;
@@ -188,11 +188,11 @@ const JPWABC: FormatAdapter = {
   caps: { textEditor: true, layout: "jpwabc", phraseRelayout: true },
   reload: (host, text) => host.reloadJpwabc(text),
   // `.jpwabc` 是分节文件：只重切 `.Voice` 的行，别的节（样式、歌词、分页描述）一个字不动。
-  // 尺子不用：`.jpwabc` 只挪 `.Voice` 里的 `$`，按出厂的小节数目标断。
-  relayoutText: (text) => {
+  // 尺子与 123/ABC 同一把：不量的话乐句行在原样档放不下，引擎整首按宽度重断，两种格式排出来就不一样了
+  relayoutText: (text, measure) => {
     const f = JpwFile.fromString(text);
     if (!f) return text;
-    return relayoutJpwabcText(text, jpwToScoreDoc(f));
+    return relayoutJpwabcText(text, jpwToScoreDoc(f), { measure });
   },
   editDialect: DIALECT_JPW,
 };
