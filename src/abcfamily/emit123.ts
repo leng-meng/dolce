@@ -3,6 +3,7 @@
 import type { Chord, Element, Key, Measure, Note, Part, Song } from "../model/doc";
 import { AbcFamilyEmitter, type MarkIndex } from "./emit";
 import { BARE_CHORD_RE } from "./dialect123";
+import { directionsAsMarks } from "../model/directionmarks";
 import { projectForJianpu } from "../model/jianpuproject";
 import { clefName, harmonyText, keySpelling, melodyLane, topNote } from "../model/jianpu";
 
@@ -74,7 +75,7 @@ export class Emitter123 extends AbcFamilyEmitter {
 
   /** MusicXML 读进来的歌先投成简谱形状：123 的 `-` 是增时线、`_` 是减时线，照 MusicXML 的 type/beam 直写会写错时值 */
   override emitSong(song: Song, fallbackNumber?: number): string {
-    return super.emitSong(projectForJianpu(song), fallbackNumber);
+    return super.emitSong(projectForJianpu(directionsAsMarks(song)), fallbackNumber);
   }
 
   /** 度数 + 八度点。变音记号**前置**（简谱惯例）。 */

@@ -18,9 +18,15 @@ interface CellHit extends Hit {
 export class ScoreIndex {
   private cells = new Map<ElementId, CellHit[]>();
   private barlines = new Map<string, Hit>();
-  private slurs = new Map<string, Hit>();
-  private syllables = new Map<string, Hit>();
+  /** 五线谱 / 混排的小节线，按「小节:侧」收（一条线每个谱表组一段） */
+  private measureBars = new Map<string, Hit[]>();
+  /** 同一条弧 / 同一个字可能画成几段（跨系统的弧、混排两层），按页面树顺序 */
+  private slurs = new Map<string, Hit[]>();
+  private syllables = new Map<string, Hit[]>();
   private systems = new Map<PageItem, PageItem[]>();
+  private headerHits: Hit[] = [];
+  /** 带身份的全部图元（渲染后把 DOM 元素反查回图元用） */
+  readonly all: Hit[] = [];
 
   private constructor() {}
 
@@ -47,6 +53,12 @@ export class ScoreIndex {
       const ident = item.ident;
       if (ident) {
         const hit = { page, item };
+        this.all.push(hit);
+        const push = (map: Map<string, Hit[]>, key: string): void => {
+          const list = map.get(key) ?? [];
+          list.push(hit);
+          map.set(key, list);
+        };
         switch (ident.kind) {
           case "system":
             system = item;
@@ -68,20 +80,24 @@ export class ScoreIndex {
             break;
           case "barline": {
             const edge = ident.edge ?? "after";
-            if (ident.id !== undefined) {
+            if (ident.measure !== undefined) push(this.measureBars, `${ident.measure}:${edge}`);
+            else if (ident.id !== undefined) {
               for (const id of [ident.id, ...(ident.also ?? [])]) this.barlines.set(`${id}:${edge}`, hit);
             } else if (edge === "before") this.pendingBefore.push(hit);
             else if (this.lastNoteId !== null) this.barlines.set(`${this.lastNoteId}:after`, hit);
             break;
           }
           case "slur":
-            if (ident.id !== undefined && ident.end !== undefined) this.slurs.set(`${ident.id}:${ident.end}`, hit);
+            if (ident.id !== undefined && ident.end !== undefined) push(this.slurs, `${ident.id}:${ident.end}`);
             break;
           case "syllable":
             if (ident.id !== undefined) {
-              this.syllables.set(`${ident.id}:${ident.verse ?? 0}`, hit);
+              push(this.syllables, `${ident.id}:${ident.verse ?? 0}`);
               if (system) this.systems.get(system)!.push(item);
             }
+            break;
+          case "header":
+            this.headerHits.push(hit);
             break;
         }
       }
@@ -91,10 +107,18 @@ export class ScoreIndex {
     go(root);
   }
 
-  /** 元素 `id` 第 `pass` 遍的音符格（找不到那一遍就取第一个）。增时线有自己 id 的，按它的 id 也认得出。 */
-  note(id: ElementId, pass = 0): Hit | null {
+  /** 元素 `id` 第 `pass` 遍的音符格（找不到那一遍就取第一个）。增时线有自己 id 的，按它的 id 也认得出。
+   *  `occ`：同一遍号画了几次时取第几次（只有一段词的反复，两遍都是第 1 段；页面树顺序就是演唱顺序）。 */
+  note(id: ElementId, pass = 0, occ = 0): Hit | null {
     const list = this.cells.get(id);
     if (!list || list.length === 0) return null;
+    if (occ > 0) {
+      // 只数这个 id 自己的格（宿主名下另记的增时线格不算），音符格优先
+      const own = list.filter((h) => h.pass === pass && h.item.ident?.id === id);
+      const notes = own.filter((h) => h.item.ident?.kind === "note");
+      const pick = (notes.length > 0 ? notes : own)[occ];
+      if (pick) return pick;
+    }
     return list.find((h) => h.pass === pass) ?? list[0]!;
   }
 
@@ -119,17 +143,39 @@ export class ScoreIndex {
     return this.sustainCells(host, pass)[ord] ?? null;
   }
 
+  /** 元素 `id` 的全部音符格（混排里五线谱层与简谱层各一个），按页面树顺序。 */
+  notes(id: ElementId): Hit[] {
+    return (this.cells.get(id) ?? []).filter((h) => h.item.ident?.kind === "note" && h.item.ident.id === id);
+  }
+
   barline(id: ElementId, edge: "before" | "after"): Hit | null {
     return this.barlines.get(`${id}:${edge}`) ?? null;
   }
 
-  slur(start: ElementId, end: ElementId): Hit | null {
-    return this.slurs.get(`${start}:${end}`) ?? null;
+  /** 五线谱 / 混排：第 `measure` 小节（全曲下标）`edge` 那一侧的小节线各段。 */
+  measureBarlines(measure: number, edge: "before" | "after"): Hit[] {
+    return this.measureBars.get(`${measure}:${edge}`) ?? [];
   }
 
-  /** 元素 `id` 第 `verse` 段（行内 0 起）歌词那个字。 */
+  slur(start: ElementId, end: ElementId): Hit | null {
+    return this.slurs.get(`${start}:${end}`)?.[0] ?? null;
+  }
+
+  /** 同一条弧画出的各段（跨系统时前后两截）。 */
+  slurParts(start: ElementId, end: ElementId): Hit[] {
+    return this.slurs.get(`${start}:${end}`) ?? [];
+  }
+
+  /** 元素 `id` 第 `verse` 段歌词那个字（简谱：行内段序 0 起；五线谱 / 混排：源段号 1 起）。 */
   syllable(id: ElementId, verse = 0): Hit | null {
-    return this.syllables.get(`${id}:${verse}`) ?? null;
+    // 展开档同一个字每遍各画一次：取最后画的那个（索引一直是后来的盖前面的）
+    const list = this.syllables.get(`${id}:${verse}`);
+    return list?.[list.length - 1] ?? null;
+  }
+
+  /** 页眉里的字（`header` 标签），按页面树顺序。 */
+  headers(): readonly Hit[] {
+    return this.headerHits;
   }
 
   /** 元素 `id` 音符格里某种部件，按页面树顺序（命中的不再往下找）。 */

@@ -48,7 +48,8 @@ import { BarlineGlyph, type BarlineSpec } from "../engrave/barline";
 import { TupletGlyph } from "../engrave/tuplet";
 import { hairpinPath } from "../engrave/hairpin";
 import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../engrave/chord";
-import { addLine, addSmufl, addSmuflScaled, chordGroup, STAFF_SYSTEM, translated, type StaffLeafData, type StaffSystemData } from "./prims";
+import { addLine, addSmufl, addSmuflScaled, chordGroup, STAFF_SYSTEM, translated, type StaffSystemData } from "./prims";
+import type { ItemIdentity } from "../layout/identity";
 import { drawJianpuOverlay } from "./jianpuoverlay";
 
 /** SMuFL breathMarkComma（U+E4CE）。 */
@@ -399,10 +400,10 @@ function drawSlurTied(
 ): void {
   const arc = new SlurArc();
   arc.init(new Point(plx, ply), new Point(prx, pry), mixedSlurStyle(above));
-  // 可视化编辑认弧：起止和弦的元素 id（见 `prims.ts::StaffLeafData`）
+  // 可视化编辑认弧：起止和弦的元素 id（身份标签，`layout/identity.ts`）
   const s = obj.startNote?.chord.src.id;
   const e = obj.endNote?.chord.src.id;
-  if (s !== undefined && e !== undefined) arc.data = { staffRole: "slur", start: s, end: e } satisfies StaffLeafData;
+  if (s !== undefined && e !== undefined) arc.ident = { kind: "slur", id: s, end: e };
   container.add(arc);
 }
 
@@ -698,7 +699,7 @@ export function drawLrc(
     t.color = 0xff000000;
     t.x = x + lrc.xOffset;
     t.y = -lrc.y;
-    t.data = { staffRole: "lyric", chordId: lrc.chord.src.id, verse: lrc.src.number } satisfies StaffLeafData;
+    t.ident = { kind: "syllable", id: lrc.chord.src.id, verse: lrc.src.number };
     // 标点挤压：`widthInfo` 量的就是挤压后的宽度，绘制拿同一串笔位（档位同为 `lrc.compress`）。
     if ([...lrc.text].length > 1) {
       const chars = [...lrc.text];
@@ -1053,7 +1054,7 @@ function drawBarlineItem(
   top: number,
   bot: number,
   repForBack = false,
-  tag: StaffLeafData | null = null,
+  tag: ItemIdentity | null = null,
 ): number {
   // 整组小节线右缘对齐到 x（向左生长），与谱线右端接齐（render.cpp drawBarlineItem）。
   // 粗细组合与线距走公共那一份（engrave/barline.ts）；反复点按谱表间位另画（drawRepeatDots）。
@@ -1077,7 +1078,7 @@ function drawBarlineItem(
     l.x = 0;
     l.p0 = new Point(cx, l.p0.y);
     l.p1 = new Point(cx, l.p1.y);
-    if (tag) l.data = tag;
+    if (tag) l.ident = tag;
     container.add(l);
   }
   return w;
@@ -1183,9 +1184,9 @@ function drawBarline(eng: MixedOptions, container: Group, sys: Sys): void {
     const rep = lightHeavyLight.has(i);
     let width = 0;
     // 这条小节线的身份：系统开头那条是首小节之前，其余是第 i 小节（系统内从 1 数）之后
-    const tag: StaffLeafData = i === 0
-      ? { staffRole: "barline", measure: sys.firstMeasure, side: "before" }
-      : { staffRole: "barline", measure: sys.firstMeasure + i - 1, side: "after" };
+    const tag: ItemIdentity = i === 0
+      ? { kind: "barline", measure: sys.firstMeasure, edge: "before" }
+      : { kind: "barline", measure: sys.firstMeasure + i - 1, edge: "after" };
 
     for (const [first, last] of grps) {
       const stb = sys.staves[last];
@@ -1336,6 +1337,7 @@ export function drawSystem(container: Group, sys: Sys): Group {
     ypos += st.height();
   }
   res.classes.add(STAFF_SYSTEM);
+  res.ident = { kind: "system" };
   res.data = { top: top ?? 0, bottom: ypos } satisfies StaffSystemData;
 
   drawBarline(eng, res, sys);

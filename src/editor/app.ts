@@ -1125,7 +1125,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     if (this.mode === "recognize") return this.omr.hitFor("note", id);
     if (this.mode === "mixed") {
       const m = this._mixedIds(id)[0];
-      return m === undefined ? null : this.painter.staffChordEls(m)[0] ?? null;
+      return m === undefined ? null : this.painter.noteEls(m)[0] ?? null;
     }
     return this.painter.entryEl(id, 0);
   }
@@ -1178,7 +1178,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   }
 
   /** 五线谱 / 混排（文本格式）：索引条目按源 id 换成派生五线谱的 id，对上五线谱上画出的元素。
-   *  音符 → 和弦组（五线谱层与简谱叠层各一个）；歌词、弧、小节线 → 带身份的叶子（`mixed/prims.ts::StaffLeafData`）。
+   *  音符 → 和弦组（五线谱层与简谱叠层各一个）；歌词、弧、小节线 → 带身份标签的叶子（`layout/identity.ts`）。
    *  增时线在五线谱上不是单独的东西（并进时值 / 延音线），和弦名、装饰暂不认。 */
   private _bindStaffEls(): void {
     for (const entry of this._sync.all()) {
@@ -1228,29 +1228,29 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
   private _staffElsOf(entry: SyncEntry): SVGGraphicsElement[] {
     const mids = (id: ElementId): ElementId[] => this._mixedIds(id);
-    const leaf = this.painter.staffLeafEls.bind(this.painter);
+    const p = this.painter;
     switch (entry.kind) {
       case "note":
-        return mids(entry.id).flatMap((m) => this.painter.staffChordEls(m));
+        return mids(entry.id).flatMap((m) => p.noteEls(m));
       case "lyric": {
         const verse = entry.verseNo ?? (entry.verse ?? 0) + 1;
-        return mids(entry.id).flatMap((m) => leaf({ staffRole: "lyric", chordId: m, verse }));
+        return mids(entry.id).flatMap((m) => p.lyricEls(m, verse));
       }
       case "barline": {
         const m = mids(entry.id)[0];
         const measure = m === undefined ? undefined : this.mixed._mixedMeasureOf.get(m);
         if (measure === undefined) return [];
-        if (entry.edge !== "before") return leaf({ staffRole: "barline", measure, side: "after" });
+        if (entry.edge !== "before") return p.measureBarlineEls(measure, "after");
         // 音符前面那条：系统开头是本小节的 before，其余是前一小节的 after
-        const own = leaf({ staffRole: "barline", measure, side: "before" });
-        return own.length ? own : leaf({ staffRole: "barline", measure: measure - 1, side: "after" });
+        const own = p.measureBarlineEls(measure, "before");
+        return own.length ? own : p.measureBarlineEls(measure - 1, "after");
       }
       case "mark": {
         if (entry.markKind !== "slur" || entry.end === undefined) return [];
         const s = mids(entry.id)[0];
         const ends = mids(entry.end);
         const e = ends[ends.length - 1];
-        return s === undefined || e === undefined ? [] : leaf({ staffRole: "slur", start: s, end: e });
+        return s === undefined || e === undefined ? [] : p.slurEls(s, e);
       }
       default:
         return [];
@@ -1610,7 +1610,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   /** 五线谱 / 混排被点击：点中和弦就选中它（两层一起描蓝）、记为起播点，播放中直接跳过去。 */
   private _onStaffClick(ev: MouseEvent): void {
     const target = hitThroughOverlay(ev);
-    const id = this.painter.staffChordAt(target as Element | null);
+    const id = this.painter.noteAt(target as Element | null);
     this.deselectStaff();
     this.deselect();
     // 文本格式：与简谱档同口径走可视化编辑（选中 / 光标 / 文字）；播放、暂停中点音符让给跳播
@@ -1626,7 +1626,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
       return;
     }
     if (id === null) return;
-    const els = this.painter.staffChordEls(id);
+    const els = this.painter.noteEls(id);
     for (const el of els) el.classList.add("selected");
     this._staffSelected = els;
     this._selectedId = id;
@@ -1741,16 +1741,16 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
   /** PlaybackHost：播到某个元素 → 谱面高亮 + 保证可见。
    *  高亮留在 App 而不进控制器：各排版器按 id 找音的办法不同，那属于「谁在画谱面」。 */
-  highlightPlaying(id: ElementId | null, pass: number): void {
+  highlightPlaying(id: ElementId | null, pass: number, occ = 0): void {
     if (this.mode === "recognize") {
       this.omr.highlightPlaying(id);
       return;
     }
-    const page = this.painter.highlight(id, pass);
+    const page = this.painter.highlight(id, pass, occ);
     if (id !== null && page !== null) {
       if (page !== this.pageIndex) this.pageIndex = page;
       // keep the sounding note visible (no-op when already in view)
-      this.painter.entryEl(id, pass)?.scrollIntoView({ block: "nearest", inline: "nearest" });
+      this.painter.entryEl(id, pass, occ)?.scrollIntoView({ block: "nearest", inline: "nearest" });
     }
   }
 

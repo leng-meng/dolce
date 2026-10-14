@@ -3,7 +3,7 @@
 // 与 `model/phrasedoc.ts`（MusicXML 形状）分工同 `pu/slots.ts::docView` 与 `jianpuproject.ts`：
 // 这里经排版行视图 `docView` 读，和原样档谱面、简谱输入模型（`jianpuInputOfDoc`）是同一批对象。
 // **口径逐条同 `jianpuinput.ts::rowsPart`**（`forExpanded` 那一份：带歌词的声部当主旋律、同号歌词顺延），
-// 本轮只换输入、不动判据，靠 `scripts/phrase-dual-check.mjs --jianpu` 双跑逐项一致。
+// 本轮只换输入、不动判据，靠 `../dev/scripts/phrase-dual-check.mjs` 双跑逐项一致。
 // 断点集合以这里拼出的对象为键，`idOf` 把它们换回元素 id。
 
 import { Fraction } from "../common/fraction";
@@ -201,8 +201,8 @@ export function buildMeasures(
       const noteJumps = (mea: MeasureOut, onBarline: boolean): void => {
         if (!("ornaments" in el)) return;
         for (const orn of el.ornaments) {
-          // 只供画的投影（MusicXML direction 投过来的 D.C. / Fine）不进演唱顺序，见 `Ornament.projected`
-          if (JUMP_NAMES.has(orn.name) && !orn.projected) jumps.push({ name: orn.name, measure: measures.indexOf(mea), onBarline });
+          // MusicXML direction 投过来的 D.C. / Fine、123 左线上的 segno 也算（多段词 × D.C. 的展开口径见 `playorder.ts::jumpByVerse`）
+          if (JUMP_NAMES.has(orn.name)) jumps.push({ name: orn.name, measure: measures.indexOf(mea), onBarline });
         }
       };
       const attach = (ch: ChordOut): void => {

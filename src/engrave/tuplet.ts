@@ -68,7 +68,8 @@ export class TupletGlyph {
       const lw = style.lineWidth ?? 1;
       const foot = style.foot ?? 0;
       const k = p1.x !== p0.x ? (p1.y - p0.y) / (p1.x - p0.x) : 0;
-      const dx = (p1.x - p0.x) / 2 - this.halfGap;
+      // 两端比数字还窄时横线不往外反画：只留竖脚
+      const dx = Math.max(0, (p1.x - p0.x) / 2 - this.halfGap);
       const path = new GraphicPath();
       path.classes.add("tuplet-line"); // line-check 的 V12 靠它认（见 browser.ts::CLS_TAGS）
       path.strokeWidth = lw;
@@ -77,10 +78,10 @@ export class TupletGlyph {
       path.strokeColor = style.color;
       path.moveTo(p0.x, p0.y + foot);
       path.lineTo(p0.x, p0.y);
-      path.lineTo(p0.x + dx, p0.y + dx * k);
+      if (dx > 0) path.lineTo(p0.x + dx, p0.y + dx * k);
       path.moveTo(p1.x, p1.y + foot);
       path.lineTo(p1.x, p1.y);
-      path.lineTo(p1.x - dx, p1.y - dx * k);
+      if (dx > 0) path.lineTo(p1.x - dx, p1.y - dx * k);
       this.items.push(path);
       lineTop -= lw / 2;
     } else if (style.kind === "arc") {

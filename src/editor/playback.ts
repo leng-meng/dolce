@@ -19,7 +19,7 @@ export interface PlaybackHost {
   /** 循环段：谱面上选中的第一个与最后一个音；没有选区为 null（整首循环）。 */
   loopPoints(): { first: PlayPoint; last: PlayPoint } | null;
   /** 播到某个元素：把谱面高亮挪过去并保证可见。null = 清高亮。 */
-  highlightPlaying(id: ElementId | null, pass: number): void;
+  highlightPlaying(id: ElementId | null, pass: number, occ?: number): void;
 
   setStatus(text: string): void;
   saveSettings(): void;
@@ -386,7 +386,7 @@ export class PlaybackController {
   private instance(): ScorePlayer {
     if (!this.player) {
       this.player = new ScorePlayer(
-        (id, pass) => this.host.highlightPlaying(id, pass),
+        (id, pass, occ) => this.host.highlightPlaying(id, pass, occ),
         (state) => this.onState(state),
         (pos) => {
           if (!this.scrubbing) this.renderProgress(pos);

@@ -21,17 +21,22 @@ export type IdentityKind =
   | "harmony"
   | "deco"
   | "annotation"
-  | "aug-dot";
+  | "aug-dot"
+  /** 页眉里的一行字（五线谱 / 混排的标题块；可视化编辑按所画的字对回原文字段） */
+  | "header";
 
 export interface ItemIdentity {
   kind: IdentityKind;
   id?: ElementId;
   /** 第几遍（展开档同一个音每遍各画一次）；原样档恒为 0 */
   pass?: number;
-  /** 歌词：`id` 给了时是行内段序（0 起）；跟音符格走的是源段号（1 起） */
+  /** 歌词：简谱是行内段序（0 起）；五线谱 / 混排是源段号（1 起） */
   verse?: number;
   /** 小节线：画在 `id` 那个音符的哪一侧（小节线没有自己的 id，按相邻音符认）。`id` 缺省 = 按页面树顺序借相邻音符 */
   edge?: "before" | "after";
+  /** 五线谱 / 混排的小节线：按小节认（全曲下标），`edge` 是它在这一小节的哪一侧（系统开头那条是首小节的 `before`，
+   *  其余是前一小节的 `after`）。一条线每个谱表组画一段，混排的简谱层再一段 */
+  measure?: number;
   /** 小节线：同一条线还属于这些音符（多声部贯穿的线挨着各声部各一个音） */
   also?: ElementId[];
   /** 弧的终点 */

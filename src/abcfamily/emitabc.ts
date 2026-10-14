@@ -4,9 +4,11 @@
 // 同一份 `ScoreDoc` 第二次写出必须逐字相同。读入端照样认任意 `L:`。
 
 import { SIMPLE_DIVISIONS, type Chord, type Element, type Key, type Note, type Song } from "../model/doc";
-import { AbcFamilyEmitter } from "./emit";
+import { AbcFamilyEmitter, type MarkIndex } from "./emit";
+import { harmonyText } from "../model/jianpu";
 import { keySpelling, nominalQuarters } from "../model/jianpu";
 import { isXmlShaped } from "../model/xmlproject";
+import { directionsAsMarks } from "../model/directionmarks";
 import { withAbcPitches } from "./abcpitch";
 
 /** ABC §4.13 里不随拍号变的默认比例（`parsedialect.ts::tupletNormalAbc`）。 */
@@ -70,7 +72,34 @@ export class EmitterAbc extends AbcFamilyEmitter {
   /** MusicXML 形状的歌先换时值口径，否则 `L:1/8` 下写出的是原始 divisions（八分写成 `E1/8`）；
    *  简谱形状的（只有度数）先补音高与 ABC 口径的记号（`abcpitch.ts`）。 */
   override emitSong(song: Song, fallbackNumber?: number): string {
-    return super.emitSong(isXmlShaped(song) ? withAbcDivisions(song) : withAbcPitches(song), fallbackNumber);
+    const own = directionsAsMarks(song);
+    return super.emitSong(isXmlShaped(own) ? withAbcDivisions(own) : withAbcPitches(own), fallbackNumber);
+  }
+
+  /** 长音中途换和弦（123 的 `5 F - C - -`，和弦挂在增时线上）：ABC 没有增时线，拆成连音线相连的几段、
+   *  和弦挂在各段上（`"F"A2-"C"A6`）。只在有增时线带和弦时拆，其余照旧一个音写完。 */
+  private sustainSegments(ch: Chord): { harmony?: Chord["harmony"]; divisions: number }[] | null {
+    const su = ch.sustains;
+    if (!su?.some((s) => s.harmony) || ch.rest || ch.grace || ch.rhythm) return null;
+    const segs = [{ divisions: ch.duration.divisions - su.length * SIMPLE_DIVISIONS } as { harmony?: Chord["harmony"]; divisions: number }];
+    for (const s of su) {
+      if (s.harmony) segs.push({ harmony: s.harmony, divisions: SIMPLE_DIVISIONS });
+      else segs[segs.length - 1]!.divisions += SIMPLE_DIVISIONS;
+    }
+    return segs[0]!.divisions > 0 ? segs : null;
+  }
+
+  protected override extraSlots(el: Element): number {
+    return el.kind === "chord" ? Math.max(0, (this.sustainSegments(el)?.length ?? 1) - 1) : 0;
+  }
+
+  protected override elementText(el: Element, mi?: MarkIndex): string {
+    const segs = el.kind === "chord" ? this.sustainSegments(el) : null;
+    if (!segs || el.kind !== "chord") return super.elementText(el, mi);
+    const notes = this.chordNotes(el);
+    const body = this.chordGroupText(notes.map((n) => this.noteText(n)).join(""), notes.length);
+    return segs.map((g, i) => (i > 0 && g.harmony ? this.chordSymbolText(harmonyText(g.harmony)) : "") + body + lengthSuffix(g.divisions)).join("-")
+      + this.tieText(el);
   }
 
   /** 音名 + 八度：第 4 八度大写、第 5 八度小写，再往外用 `'` 与 `,`（ABC §4.1）。 */
@@ -110,6 +139,8 @@ export class EmitterAbc extends AbcFamilyEmitter {
   }
 
   /** 同时发声的几个音包进 `[]`（ABC §4.17）。单音不包——包了读回来也对，但不幂等。 */
+  protected override readonly writesChordGroups = true;
+
   protected override chordGroupText(inner: string, noteCount: number): string {
     return noteCount > 1 ? `[${inner}]` : inner;
   }

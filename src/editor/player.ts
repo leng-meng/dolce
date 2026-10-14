@@ -19,6 +19,8 @@ interface Anchor {
   t: number; // seconds
   id: ElementId | undefined;
   pass: number;
+  /** 同一个音同一遍号第几次出现（见 `timeline.ts::Anchor.occ`） */
+  occ: number;
 }
 
 /** 起播点 / 光标：模型元素 id + 演唱遍数。 */
@@ -126,7 +128,7 @@ export class ScorePlayer {
   private gen = 0; // invalidates in-flight async play() when stop()/replay happens
 
   constructor(
-    private onChord: (id: ElementId | null, pass: number) => void,
+    private onChord: (id: ElementId | null, pass: number, occ: number) => void,
     private onStateChange: (state: PlayState) => void,
     /** 播放中每帧报一次位置（秒），进度条用 */
     private onTick: (pos: number) => void = () => {},
@@ -155,7 +157,7 @@ export class ScorePlayer {
     const { tl, spq } = timelineSeconds(src, opts);
     if (tl.notes.length === 0) return;
 
-    const toSec = (a: Timeline["anchors"][number]): Anchor => ({ t: a.t0 * spq, id: a.chord.id, pass: a.pass });
+    const toSec = (a: Timeline["anchors"][number]): Anchor => ({ t: a.t0 * spq, id: a.chord.id, pass: a.pass, occ: a.occ ?? 0 });
     this.session = {
       // 光标跟各声部起音（各视图的竖直播放线），不只跟旋律
       anchors: onsetAnchors(tl).map(toSec),
@@ -267,7 +269,7 @@ export class ScorePlayer {
     this.clickIdx = 0;
     this.pausedAt = 0;
     this.curIdx = -1;
-    this.onChord(null, 0);
+    this.onChord(null, 0, 0);
     this.setState("stopped");
   }
 
@@ -431,7 +433,7 @@ export class ScorePlayer {
     if (idx === this.curIdx) return;
     this.curIdx = idx;
     const a = idx >= 0 ? anchors[idx] : null;
-    this.onChord(a?.id ?? null, a ? a.pass : 0);
+    this.onChord(a?.id ?? null, a ? a.pass : 0, a ? a.occ : 0);
   }
 
   private tick = (): void => {
@@ -452,7 +454,7 @@ export class ScorePlayer {
     if (idx !== this.curIdx) {
       this.curIdx = idx;
       const a = idx >= 0 ? anchors[idx] : null;
-      this.onChord(a?.id ?? null, a ? a.pass : 0);
+      this.onChord(a?.id ?? null, a ? a.pass : 0, a ? a.occ : 0);
     }
     this.onTick(Math.min(t, this.session.duration));
     this.raf = requestAnimationFrame(this.tick);

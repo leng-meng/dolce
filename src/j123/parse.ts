@@ -806,11 +806,12 @@ function buildMusicLine(
       case "grace": {
         // 花括号里的几个音是**一串**倚音（ABC §4.12 `{gab}`），一个音一个 grace 元素——
         // 与 MusicXML、文本谱的导入同一口径；从前塞进一个和弦，五线谱就把 `{2_ 3_}` 画成了两音同时的和弦倚音
+        // `{[CE]}`（ABC）里方括号那一组是同时发声的和弦倚音，收进一个元素
         for (const g of t.notes ?? []) {
           const ch: Chord = {
             kind: "chord",
             id: ctx.ids.next(),
-            notes: [ctx.d.note(g)],
+            notes: g.kind === "chordGroup" ? (g.notes ?? []).map((x) => ctx.d.note(x)) : [ctx.d.note(g)],
             duration: { divisions: 0, dots: 0, type: graceType(g) },
             grace: { ...(t.acciaccatura ? { slash: true } : {}), ...(t.graceAfter ? { after: true } : {}) },
             voice: pb.voice,
@@ -1192,6 +1193,7 @@ export interface ParseOptions {
  *  （ABC 2.1 §4.12：花括号里照普通音符写长度，单位另定）：123 每个 `_` 减半（`{2_}` 十六分），
  *  ABC 按 num/den（`{d/}` 十六分、`{d2}` 四分）；什么都不写就是八分。 */
 function graceType(g: Token | undefined): NoteType {
+  if (g?.kind === "chordGroup" && g.num === undefined) g = g.notes?.[0];
   const ratio = (g?.num ?? 1) / (g?.den ?? 1) / 2 ** (g?.beams ?? 0);
   const k = Math.round(Math.log2(ratio));
   return (["64th", "32nd", "16th", "eighth", "quarter", "half"] as const)[Math.max(0, Math.min(5, k + 3))]!;

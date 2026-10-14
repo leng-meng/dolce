@@ -6,6 +6,7 @@
 // - 时值与 ABC 写出端同一口径：固定 `L:1/8`、分数后缀；倚音、多连音、tie 同 ABC。
 // - 落盘编码（`%MUSE2` + GBK）在 `common/jcxcodec.ts`，这里只出文本。
 
+import { directionsAsMarks } from "../model/directionmarks";
 import { SIMPLE_DIVISIONS, type Chord, type Element, type Key, type Note, type Song } from "../model/doc";
 import { AbcFamilyEmitter, lyricLines, type LyricStyle } from "./emit";
 import { systemRanges } from "../model/emitutil";
@@ -197,7 +198,8 @@ export class EmitterJcx extends AbcFamilyEmitter {
   /** 一首歌 → Muse 文本。MusicXML 形状的先投成简谱形状（时值换成以四分为 `SIMPLE_DIVISIONS` 的口径），再补度数。
    *  别的来源时值本就是这个口径，不投——投了长休止会拆成一串四分休止。 */
   override emitSong(src: Song): string {
-    const song = marksOffSustains(withDegrees(isXmlShaped(src) ? projectForJianpu(src) : src));
+    const own = directionsAsMarks(src);
+    const song = marksOffSustains(withDegrees(isXmlShaped(own) ? projectForJianpu(own) : own));
     const L: string[] = [];
     // Muse 自己的排版参数（读入时原样留在 `museDirectives`）照写回去；本项目的版面指令（`style.raw`）不是这一套，不写
     for (const d of song.museDirectives ?? []) L.push(`%%${oneLine(d)}`);

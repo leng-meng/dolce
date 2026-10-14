@@ -98,13 +98,23 @@ export interface LyricStyle {
   extend?: string;
 }
 
-export function lyricLines(part: Part, sep: string, skip: string, sys: SystemRange, rule: LyricSlotRule, style: LyricStyle = {}): string[] {
+export function lyricLines(
+  part: Part, sep: string, skip: string, sys: SystemRange, rule: LyricSlotRule, style: LyricStyle = {},
+  extraSlots?: (el: Element) => number,
+): string[] {
   const ext = style.extend ?? "_";
-  const { slots } = lyricSlots(part, sys.from, sys.to, sys.fromEl, sys.toEl, rule);
+  const { slots: own } = lyricSlots(part, sys.from, sys.to, sys.fromEl, sys.toEl, rule);
+  // 写出端把一个元素拆成几个音写的（ABC 里长音中途换和弦，见 `AbcFamilyEmitter.extraSlots`），拆出来的每段也占一格；
+  // `null` 标那一格（连音线接着的同一个音，不配字）
+  const slots: (Element | null)[] = [];
+  for (const el of own) {
+    slots.push(el);
+    for (let k = extraSlots?.(el) ?? 0; k > 0; k--) slots.push(null);
+  }
   // 本系统一共几段（区间行按上界算）
   let maxVerse = 0;
   for (const el of slots) {
-    for (const l of el.lyrics ?? []) maxVerse = Math.max(maxVerse, l.numberTo ?? l.number);
+    for (const l of el?.lyrics ?? []) maxVerse = Math.max(maxVerse, l.numberTo ?? l.number);
   }
   const bodies: string[] = [];
   for (let verse = 1; verse <= maxVerse; verse++) {
@@ -121,6 +131,12 @@ export function lyricLines(part: Part, sep: string, skip: string, sys: SystemRan
     /** 上一个写出的音节以拉丁字母/数字收尾（且中间没有 `*` `_` 隔开）——下一个也是拉丁词时要空格 */
     let prevLatin = false;
     for (const el of slots) {
+      if (el === null) {
+        // 拆出来的段是连音线接着的同一个音，不配字：前一个字的 `_` 已占了这一格就算它的，否则跳过
+        if (extendConsumes) extendConsumes = false;
+        else pendingSkips += (pendingSkips === "" ? "" : sep) + skip;
+        continue;
+      }
       // 区间与副歌的包含判断与排版取词同一份（`helpers.ts::lyricOfVerse`）
       const hit = lyricOfVerse(el.lyrics, verse) ?? undefined;
       if (hit?.verseLabel !== undefined && label === undefined) label = hit.verseLabel;
@@ -256,6 +272,12 @@ export abstract class AbcFamilyEmitter {
     return [];
   }
 
+  /** 这个元素写出时另拆出几个音（各占一个歌词格）。缺省不拆；ABC 把中途换和弦的长音拆成连音线相连的几段。 */
+  protected extraSlots(el: Element): number {
+    void el;
+    return 0;
+  }
+
   /** 增时线（123 专有；ABC 那一档没有，返回空串）。 */
   protected sustainsText(ch: Chord, mi?: MarkIndex): string {
     void ch;
@@ -291,6 +313,9 @@ export abstract class AbcFamilyEmitter {
   }
 
   /** 同时发声的几个音怎么包。123 靠多声部表达、不包；ABC 是 `[CEG]`。 */
+  /** 方言写不写得出同时发声的和弦（ABC `[CEG]`）；写不出的（123）`chordGroupText` 原样返回。 */
+  protected readonly writesChordGroups: boolean = false;
+
   protected chordGroupText(inner: string, noteCount: number): string {
     void noteCount;
     return inner;
@@ -440,7 +465,11 @@ export abstract class AbcFamilyEmitter {
   /** 倚音 `{6,}` / `{ab}` */
   protected graceText(ch: Chord): string {
     const dur = this.graceDurationText(ch);
-    return `{${this.graceSlashText(ch)}${ch.notes.map((n) => this.noteText(n) + dur).join("")}}`;
+    // 和弦倚音（几个音同时发声）按方言的和弦写法（ABC `{[CE]}`）；方言写不出和弦的（123）只能连写成一串
+    const body = ch.notes.length > 1 && this.writesChordGroups
+      ? this.chordGroupText(ch.notes.map((n) => this.noteText(n)).join(""), ch.notes.length) + dur
+      : ch.notes.map((n) => this.noteText(n) + dur).join("");
+    return `{${this.graceSlashText(ch)}${body}}`;
   }
 
   /** 倚音里每个音后面的时值（123 的 `{2__}`）。ABC 的倚音一律按默认写，不带。 */
@@ -779,7 +808,7 @@ export abstract class AbcFamilyEmitter {
         if (v !== null) L.push(v);
         L.push(text);
         const sys = pranges[i]![r]!;
-        for (const line of lyricLines(song.parts[i]!, this.lyricSeparator, this.lyricSkip, sys, this.lyricSlotRule, this.lyricStyle)) L.push(line);
+        for (const line of lyricLines(song.parts[i]!, this.lyricSeparator, this.lyricSkip, sys, this.lyricSlotRule, this.lyricStyle, (el) => this.extraSlots(el))) L.push(line);
       }
     }
     return L;

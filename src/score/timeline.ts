@@ -126,11 +126,14 @@ export interface TimedNote {
 /** 歌词条目前的印刷段号（`1.圣`），同 `NoteEntry.addLyric` 的 `ignoreVerseNumber` */
 const VERSE_PREFIX = /^\d+\.(?=.)/;
 
-/** 第 `pass` 遍唱的字：段号对上的那段，没有就取副歌（同展开档 `NoteEntry.addLyric`）。 */
-function lyricOfPass(note: TimelineNote | undefined, pass: number): { text: string; extend: boolean } | undefined {
+/** 第 `pass` 遍唱的字：段号对上的那段，没有就取副歌。`borrow`：这一格在第 `pass` 段整首最后一个字之后
+ *  （这一段的词唱完了，副歌只写在第 1 段），借段号最小的、这一格写了字的那段——与展开档同一判据（`place/expand.ts::afterVerseEnd`）。 */
+function lyricOfPass(note: TimelineNote | undefined, pass: number, borrow = false): { text: string; extend: boolean } | undefined {
   const lyrics = note?.lyrics;
   if (!lyrics?.length) return undefined;
-  const l = lyrics.find((x) => x.number === pass) ?? lyrics.find((x) => x.refrain);
+  const has = (x: TimelineLyric): boolean => x.text.replace(VERSE_PREFIX, "").trim() !== "";
+  let l = lyrics.find((x) => x.number === pass) ?? lyrics.find((x) => x.refrain);
+  if (borrow && (!l || !has(l))) l = [...lyrics].filter(has).sort((a, b) => a.number - b.number)[0] ?? l;
   const text = l?.text.replace(VERSE_PREFIX, "").trim();
   return text ? { text, extend: l!.extend === true } : undefined;
 }
@@ -139,6 +142,9 @@ export interface Anchor {
   t0: number;
   chord: TimelineChord;
   pass: number; // repeat pass / lyric verse (matches NoteEntry.verse in layout)
+  /** 同一个和弦、同一个 `pass` 在这份锚点表里第几次出现（0 起）：只有一段词的反复两遍同段号，
+   *  展开档按它认第几次画的那一格（`ScoreIndex.note` 的 `occ`） */
+  occ?: number;
 }
 
 export interface Timeline {
@@ -217,6 +223,19 @@ export function buildTimeline(src: PlaySource): Timeline {
   const slurDepth = new Map<number, number>();
   /** 记了 `-` 但不在弧里的音（行中间的 `_`）：这一遍后面要是再没有字，说明词已唱完，撤掉 */
   const looseDash: { note: TimedNote; pass: number }[] = [];
+  /** 各声部各段整首最后一个字落在哪（小节、条目下标），借词判「这一段唱完了」用 */
+  const verseEnd = src.parts.map((part) => {
+    const end = new Map<number, [number, number]>();
+    part.measures.forEach((m, mid) => m.entries.forEach((ent, i) => {
+      if (!isTimelineChord(ent)) return;
+      for (const l of ent.notes[0]?.lyrics ?? []) if (l.text.replace(VERSE_PREFIX, "").trim()) end.set(l.number, [mid, i]);
+    }));
+    return end;
+  });
+  const afterVerseEnd = (pi: number, verse: number, mid: number, i: number): boolean => {
+    const e = verseEnd[pi]!.get(verse);
+    return e === undefined || mid > e[0] || (mid === e[0] && i > e[1]); // 整首没这一段的词：一律借（同展开档）
+  };
   /** 各声部各遍最后一个有字的音的起点 */
   const lastWord = new Map<string, number>();
 
@@ -227,7 +246,7 @@ export function buildTimeline(src: PlaySource): Timeline {
       for (let pi = 0; pi < src.parts.length; pi++) {
         const m = src.parts[pi]!.measures[mid];
         if (!m) continue;
-        for (const ent of m.entries) {
+        for (const [ei, ent] of m.entries.entries()) {
           if (!isTimelineChord(ent)) continue;
           const cp = ent.position.toFloat();
           if (cp < startOffset) continue; // clipped by a mid-measure jump entry
@@ -260,7 +279,7 @@ export function buildTimeline(src: PlaySource): Timeline {
               // 起头的字带续记号的是谱上写明的；没写的，在弧里、或这一遍后面还有字才算（否则是这一遍的词唱完了，见 `looseDash`）
               const before = lastSung.get(pi);
               const follows = before !== undefined && before.pass === range.pass && Math.abs(before.note.t1 - t0) < 1e-6;
-              const word = lyricOfPass(nt, range.pass);
+              const word = lyricOfPass(nt, range.pass, afterVerseEnd(pi, range.pass, mid, ei));
               tn.lyric = word?.text ?? (follows && before.note.lyric !== undefined ? "-" : undefined);
               const held = word ? word.extend : tn.lyric !== undefined && before!.held;
               if (word !== undefined) lastWord.set(`${pi}:${range.pass}`, t0);
@@ -298,5 +317,15 @@ export function buildTimeline(src: PlaySource): Timeline {
   // 稳定排序：同刻的主旋律在前（播放线同刻只停一处，停在它上面——展开档只画它），其余按声部序
   const rank = (a: Anchor): number => (allAnchorPart.get(a) === lead ? 0 : 1);
   allAnchors.sort((a, b) => a.t0 - b.t0 || rank(a) - rank(b));
+  for (const list of [anchors, allAnchors]) {
+    const seen = new Map<TimelineChord, Map<number, number>>();
+    for (const a of list) {
+      const byPass = seen.get(a.chord) ?? new Map<number, number>();
+      seen.set(a.chord, byPass);
+      const n = byPass.get(a.pass) ?? 0;
+      byPass.set(a.pass, n + 1);
+      if (n > 0) a.occ = n;
+    }
+  }
   return { notes, anchors, allAnchors, clicks, duration: pos };
 }

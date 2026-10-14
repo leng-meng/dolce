@@ -6,7 +6,7 @@
 //     渐强收尾挂在拍位**之前**的最后一个（写出端 `xmlproject.ts::wedgeDirections` 把收尾写在收尾音的终点）；
 //   - Fine / D.C. / D.S.：挂本小节的右线（唱到这里才跳）；
 //   - 不是术语的文字（`副歌`）当段落词。
-import type { Element, Measure, SourceOrnament } from "./doc";
+import type { Element, Measure, Song, SourceOrnament } from "./doc";
 import { DYNAMICS, TERMS } from "../pu/glyph";
 import { decoKey } from "./deconames";
 
@@ -82,4 +82,67 @@ export function directionMarks(mea: Measure): DirectionMarks {
     }
   }
   return out;
+}
+
+/** 跳转目标记号的短名 → 123 / ABC 的写法（`!segno!`，见 `abcfamily/jumpmarks.ts`）。 */
+const TEXT_NAME: Readonly<Record<string, string>> = { hs: "segno", ty: "coda" };
+
+/**
+ * 简谱文本写出端（123 / ABC / jcx）用：小节里的 `<direction>` 换成简谱那套写法——力度、术语、segno/coda
+ * 进挂靠符号的 `notations.articulations`（`!mf!`），Fine / D.C. / D.S. 进右线的 `ornaments`（`!D.S.!|`），
+ * 不是术语的文字当段落词，渐强渐弱换成 `wedge` 记号；之后删掉 `directions`。
+ * 挂靠规则与排版视图同一份（`directionMarks`）。没有 direction 的歌原样返回，有的先克隆、不动原件。
+ * 以前不换：MusicXML 转出来的 123 丢了全部力度与跳转（064《啊！圣善夜》的 D.S. / D.C.）。
+ */
+export function directionsAsMarks(src: Song): Song {
+  if (!src.parts.some((p) => p.measures.some((m) => m.directions?.length))) return src;
+  const song: Song = structuredClone(src);
+  for (const part of song.parts) {
+    // 渐强渐弱常跨小节：起点留着等后面小节的收尾
+    const open: { type: "crescendo" | "diminuendo"; id: number }[] = [];
+    for (const mea of part.measures) {
+      if (!mea.directions?.length) continue;
+      const dm = directionMarks(mea);
+      for (const [i, orns] of dm.byElement) {
+        const el = mea.elements[i];
+        if (el?.kind !== "chord") continue;
+        // 小节第一个符号上的 segno / coda 是左线上的跳转目标（123 读 `| !segno! 5` 就这么记，`j123/parse.ts`），照它记才往返不变
+        if (i === 0) {
+          for (const o of orns.filter((x) => x.name in TEXT_NAME)) {
+            const bls = (mea.barlines ??= []);
+            const left = bls.find((b) => b.location === "left");
+            if (left) (left.ornaments ??= []).push({ name: o.name, level: 0 });
+            else bls.push({ location: "left", ornaments: [{ name: o.name, level: 0 }] });
+          }
+        }
+        const arts = (el.notations ??= {}).articulations ??= [];
+        for (const o of orns) {
+          if (i === 0 && o.name in TEXT_NAME) continue;
+          const name = TEXT_NAME[o.name] ?? o.name;
+          if (!arts.includes(name)) arts.push(name);
+        }
+      }
+      if (dm.barEnd.length) {
+        let right = (mea.barlines ?? []).find((b) => b.location === "right");
+        if (!right) (mea.barlines ??= []).push((right = { location: "right", style: "regular" }));
+        const own = (right.ornaments ??= []);
+        for (const o of dm.barEnd) if (!own.some((x) => x.name === o.name)) own.push({ name: o.name, level: 0 });
+      }
+      for (const [i, text] of dm.words) {
+        const el = mea.elements[i];
+        if (el?.kind === "chord" && el.sectionWord === undefined) el.sectionWord = text;
+      }
+      for (const w of dm.wedges) {
+        const el = mea.elements[w.index];
+        if (!el) continue;
+        if (w.edge === "start") open.push({ type: w.type, id: el.id });
+        else {
+          const st = open.shift();
+          if (st) song.marks.push({ type: "wedge", start: st.id, end: el.id, wedgeType: st.type });
+        }
+      }
+      delete mea.directions;
+    }
+  }
+  return song;
 }

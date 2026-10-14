@@ -101,7 +101,8 @@ function makeClef(c: DocClef): ClefSig {
     case "TAB": k.sign = GlyphCodes.sixStringTabClef; break;
     default: k.sign = GlyphCodes.gClef;
   }
-  k.line = c.line ?? 2;
+  // 没写线位按各谱号的惯常线位：F 第 4 线、C 第 3 线（中音谱号）、其余第 2 线
+  k.line = c.line ?? (c.sign === "F" ? 4 : c.sign === "C" ? 3 : 2);
   return k;
 }
 

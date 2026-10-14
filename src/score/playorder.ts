@@ -168,10 +168,100 @@ export function playOrderOf(parts: readonly PlayPart[], jumps: PlayJumps): PlayO
   // D.C./D.S. 同理：跳转记号本身就把曲子展开成了多遍（本曲 `D.C. al Fine`＝全曲唱一遍、
   // 回头唱到 Fine 为止，两遍正好配两段词），再按歌词段数整体乘一遍就成了四遍。
   const hasJump = jumps.jumpTo.size > 0;
+  const byVerse = jumpByVerse(parts, jumps);
+  if (byVerse) return { measures: byVerse, isSimple: false, hasRepeat: false };
   const isSimple = rep.result.length === 1;
   if (repeatByVerse && !hasVolta && !hasJump) rep.repeatByLyric();
-  const out = expandVoltaByVerse(parts[0]!, rep.result) ?? rep.result;
+  const out = hasJump ? perVerse(rep.result, rep.getPassCountByLrc(0, measures.length)) : expandVoltaByVerse(parts[0]!, rep.result) ?? rep.result;
   return { measures: out, isSimple, hasRepeat: measures.some((m) => m.repeatBackward) };
+}
+
+/** `D.C. al Fine` / `D.S. al Fine` 碰上多段词（用户定 2026-10-14：每段一遍、各自回到 Fine）。
+ *
+ *  谱面 A（到 Fine）+ B（到 D.C./D.S.），B 写了 V 段词、A 段数比它少（096《哈利路亚！感谢主》：副歌在前只一行、
+ *  主歌四段）：A B₁ → 跳回唱 A 到 Fine → B₂ → 跳回 A 到 Fine … → B_V → 跳回 A 到 Fine 收。
+ *  A 的那几遍取 A 自己的词：A 只有一行就每遍都用第 1 段，A 也写了几段就用对应那段（不够的退回第 1 段）。
+ *  每段唱完 Fine 那一遍换页（`endOfPass`）。
+ *  只管最简单的形态：一处 D.C. 或 D.S.、一处 Fine、没有 To Coda、谱里没有 `:|` 与房号；不满足返回 null，交给 `RepeatProcessor`
+ *  （从前 D.C. 只多唱一遍，第 3、4 段整个丢掉；直接按段数整体乘又会把 A 唱成四遍）。 */
+function jumpByVerse(parts: readonly PlayPart[], jumps: PlayJumps): PlayItem[] | null {
+  const measures = parts[0]!.measures;
+  if (measures.some((m) => m.repeatBackward || m.endingNum)) return null;
+  let back: { at: TimePosition; spec: JumpSpec } | null = null;
+  let fine: TimePosition | null = null;
+  for (const [t, v] of jumps.jumpTo) {
+    if (v.kind === PlaySpecKind.ToCoda) return null;
+    if (v.kind === PlaySpecKind.Fine) {
+      if (fine) return null;
+      fine = t;
+    } else {
+      if (back) return null;
+      back = { at: t, spec: v };
+    }
+  }
+  if (!back || !fine) return null;
+  let target = new TimePosition(0, new Fraction(0));
+  if (back.spec.kind === PlaySpecKind.DalSegno) {
+    const seg = jumps.segno.get(back.spec.value as string);
+    if (!seg) return null;
+    target = seg;
+  }
+  const fineMid = fine.mid;
+  const backMid = back.at.mid;
+  if (!(target.mid <= fineMid && fineMid < backMid)) return null;
+  const versesOf = (beg: number, end: number): number => Math.max(0, ...parts.map((p) => verseCount(p, beg, end)));
+  const b = versesOf(fineMid + 1, backMid + 1);
+  const a = versesOf(target.mid, fineMid + 1);
+  const v = Math.max(a, b);
+  if (v <= 1) return null;
+  const out: PlayItem[] = [];
+  const push = (mid: number, end: number, pass: number): PlayItem => {
+    const p = new PlayItem();
+    p.mid = mid;
+    p.end = end;
+    p.pass = pass;
+    out.push(p);
+    return p;
+  };
+  if (a < b) {
+    // A 的词比 B 少（副歌在前）：下一段接在 Fine 后面，不再从头唱 A
+    push(0, backMid + 1, 1);
+    for (let k = 1; k <= v; k++) {
+      const p = push(target.mid, fineMid + 1, k <= a ? k : 1);
+      p.offset = target.offset;
+      if (k < v) {
+        p.endOfPass = true;
+        push(fineMid + 1, backMid + 1, k + 1);
+      }
+    }
+    return out;
+  }
+  // A 也写了各段的词（236《同享主餐》、250《主，差遣我》）：每段从曲首唱到 D.C./D.S.、跳回唱到 Fine，下一段再从曲首起
+  for (let k = 1; k <= v; k++) {
+    push(0, backMid + 1, k);
+    const p = push(target.mid, fineMid + 1, k);
+    p.offset = target.offset;
+    if (k < v) p.endOfPass = true;
+  }
+  return out;
+}
+
+/** 有跳转、又有反复的谱：`RepeatProcessor` 推出的一遍里遍号只用来挑房，段数比它多（094《哈利路亚，祂已复活》三段、
+ *  一房里的 D.S. 只回 segno 再唱一次）时，整套按段数逐段各唱一遍，遍号换成段号（2019 年成品 PPT 就是这样唱的）。 */
+function perVerse(items: readonly PlayItem[], verses: number): PlayItem[] {
+  let maxPass = 0;
+  for (const it of items) maxPass = Math.max(maxPass, it.pass);
+  if (verses <= maxPass) return [...items];
+  const out: PlayItem[] = [];
+  for (let k = 1; k <= verses; k++) {
+    items.forEach((it, i) => {
+      const c = it.clone();
+      c.pass = k;
+      c.endOfPass = i === items.length - 1 && k < verses;
+      out.push(c);
+    });
+  }
+  return out;
 }
 
 /** 不推、按段数整曲逐遍（没有反复信息时的退路）。`passes` 为 0 时返回空表。 */
@@ -357,6 +447,12 @@ class RepeatProcessor {
       cur.mid = mid;
       cur.end = mid + 1;
       this.result.push(cur);
+    }
+    // 一房里写在 `:|` 上的 D.S.（094《哈利路亚，祂已复活》）：不是跳转，是这次反复回到 segno 而不是曲首
+    if (seg !== null && mea.repeatBackward && this.inEnding) {
+      const t = this.jumps.segno.get(seg) ?? new TimePosition(parseInt(seg, 10) - 1, new Fraction(0));
+      this.loopStart = t.mid;
+      seg = null;
     }
     if (seg !== null) {
       let t = this.jumps.segno.get(seg);

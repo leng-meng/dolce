@@ -71,7 +71,7 @@
 - 键名是 **kebab-case 逻辑键**，全表（以及各键在两个排版器上落到哪个字段）见 `src/style/keys.ts`。
   线宽是一级键（`stem` `beam` `leger` `barline` `final-barline` `staff-line`），只给宽度，颜色随 `@page { ink }`。
 - **块里没有字体**：字体写在角色上（§3）。
-- 认不出的键解析期报 `行:列`；某个模式不支持的键（如纯简谱下的 `top-dy`，只有混排的简谱层要整体上提）排版时告警忽略。
+- 认不出的键解析期报 `行:列`；某个模式不支持的键（如纯简谱下的 `legacy-time-sig`，旧版拍号笔位只在混排有）排版时告警忽略。
 - 长度可以写常量四则，常见分数照写：`barline: 1em / 14;`（解析时折成一个长度）。
 - 长度：`@staff` 与混排下的 `@jianpu` 裸数字是 tenths，带单位只收 `em`（= `smufl` 字号，出厂 40 tenths）/ `sp`（= 10 tenths）；
   纯简谱下 `em` = 音符字号，`sp` = 名义谱高 / 4。纯简谱的角色字号（`lyric` `chord` `title` `credit` `tuplet` `sectionWord`…）也可以写 `em`，

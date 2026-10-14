@@ -6,52 +6,21 @@ import { lineItem, textItem } from "../engrave/prims";
 import { Font } from "../layout/font";
 import type { ElementId } from "../model/doc";
 
-/** 一个和弦画出来的那一组（五线谱层的符头、符干、符尾；简谱叠层的那一柱）的类名。
- *  `data` 是 `StaffChordData`：编辑器按元素 id 找到它，放播放线、认点选。 */
+/** 一个和弦画出来的那一组（五线谱层的符头、符干、符尾；简谱叠层的那一柱）的类名（`.selected` 描蓝挂在它上面）。
+ *  身份走标签（`layout/identity.ts`，`note` + 元素 id），播放线、点选、可视化编辑都经 `layout/scoreindex.ts` 认。 */
 export const STAFF_CHORD = "staff-chord";
-export interface StaffChordData {
-  readonly chordId: ElementId;
-}
-/** 一行系统的组的类名。`data` 是 `StaffSystemData`：谱表带（混排连同简谱层）的上下沿，系统坐标（tenths）。 */
+/** 一行系统的组的类名。身份标签 `system`；`data` 是 `StaffSystemData`：谱表带（混排连同简谱层）的上下沿，系统坐标（tenths）。 */
 export const STAFF_SYSTEM = "staff-system";
 export interface StaffSystemData {
   readonly top: number;
   readonly bottom: number;
 }
 
-/**
- * 五线谱层里**叶子图元**（歌词字、弧、小节线）的身份，挂在 `PageItem.data` 上。编辑器按它认点选（可视化编辑）。
- * 只挂数据、不加类名不包组：`mixedVisitor` 对叶子不写 class，所以 SVG 输出一字不变（`mixed-tree-dump` 指纹不动）；
- * 渲染时由 `mixedVisitor` 的 `leafMap` 记下它画出的那个 SVG 元素。
- * 小节线没有 id：按「第几小节（全曲下标）+ 在它哪一侧」认（系统开头那条是首小节的 `before`，其余是前一小节的 `after`）。
- */
-export type StaffLeafData =
-  | { readonly staffRole: "lyric"; readonly chordId: ElementId; readonly verse: number }
-  | { readonly staffRole: "slur"; readonly start: ElementId; readonly end: ElementId }
-  | { readonly staffRole: "barline"; readonly measure: number; readonly side: "before" | "after" }
-  /** 标题块的一行字（credit）。自动铺排会按 `work-title` 重新合成 credit，下标对不上原文，所以按字认（同简谱档页眉） */
-  | { readonly staffRole: "credit"; readonly text: string };
-
-/** `data` 是不是 `StaffLeafData`。 */
-export function isStaffLeaf(data: unknown): data is StaffLeafData {
-  return typeof data === "object" && data !== null && "staffRole" in data;
-}
-
-/** 叶子身份的查表键（同一身份可能画成好几个图元：小节线每个谱表组一段、混排的简谱层再一段）。 */
-export function staffLeafKey(d: StaffLeafData): string {
-  switch (d.staffRole) {
-    case "lyric": return `lyric:${d.chordId}:${d.verse}`;
-    case "slur": return `slur:${d.start}:${d.end}`;
-    case "barline": return `bar:${d.measure}:${d.side}`;
-    case "credit": return `credit:${d.text}`;
-  }
-}
-
 /** 和弦 `id` 的组（见 `STAFF_CHORD`）。 */
 export function chordGroup(id: ElementId): Group {
   const g = new Group();
   g.classes.add(STAFF_CHORD);
-  g.data = { chordId: id } satisfies StaffChordData;
+  g.ident = { kind: "note", id };
   return g;
 }
 

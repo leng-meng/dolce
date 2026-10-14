@@ -91,7 +91,6 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "verse-numbers": { kind: "word", jianpu: "look.verseNumbers", book: "layout.verseNumbers" },
   "max-horizontal-scale": { kind: "num", jianpu: "spacing.maxHorizontalScale", book: "layout.maxHorizontalScale" },
   "grace-scale": { kind: "num", jianpu: "size.grace", mixed: "jpGraceScale" },
-  "top-dy": { kind: "len", mixed: "jpTopDy", note: "只有混排的简谱层要整体上提" },
   "show-key-change": { kind: "bool", mixed: "showKeyChangeJp", note: "纯简谱一定画调号" },
   "key-uses-full-font": { kind: "bool", mixed: "jpKeyJianpuFont", note: "纯简谱没有缩小的简谱层" },
   "legacy-time-sig": { kind: "bool", mixed: "musicppJpTimeSig", note: "旧版拍号笔位只在混排有" },

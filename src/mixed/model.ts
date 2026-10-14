@@ -3029,7 +3029,6 @@ export class MixedOptions {
    *  谱里的版面坐标不再用（整份自动铺排）；没给就照谱里的 `<scaling>` / `<lyric-font>`。 */
   staffSizeMm: number | null = null;
   lyricPt: number | null = null;
-  jpTopDy = 0;
   // ── 简谱层附件相对数字的位置。八度点、减时线走公共那一份（engrave/stack.ts，墨迹到墨迹等距）：
   /** 叠层的空 ÷ 数字墨迹高。样式键 `stack-gap`。 */
   stackGap = STACK_GAP_DEFAULT;
@@ -3289,7 +3288,7 @@ function jpArcEnd(eng: MixedOptions, ch: ChordLayout, isEnd: boolean): { x: numb
 export function slurTiedPosForJp(eng: MixedOptions, chl: ChordLayout | null, chr: ChordLayout): [Pt2, Pt2] {
   const r = jpArcEnd(eng, chr, true);
   const l = chl ? jpArcEnd(eng, chl, false) : r;
-  const y = jpArcY(l.top, r.top, mainRow(eng).st.gap) - eng.jpTopDy;
+  const y = jpArcY(l.top, r.top, mainRow(eng).st.gap);
   return [{ x: l.x, y }, { x: r.x, y }];
 }
 

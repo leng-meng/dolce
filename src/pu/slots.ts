@@ -282,7 +282,7 @@ function buildRow(measures: readonly Measure[], ranges?: ReadonlyMap<Measure, re
     const heads = [...headAt.entries()].sort((a, b) => a[0] - b[0]);
     const headFrom = (j: number): NoteElement | SustainElement | undefined => heads.find(([k]) => k >= j)?.[1] ?? heads[heads.length - 1]?.[1];
     const addOrn = (h: NoteElement | SustainElement | BarlineElement | undefined, o: SourceOrnament): void => {
-      if (h && "ornaments" in h && !h.ornaments.some((x) => x.name === o.name)) h.ornaments.push({ name: o.name, level: o.level, source: ZERO, projected: true });
+      if (h && "ornaments" in h && !h.ornaments.some((x) => x.name === o.name)) h.ornaments.push({ name: o.name, level: o.level, source: ZERO });
     };
     // 小节被换行切成几段时每段都会走到这里：只收落在本段 `[from, to)` 里的，否则另一段的记号会挂到本段末尾、挂两遍
     const inRange = (j: number): boolean => j >= from && j < to;

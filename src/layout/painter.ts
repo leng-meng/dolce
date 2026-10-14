@@ -6,7 +6,7 @@
 // 点选 / 高亮部分移植自 mp/layout/draw.kt。
 
 import type { PlayItem } from "../score/playorder";
-import { Group, PageItem } from "./pageitem";
+import { Group, PageItem, TextFrame } from "./pageitem";
 import type { ElementId, ScoreDoc } from "../model/doc";
 import { headerPartsOf, mixedVisitor, renderPageSvg, type HeaderPart } from "./render";
 import { pageGeometry, type LayoutResult } from "./result";
@@ -20,7 +20,7 @@ import type { Region } from "../style/ss";
 import { MixedOptions, type StaffLayout, type Sys } from "../mixed/model";
 import { layoutStaff } from "../mixed/layout";
 import { layoutStaffPages, PAGE_HEIGHT_FALLBACK } from "../mixed/staffpages";
-import { isStaffLeaf, STAFF_CHORD, STAFF_SYSTEM, staffLeafKey, type StaffChordData, type StaffLeafData, type StaffSystemData } from "../mixed/prims";
+import type { StaffSystemData } from "../mixed/prims";
 import { layoutJianpu, type JianpuLayout } from "./jianpu/compose";
 import { clearSongBreaks } from "../model/breaks";
 import type { PlacedPage } from "./jianpu/place";
@@ -164,20 +164,14 @@ export class ScorePainter {
   result: LayoutResult | null = null;
   /** PageItem -> rendered <g>, populated each renderPage (for DOM picking). */
   nodeMap = new WeakMap<PageItem, SVGGElement>();
-  /** 简谱两条路的身份索引（按图元上的身份标签收，见 `scoreindex.ts`）：试听高亮、点选、可视化编辑查它。 */
+  /** 身份索引（按图元上的身份标签收，见 `scoreindex.ts`）：试听高亮、点选、可视化编辑查它。简谱、五线谱 / 混排同一份。 */
   private index: ScoreIndex = ScoreIndex.empty();
-  /** 五线谱 / 混排：元素 id → 画它的和弦组（五线谱层在前、简谱叠层在后）与所在系统组。见 `mixed/prims.ts::STAFF_CHORD`。 */
-  private staffChords = new Map<ElementId, { page: number; item: PageItem; system: PageItem | null }[]>();
   /** 试听的竖直播放线（各视图同一种，当前在哪页的 svg 里就挂在哪页）。 */
   private playhead = new Playhead();
-  /** 五线谱 / 混排：渲染出来的和弦组 `<g>` → 元素 id（点选按事件冒泡认）。 */
-  private staffElId = new WeakMap<Element, ElementId>();
-  /** 五线谱 / 混排：带身份的叶子（歌词字、弧、小节线，见 `mixed/prims.ts::StaffLeafData`），按 `staffLeafKey` 收。 */
-  private staffLeaves = new Map<string, { page: number; item: PageItem }[]>();
-  /** 叶子画出的 SVG 元素（`mixedVisitor` 的 `leafMap`）。 */
+  /** 五线谱 / 混排的叶子（歌词字、小节线、页眉字）画出的 SVG 元素（`mixedVisitor` 的 `leafMap`；简谱每个图元都有 `<g>`，在 `nodeMap`）。 */
   private leafMap = new WeakMap<PageItem, SVGGraphicsElement>();
-  /** 画出来的叶子元素 → 它的身份（点选按事件目标认）。 */
-  private staffLeafOf = new WeakMap<Element, StaffLeafData>();
+  /** 渲染出来的带身份元素 → 图元（点选按事件目标往上认）。 */
+  private itemOfEl = new WeakMap<Element, PageItem>();
   private staff: StaffState | null = null;
   /** 简谱这一路提交的结果（页面、定位结构与 note / syllable 身份索引）。与 staff 互斥。 */
   private original: JianpuLayout | null = null;
@@ -282,6 +276,7 @@ export class ScorePainter {
       this.pageHeight = r.height;
       this.result = result;
       this.nodeMap = new WeakMap();
+      this.leafMap = new WeakMap();
       this.playhead.reset();
       this.index = ScoreIndex.build(r.pages);
     };
@@ -309,35 +304,10 @@ export class ScorePainter {
       this.original = null;
       this.result = result;
       this.nodeMap = new WeakMap();
+      this.leafMap = new WeakMap();
       this.playhead.reset();
-      this.index = ScoreIndex.empty();
-      this.buildStaffIndex(pages);
+      this.index = ScoreIndex.build(pages);
     };
-  }
-
-  /** 五线谱各页页面树里的和弦组，按元素 id 收起来，连同它所在的系统组。 */
-  private buildStaffIndex(pages: readonly Group[]): void {
-    this.staffChords.clear();
-    this.staffLeaves.clear();
-    this.leafMap = new WeakMap();
-    const walk = (item: PageItem, page: number, system: PageItem | null): void => {
-      if (isStaffLeaf(item.data)) {
-        const key = staffLeafKey(item.data);
-        const list = this.staffLeaves.get(key) ?? [];
-        list.push({ page, item });
-        this.staffLeaves.set(key, list);
-      }
-      if (item.classes.has(STAFF_SYSTEM)) system = item;
-      if (item.classes.has(STAFF_CHORD)) {
-        const id = (item.data as StaffChordData).chordId;
-        const list = this.staffChords.get(id) ?? [];
-        list.push({ page, item, system });
-        this.staffChords.set(id, list);
-        return;
-      }
-      for (const c of item.children) walk(c, page, system);
-    };
-    pages.forEach((pg, i) => walk(pg, i, null));
   }
 
   /** 当前结果的曲名（导出文件名取首行）。 */
@@ -378,16 +348,28 @@ export class ScorePainter {
     return this.result?.staffPlacements[0] ?? null;
   }
 
-  /** 元素 `id` 的音符格：简谱两条路按第 `pass` 遍（找不到那一遍取第一个），五线谱取五线谱层那一组。 */
-  private noteHit(id: ElementId, pass = 0): Hit | null {
-    if (this.staff) return this.staffChords.get(id)?.[0] ?? null;
-    return this.index.note(id, pass);
+  /** 元素 `id` 的音符格：简谱两条路按第 `pass` 遍（找不到那一遍取第一个），五线谱 / 混排取五线谱层那一组。 */
+  private noteHit(id: ElementId, pass = 0, occ = 0): Hit | null {
+    return this.index.note(id, pass, occ);
+  }
+
+  /** 图元画出来的 SVG 元素：组在 `nodeMap`，五线谱 / 混排的叶子在 `leafMap`。 */
+  private svgOf(item: PageItem): SVGGraphicsElement | undefined {
+    return this.nodeMap.get(item) ?? this.leafMap.get(item);
   }
 
   private elsOf(items: readonly PageItem[]): SVGGElement[] {
     return items.flatMap((it) => {
       const el = this.nodeMap.get(it);
       return el ? [el] : [];
+    });
+  }
+
+  /** 各段画出来、仍挂在文档里的元素（叶子也算）。 */
+  private shownEls(hits: readonly Hit[]): SVGGraphicsElement[] {
+    return hits.flatMap((h) => {
+      const el = this.svgOf(h.item);
+      return el?.isConnected ? [el] : [];
     });
   }
 
@@ -399,20 +381,21 @@ export class ScorePainter {
    *  各视图统一放竖直播放线（`playhead.ts`），不给音符着色；播放器跟各声部起音走，多声部时
    *  女高休止、别的声部在唱也照走。这一视图里没画的音（展开档只排带歌词的那个声部）不挪，留在上一处。
    *  纵向：五线谱 / 混排取谱表带；简谱两条路取音符所在那一行（`system` 标签，多声部是连谱号括起的整组）。 */
-  highlight(id: ElementId | null, pass = 0): number | null {
+  highlight(id: ElementId | null, pass = 0, occ = 0): number | null {
     if (id === null) {
       this.playhead.move();
       return null;
     }
     if (this.staff) {
-      const hit = this.staffChords.get(id)?.[0];
-      if (!hit?.system) return null;
-      const sysEl = this.nodeMap.get(hit.system);
-      const band = hit.system.data as StaffSystemData;
+      const hit = this.index.note(id);
+      const sys = hit ? this.index.systemOf(hit.item)?.system : undefined;
+      if (!hit || !sys) return null;
+      const sysEl = this.nodeMap.get(sys);
+      const band = sys.data as StaffSystemData;
       this.playhead.move(this.nodeMap.get(hit.item), sysEl ? spanIn(sysEl, band.top, band.bottom) : null);
       return hit.page;
     }
-    const hit = this.index.note(id, pass);
+    const hit = this.index.note(id, pass, occ);
     const el = hit ? this.nodeMap.get(hit.item) : undefined;
     if (!hit || !el) return null;
     const span = this.playhead.systemSpan(this.index, hit.item, (it) => this.nodeMap.get(it));
@@ -420,44 +403,43 @@ export class ScorePainter {
     return hit.page;
   }
 
-  /** 五线谱 / 混排：点中的元素（事件目标）落在哪个和弦组里 → 元素 id；不在和弦上为 null。 */
-  staffChordAt(target: Element | null): ElementId | null {
-    if (!this.staff) return null;
+  /** 点中的元素（事件目标）落在哪个音符格 / 和弦组里 → 元素 id；不在音符上为 null。 */
+  noteAt(target: Element | null): ElementId | null {
     for (let el = target; el && !(el instanceof SVGSVGElement); el = el.parentElement) {
-      const id = this.staffElId.get(el);
-      if (id !== undefined) return id;
+      const ident = this.itemOfEl.get(el)?.ident;
+      if (ident?.kind === "note" && ident.id !== undefined) return ident.id;
     }
     return null;
   }
 
-  /** 五线谱 / 混排：元素 `id` 画出来的各个和弦组（五线谱层、简谱叠层各一个）。 */
-  staffChordEls(id: ElementId): SVGGElement[] {
-    return (this.staffChords.get(id) ?? []).flatMap((h) => {
-      const el = this.nodeMap.get(h.item);
-      return el ? [el] : [];
-    });
+  /** 元素 `id` 画出来的各个音符格（混排里五线谱层、简谱叠层各一个；简谱展开档每遍一个）。 */
+  noteEls(id: ElementId): SVGGElement[] {
+    return this.elsOf(this.index.notes(id).map((h) => h.item));
   }
 
-  /** 五线谱 / 混排：某个叶子身份（歌词字、弧、小节线）画出来的各个元素；没画出来为空。 */
-  staffLeafEls(d: StaffLeafData): SVGGraphicsElement[] {
-    return (this.staffLeaves.get(staffLeafKey(d)) ?? []).flatMap((h) => {
-      const el = this.leafMap.get(h.item);
-      return el?.isConnected ? [el] : [];
-    });
+  /** 五线谱 / 混排：第 `measure` 小节（全曲下标）`edge` 那一侧的小节线各段；没画出来为空。 */
+  measureBarlineEls(measure: number, edge: "before" | "after"): SVGGraphicsElement[] {
+    return this.shownEls(this.index.measureBarlines(measure, edge));
   }
 
-  /** 五线谱 / 混排：事件目标是不是一个带身份的叶子（歌词字、弧、小节线）。 */
-  staffLeafAt(target: Element | null): StaffLeafData | null {
-    return target ? this.staffLeafOf.get(target) ?? null : null;
+  /** 从 `start` 连到 `end` 的那条弧画出来的各段（跨系统时两截）。 */
+  slurEls(start: ElementId, end: ElementId): SVGGraphicsElement[] {
+    return this.shownEls(this.index.slurParts(start, end));
+  }
+
+  /** 五线谱 / 混排：和弦 `id` 第 `verse` 段（源段号）的那个字；没画出来为空。 */
+  lyricEls(id: ElementId, verse: number): SVGGraphicsElement[] {
+    const hit = this.index.syllable(id, verse);
+    return hit ? this.shownEls([hit]) : [];
   }
 
   /** 五线谱 / 混排：和弦 `id` 所在系统的谱表带（混排连同简谱层），换成它所在页面 SVG 的用户坐标：光标竖线照这一带的高度画。 */
   staffBand(id: ElementId): { svg: SVGSVGElement; y: number; h: number } | null {
-    const hit = this.staffChords.get(id)?.[0];
-    const sys = hit?.system;
+    const hit = this.index.note(id);
+    const sys = hit ? this.index.systemOf(hit.item)?.system : undefined;
     const g = sys ? this.nodeMap.get(sys) : undefined;
     const svg = g?.ownerSVGElement;
-    if (!sys || !g || !svg) return null;
+    if (!sys || !g || !svg || !this.staff) return null;
     const d = sys.data as StaffSystemData;
     const m = svg.getScreenCTM()?.inverse().multiply(g.getScreenCTM() ?? new DOMMatrix());
     if (!m) return null;
@@ -468,13 +450,12 @@ export class ScorePainter {
 
   /** 元素 `id` 第一次出现在第几页（光标同步翻页用）；没画出来为 null。 */
   pageOf(id: ElementId): number | null {
-    if (this.staff) return this.staffChords.get(id)?.[0]?.page ?? null;
     return this.index.pageOf(id);
   }
 
   /** 元素 `id` 第 `pass` 遍那个音的 `<g>`（点选、滚动到可见用）；没画出来为 null。 */
-  entryEl(id: ElementId, pass = 0): SVGGElement | null {
-    return this.elOf(this.noteHit(id, pass));
+  entryEl(id: ElementId, pass = 0, occ = 0): SVGGElement | null {
+    return this.elOf(this.noteHit(id, pass, occ));
   }
 
   /** 挨着元素 `id` 的那条小节线的 `<g>`（`edge` 是它在音符的哪一侧）；没画出来为 null。
@@ -517,16 +498,11 @@ export class ScorePainter {
   /** 页眉里画出来的东西（标题、署名、调号拍号）：`<g>`、所画的字、是不是调号拍号。可视化编辑按字对回原文字段。 */
   headerParts(): HeaderPart[] {
     if (this.staff) {
-      // 五线谱 / 混排：标题块各行（`StaffLeafData` 的 credit），按字认
-      const out: HeaderPart[] = [];
-      for (const hits of this.staffLeaves.values()) {
-        for (const h of hits) {
-          const d = h.item.data;
-          const el = this.leafMap.get(h.item);
-          if (isStaffLeaf(d) && d.staffRole === "credit" && el?.isConnected) out.push({ el, text: d.text, role: "text" });
-        }
-      }
-      return out;
+      // 五线谱 / 混排：标题块各行（`header` 标签），按所画的字认
+      return this.index.headers().flatMap((h) => {
+        const el = this.leafMap.get(h.item);
+        return el?.isConnected && h.item instanceof TextFrame ? [{ el, text: h.item.text, role: "text" as const }] : [];
+      });
     }
     return headerPartsOf(this.result?.pages.map((p) => p.root) ?? [], this.nodeMap);
   }
@@ -540,24 +516,24 @@ export class ScorePainter {
       if (!page) throw new Error(`ScorePainter: 没有第 ${pageIndex + 1} 页`);
       const { w, h } = page.geometry.viewBox;
       const svg = renderPageSvg(page.root, w, h, { cls: "score-page mixed-page", visitor: mixedVisitor(this.nodeMap, this.leafMap) });
-      for (const [id, hits] of this.staffChords) {
-        for (const h of hits) {
-          const el = h.page === pageIndex ? this.nodeMap.get(h.item) : undefined;
-          if (el) this.staffElId.set(el, id);
-        }
-      }
-      for (const hits of this.staffLeaves.values()) {
-        for (const h of hits) {
-          const el = h.page === pageIndex ? this.leafMap.get(h.item) : undefined;
-          if (el && isStaffLeaf(h.item.data)) this.staffLeafOf.set(el, h.item.data);
-        }
-      }
+      this.mapRendered(pageIndex);
       return svg;
     }
     const page = this.result?.pages[pageIndex];
     if (!page) throw new Error(`ScorePainter: 没有第 ${pageIndex + 1} 页`);
     const { w, h } = page.geometry.viewBox;
-    return renderPageSvg(page.root, w, h, this.nodeMap);
+    const svg = renderPageSvg(page.root, w, h, this.nodeMap);
+    this.mapRendered(pageIndex);
+    return svg;
+  }
+
+  /** 这一页带身份的图元：画出来的元素反查回图元（`noteAt` 按它认点选）。 */
+  private mapRendered(pageIndex: number): void {
+    for (const h of this.index.all) {
+      if (h.page !== pageIndex) continue;
+      const el = this.svgOf(h.item);
+      if (el) this.itemOfEl.set(el, h.item);
+    }
   }
 
   get pageCount(): number {

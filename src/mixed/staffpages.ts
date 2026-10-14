@@ -9,7 +9,6 @@ import { Fraction } from "../common/fraction";
 import { Matrix33 } from "../common/geom";
 import { Font } from "../layout/font";
 import { Group, TextFrame } from "../layout/pageitem";
-import type { StaffLeafData } from "./prims";
 import { harmonyBand, LCR, StaffLayout, Notation, ScoreCredit, Sys, type MeasureText, type TextBlock } from "./model";
 import { drawSystem } from "./render";
 
@@ -248,7 +247,7 @@ function drawFrames(
         const tf = new TextFrame();
         tf.text = line;
         tf.font = font;
-        tf.data = { staffRole: "credit", text: line } satisfies StaffLeafData; // 可视化编辑按字认页眉
+        tf.ident = { kind: "header" }; // 可视化编辑按所画的字认页眉
         let x = anchorX;
         const w = font.measureText(line);
         if (cr.justify === LCR.Center) x -= w / 2;

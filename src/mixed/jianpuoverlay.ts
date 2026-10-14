@@ -67,7 +67,7 @@ export function drawJianpuOverlay(grp: Group, sys: Sys, st: SysStaff, m: Measure
 
   for (const ch of md.chords) {
     for (const n of ch.notes) {
-      const col = chordGroup(ch.src.id); // 带元素 id：播放线、点选按它认（`prims.ts::STAFF_CHORD`）
+      const col = chordGroup(ch.src.id); // 带身份标签：播放线、点选按它认（`prims.ts::chordGroup`）
       const alt = accidentalOf(ch, n, ps.subIndex);
       if (alt !== null) drawAccidental(eng, col, md, ch, n, alt);
       drawColumn(eng, col, md, ch, n, ps.subIndex);
@@ -79,7 +79,8 @@ export function drawJianpuOverlay(grp: Group, sys: Sys, st: SysStaff, m: Measure
 
 /** 这个音在简谱层要印的临时记号：语义层按旋律延续算好的（`Degree.accidental`），不照搬 MusicXML 的 <accidental>。 */
 function accidentalOf(ch: ChordLayout, n: NoteLayout, subStaff: number): number | null {
-  if (ch.rest || n.staff !== subStaff || !n.visible || !n.jpMelody || n.x < 0) return null;
+  // 与 `drawColumn` 同一组条件：不画数字的音（slash、cue）也不印升降号
+  if (ch.rest || ch.slash || ch.cue || n.staff !== subStaff || !n.visible || !n.jpMelody || n.x < 0) return null;
   return n.jpAccidental();
 }
 
@@ -224,30 +225,36 @@ function drawJpBeams(eng: MixedOptions, container: Group, md: PartMeasureLayout)
         const row = grace ? graceRow(eng, md, first) : mainRow(eng);
         const y = beamY(row.inkBottom, lev + 1, row.st);
 
-        // 倚音的尾钩挂在**最下一层**、整串的中点：有低音点就从最低那个点下面再让一道空起笔
-        const runChords = grp.chords.slice(grp.chords.indexOf(first), grp.chords.indexOf(last) + 1);
-        if (grace && runChords.every((c) => c.jpBeamCount() <= lev + 1)) {
-          let from = y;
-          for (const c of runChords) {
-            const low = Math.max(0, -melodyNote(c).octaveJp());
-            if (low > 0) from = Math.max(from, stackBottom(row.inkBottom, c.jpBeamCount(), low, row.st) + row.st.gap);
-          }
-          // 钩子的形状与旧简谱引擎、原样文档同一笔（engrave/grace.ts::graceHook），朝右弯向后面的主音
-          const h = graceHook((rx + lx) / 2, from, row.inkBottom - row.inkTop, 1);
-          const hook = new GraphicPath();
-          hook.fill = false;
-          hook.stroke = true;
-          hook.strokeColor = BLACK;
-          hook.strokeWidth = row.st.beamWidth;
-          hook.moveTo(h.m[0], h.m[1]);
-          hook.cubicTo(...h.c);
-          container.add(hook);
-        }
-
         addLine(container, lx, y, rx, y, row.st.beamWidth);
       }
     }
+    if (grp.chords[0]!.grace) drawGraceHook(eng, container, md, grp.chords);
   }
+}
+
+/** 倚音的尾钩：一串只画一个，挂在离主音最近的那个倚音下面（前倚音是最后一个、后倚音是第一个），
+ *  弯向主音——形状与简谱引擎同一笔（engrave/grace.ts::graceHook）。有低音点就从最低那个点下面再让一道空起笔，
+ *  否则从最下一条减时线垂下来。 */
+function drawGraceHook(eng: MixedOptions, container: Group, md: PartMeasureLayout, chords: ChordLayout[]): void {
+  const after = chords[0]!.src.grace?.after === true;
+  const ch = after ? chords[0]! : chords[chords.length - 1]!;
+  const nt = melodyNote(ch);
+  const font = eng.mixFont;
+  const num = nt.number();
+  const mid = nt.x + ch.noteheadWidth(eng.meta) / 2 - font.measureText(num) / 2 + (font.measureText(num) * eng.jpGraceScale) / 2;
+  const row = graceRow(eng, md, ch);
+  const beams = ch.jpBeamCount();
+  const low = Math.max(0, -nt.octaveJp());
+  const from = low > 0 ? stackBottom(row.inkBottom, beams, low, row.st) + row.st.gap : beamY(row.inkBottom, beams, row.st);
+  const h = graceHook(mid, from, row.inkBottom - row.inkTop, after ? -1 : 1);
+  const hook = new GraphicPath();
+  hook.fill = false;
+  hook.stroke = true;
+  hook.strokeColor = BLACK;
+  hook.strokeWidth = row.st.beamWidth;
+  hook.moveTo(h.m[0], h.m[1]);
+  hook.cubicTo(...h.c);
+  container.add(hook);
 }
 
 /** Draw time signature for jp/mixed staff（render.cpp::drawTime Mixed branch）。 */

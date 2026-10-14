@@ -82,9 +82,6 @@ export interface Ornament {
   name: string;
   level: number;
   source: SourceSpan;
-  /** **只管画**：从小节 `<direction>`（或 123 左线上的跳转目标）投到符号上的（`pu/slots.ts`，`model/directionmarks.ts`）。
-   *  演唱顺序不读（`phrasesong.ts` 收跳转时跳过）——跳转语义仍按各来源原来的口径，排版补上画出来这一半 */
-  projected?: boolean;
 }
 
 export interface NoteElement {

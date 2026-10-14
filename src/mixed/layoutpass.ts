@@ -449,17 +449,27 @@ function autoPlaceWedges(score: StaffLayout): void {
   }
 }
 
-/** 歌词 y：逐 system 取该行往下伸的最低点（`systemLowest`），各 verse 行整齐地排在它下面；
- *  离谱表底线至少 `AUTO_LYRIC_STAFF_GAP`。 */
+/** 歌词 y：逐 system、**逐声部逐谱表**取那一谱表往下伸的最低点（`systemLowest`），各 verse 行整齐地排在它下面；
+ *  离谱表底线至少 `AUTO_LYRIC_STAFF_GAP`。歌词坐标相对它自己的谱表，一个声部的低音只推它自己的歌词。 */
 function autoPlaceLyricsY(score: StaffLayout): void {
   const font = score.defaults.lyricFont;
   const ascent = -font.metrics.ascent;
   const row = Math.max(AUTO_LYRIC_ROW, font.size * 1.1);
   for (const sys of score.systems) {
-    const base = Math.max(systemLowest(score, sys) + AUTO_LYRIC_GAP, 40 + AUTO_LYRIC_STAFF_GAP) + ascent;
-    for (const lrc of systemLyrics(score, sys)) {
-      const verse = Math.max(0, (parseInt(lrc.num, 10) || 1) - 1);
-      lrc.y = -(base + verse * row);
+    for (const part of score.parts) {
+      const byStaff = new Map<number, LyricLayout[]>();
+      for (const lrc of systemLyrics(score, sys, [part])) {
+        const list = byStaff.get(lrc.staff) ?? [];
+        list.push(lrc);
+        byStaff.set(lrc.staff, list);
+      }
+      for (const [staff, lyrics] of byStaff) {
+        const base = Math.max(systemLowest(score, sys, true, [part], staff) + AUTO_LYRIC_GAP, 40 + AUTO_LYRIC_STAFF_GAP) + ascent;
+        for (const lrc of lyrics) {
+          const verse = Math.max(0, (parseInt(lrc.num, 10) || 1) - 1);
+          lrc.y = -(base + verse * row);
+        }
+      }
     }
   }
 }
@@ -500,10 +510,10 @@ function systemLyrics(score: StaffLayout, sys: Sys, parts: readonly PartLayout[]
   return out;
 }
 
-/** 这一行第一谱表往下伸到哪（cy 向下为正，谱表底线 = 40）：符头、朝下符干、下方记号、下方连音数字、下方 slur/tie。
+/** 这一行第 `staff` 谱表（缺省第一谱表）往下伸到哪（cy 向下为正，谱表底线 = 40）：符头、朝下符干、下方记号、下方连音数字、下方 slur/tie。
  *  弧取画出来的真实曲线底（`slurEnds`/`tiedEnds` + `arcExtent`，与绘制同一份几何），跨行的弧按本行那一截。
  *  要在 `autoPlaceTuplets` 之后：连音数字的上下在那里才定。 */
-function systemLowest(score: StaffLayout, sys: Sys, withWedges = true, parts: readonly PartLayout[] = score.parts): number {
+function systemLowest(score: StaffLayout, sys: Sys, withWedges = true, parts: readonly PartLayout[] = score.parts, staff = 0): number {
   const four = new Fraction(4);
   const eng = score.options;
   const chordLow = (ch: ChordLayout): number => {
@@ -520,7 +530,7 @@ function systemLowest(score: StaffLayout, sys: Sys, withWedges = true, parts: re
       if (!md) continue;
       // 倚音也算：低倚音（`{5,,}`）带着加线落到谱表下面，不算的话歌词就排到它身上
       for (const ch of md.chords) {
-        if (ch.rest || ch.notes[0]?.staff !== 0) continue;
+        if (ch.rest || ch.notes[0]?.staff !== staff) continue;
         maxDown = Math.max(maxDown, chordLow(ch));
       }
     }
@@ -529,21 +539,21 @@ function systemLowest(score: StaffLayout, sys: Sys, withWedges = true, parts: re
     // 混排里 slur/tie 画在简谱层上方；这时候谱表记法还没定（formatMixedScore 在后头），按五线谱的画法量，
     // 画在下方的才算数
     const arcs = [
-      ...part.slurs.filter((sl) => sl.startNote?.staff === 0).map((sl) => slurEnds(sys, eng, sl, Notation.Normal)),
-      ...part.tied.filter((t) => t.startNote?.staff === 0).map((t) => tiedEnds(sys, eng, t, Notation.Normal)),
+      ...part.slurs.filter((sl) => sl.startNote?.staff === staff).map((sl) => slurEnds(sys, eng, sl, Notation.Normal)),
+      ...part.tied.filter((t) => t.startNote?.staff === staff).map((t) => tiedEnds(sys, eng, t, Notation.Normal)),
     ];
     for (const e of arcs) if (e && !e.above) maxDown = Math.max(maxDown, arcExtent(e)[1] + 2);
     // 自动放到谱表下方的松叶（`autoPlaceWedges`）：歌词要排在它下面
     if (withWedges) {
       for (const w of part.wedges) {
-        if (!w.autoY || w.staff !== 0) continue;
+        if (!w.autoY || w.staff !== staff) continue;
         if (!sys.contains(w.startTick) && !sys.contains(w.endTick)) continue;
         maxDown = Math.max(maxDown, w.ypos + WEDGE_HALF + 2);
       }
     }
     const fsScale = eng.musicFont.size / 40;
     for (const t of part.tuplets) {
-      if (t.above || !t.startNote || t.startNote.staff !== 0) continue;
+      if (t.above || !t.startNote || t.startNote.staff !== staff) continue;
       if (!sys.contains(t.startTick) || !sys.contains(t.endTick)) continue;
       const [ly, ry] = t.staffEnds();
       const g0 = Tuplet.makeNumber(t.timeModification.denominator)[0] ?? "";

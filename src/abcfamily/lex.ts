@@ -398,7 +398,8 @@ export abstract class AbcFamilyLexer {
         const t: Omit<Token, "source"> = {
           kind: "grace",
           text: line.slice(start, i),
-          notes: inner.tokens.filter((x) => x.kind === "note"),
+          // `{[CE]}` 是同时发声的和弦倚音（ABC），其余照一串倚音
+          notes: inner.tokens.filter((x) => x.kind === "note" || x.kind === "chordGroup"),
         };
         if (acciaccatura) t.acciaccatura = true;
         if (after) t.graceAfter = true;
