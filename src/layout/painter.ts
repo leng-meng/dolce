@@ -158,15 +158,19 @@ export function measureJianpu(
   return jianpuLayoutOf(cfg, res).measureNatural(score, width);
 }
 
-/** 自然量宽（原样文档引擎，乐句重排用）：清掉换行、整首不折，量第 `song` 首每个音（键为元素 id）的自然横向区间与版心宽。
+/** 自然量宽（原样文档引擎，乐句重排用）：清掉换行、整首不折，量第 `song` 首旋律声部每个音（键为元素 id）的自然横向区间与版心宽。
  *  `slide`：按展开档的画法量（数字共基线、增时线「-」字）。不改 `doc`。 */
 export function measureDocument(
   doc: ScoreDoc, sheet: StyleSheet, width: number, slide = false, song = 0,
 ): { width: number; spans: Map<string | number, { x0: number; x1: number }> } {
   const one = doc.songs[song];
   if (!one) return { width: 0, spans: new Map() };
-  const clone = structuredClone({ ...doc, songs: [one] });
-  for (const song of clone.songs) clearSongBreaks(song);
+  // 只量断句的那条旋律：带歌词的声部（同断句输入的 `forExpanded`），没有就第一个。
+  // 文本谱不清换行（歌词挂在每行源头，并成一行就丢了），逐行接着量（`naturalSpans`）
+  const lead = one.parts.find((p) => p.measures.some((m) => m.elements.some((e) => e.kind === "chord" && (e.lyrics?.length ?? 0) > 0))) ?? one.parts[0];
+  if (!lead) return { width: 0, spans: new Map() };
+  const clone = structuredClone({ ...doc, songs: [{ ...one, parts: [lead] }] });
+  if (doc.sourceFormat !== "pu") for (const song of clone.songs) clearSongBreaks(song);
   const r = layoutOriginalDocument(clone, {
     style: jianpuStyleOf(sheet),
     page: { width, height: width, continuous: true },

@@ -154,10 +154,13 @@ export function naturalSpans(
   ink: InkMeasurer,
 ): Map<string | number, { x0: number; x1: number }> {
   const out = new Map<string | number, { x0: number; x1: number }>();
+  // 好几行（文本谱的歌词挂在每行源头，并不成一行）：后一行接在前一行末尾之后，整首一条坐标
+  let base = 0;
   for (const page of song.pages) {
     for (const group of page.groups) {
       const row = group.voices[0];
       if (!row) continue;
+      let right = base;
       const laid = layoutVoiceLine(row, m, { meter: song.metadata.meters[0] });
       for (const it of laid.items) it.syllables = new Array(row.lyrics.length).fill(null);
       assignLyrics(laid.items, row.lyrics);
@@ -167,11 +170,13 @@ export function naturalSpans(
         if (it.element.kind === "note") owner = idOf.get(it.element) ?? null;
         else if (it.element.kind !== "sustain") continue;
         if (owner === null) continue;
-        const x0 = nat.leftOf.get(it) ?? 0;
-        const x1 = nat.rightOf.get(it) ?? 0;
+        const x0 = base + (nat.leftOf.get(it) ?? 0);
+        const x1 = base + (nat.rightOf.get(it) ?? 0);
+        right = Math.max(right, x1);
         const prev = out.get(owner);
         out.set(owner, prev ? { x0: Math.min(prev.x0, x0), x1: Math.max(prev.x1, x1) } : { x0, x1 });
       }
+      base = right;
     }
   }
   return out;
