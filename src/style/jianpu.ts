@@ -11,7 +11,7 @@ import { bookJianpuStyle } from "./book";
 import { familyOfRole } from "./fonts";
 import { JIANPU_KEYS, ROLE_FONTS, type KeyDef } from "./keys";
 import type { StyleRole, StyleSheet } from "./sheet";
-import { isPagedSheet, PPTX_PAGE } from "./themes";
+import { PPTX_PAGE } from "./themes";
 import { pageMargins } from "./paper";
 import { headerFontsOf } from "./header";
 import { resolveLength } from "./units";
@@ -39,11 +39,6 @@ function rolePt(sheet: StyleSheet, role: StyleRole, notePt = NaN): number | unde
 export function jianpuFontSize(sheet: StyleSheet): number {
   if (sheet.jianpu.preset === "book" && sheet.book) return sheet.book.roles.lyric.size;
   return rolePt(sheet, "note") ?? PPTX_PAGE.fontSize;
-}
-
-/** 原样档是不是长图。判据与 `@media (paged: …)` 共用一处（`themes.ts::isPagedSheet`）。 */
-export function isLongImage(sheet: StyleSheet): boolean {
-  return !isPagedSheet(sheet);
 }
 
 function headRatios(sheet: StyleSheet): { title: number; credit: number } {

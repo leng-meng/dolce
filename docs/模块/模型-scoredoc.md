@@ -17,8 +17,8 @@
 
 | 消费者 | 取法 | 引擎内部结构 |
 |---|---|---|
-| 简谱引擎（`layout/`：`.jpwabc` 两档、各格式展开档、成书） | `model/jianpuinput.ts` 投影出只读输入（`layout/input.ts`），按 MusicXML 形状 / 简谱形状 / `.jpwabc` 三个分支 | `Line` / `NoteEntry`（符杠分组、段落词挪位记在引擎里，不写回输入） |
-| 文本谱原样档（`layout/original/compose/`） | 排版行视图 `pu/slots.ts::docView` | `layout/original/place/` 的定位结构 |
+| 简谱引擎（`layout/jianpu/`：各格式的原样 / 展开档、PPTX、成书） | 排版行视图 `pu/slots.ts::docView` | `layout/jianpu/place/` 的定位结构（`PlacedPage` / `PlacedGroup` / `PlacedVoice`） |
+| jianpu-ly 写出、断句量宽、识别对歌词 | `model/jianpuinput.ts` 投影出的 `JScore`（`layout/input.ts`；简谱形状 / `.jpwabc` 两个分支） | — |
 | 五线谱混排（`mixed/`） | `mixed/layout.ts::layoutStaff` 建版面态；MusicXML 原文的坐标/符干/字体经 `xmlsurface.ts` 查询 | `StaffLayout` 及各 `*Layout` 节点（`src` 引用模型元素） |
 | 试听 / MIDI | `playdoc.ts::playSourceOfDoc` / `playsong.ts::playSourceOfSong` | `score/timeline.ts` |
 | 断句 | `phrasedoc.ts` / `phrasesong.ts` 拼断句输入（带 `idOf`） | `score/phrase.ts` |
@@ -42,7 +42,7 @@
 | `src/model/jianpuproject.ts` | 反方向：MusicXML 形状 → 简谱形状（增时线、减时线、和弦原文、长音中途的和弦），`slots.ts` 与 123 写出端先过它。原生 ABC 时值只在 `divisions` 里、不带减时线/增时线，也经它投（音上的延音线配成 `tied`） |
 | `src/model/frompu.ts` | ← 文本谱语法树（**无损**：文本谱的全部排版信息都进来，`pu-scoredoc-check` 全语料逐字段还原零差异） |
 | `src/pu/slots.ts` | → **排版行视图**（`docView`）：线性化规则只写一次，原样档排版器 / 展开档投影 / 双向定位共用；行里每个符号带 `ElementId` |
-| `src/model/jianpuinput.ts` | → **简谱引擎输入**（`jianpuInputOfXml` / `jianpuInputOfDoc` / `jianpuInputOfJpw`），和弦带元素 id；判据是谱面（`jianpu-svg-dump`） |
+| `src/model/jianpuinput.ts` | → **简谱输入模型** `JScore`（`jianpuInputOfDoc` / `jianpuInputOfJpw`），和弦带元素 id；不再喂排版引擎，给 jianpu-ly 写出、识别对歌词用 |
 | `src/model/fromjpw.ts` | ← `.jpwabc`（`JpwFile` 直出，带 span；小节中间的 `$` 另记 `Chord.lineBreakAfter`） |
 | `src/omr/todoc.ts` | ← 简谱识别结果（`RecognizedScore` 直出简谱形状，与 `j123/parse.ts` 同口径；不经 MusicXML） |
 | `src/model/tojpw.ts` | → `.jpwabc`（`emitJpwabc`；写出端只经输入接口读谱，两侧输入由 `playdoc.ts::jpwInputOfDoc` / `playsong.ts::jpwInputOfSong` 拼） |

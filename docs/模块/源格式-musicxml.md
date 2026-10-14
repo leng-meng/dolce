@@ -12,7 +12,6 @@ MusicXML 双向（导入为 `ScoreDoc`；简谱档与成书经 `model/jianpuinpu
 
 | 函数 | 文件 | 作用 |
 |---|---|---|
-| `jianpuInputOfXml(song)` | `src/model/jianpuinput.ts` | `ScoreDoc`（MusicXML 形状）→ 简谱引擎输入（只读第一声部、和弦取最高音；成书用） |
 | `layoutStaff(doc)` | `src/mixed/layout.ts` | `ScoreDoc` → `StaffLayout`（五线谱/混排的版面态，只读 `ScoreDoc` 与其表层 `xmlsurface.ts`） |
 | `loadScoreDoc(xml)` | `src/model/fromxml.ts` | → `ScoreDoc`（**直通**：语义进模型，表层绑在原节点上，见 `model/xmlsurface.ts`） |
 | `scoreDocToMusicXml(doc)` | `src/model/toxml.ts` | **唯一写出端**；简谱来源先经 `model/xmlproject.ts` 投影 |
