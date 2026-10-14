@@ -393,7 +393,7 @@ function shiftGroup(g: PlacedGroup, dy: number): void {
  */
 /**
  * **自动段号**（搬 `Line.addVerseNumbers`，样式键 `verse-numbers`）：叠排的几段歌词在每一行行首标「1.」「2.」…，
- * 只给源里没写说明的行补（源里有 `<1.>`、`<狼:1.>` 的那一行照源印，一行里只要有一段写了就整行不补）。
+ * 只给源里没写说明的行补（源里有 `<1.>`、`<狼:1.>` 的那一行照源印，首字自带「1.」的也算，一行里只要有一段写了就整行不补）。
  * `never` 不标；`auto` 全曲段数多于 `verse-number-auto-min` 才标；这一行有字的段不到两段不标。
  * 补出来的就是一条普通的说明（`LyricLine.annotation`），画法、版心左缘让出（`compose/index.ts` 量伸出量）都同源里写的。
  * 只改行视图，不改 ScoreDoc。
@@ -407,8 +407,10 @@ function autoVerseNumbers(song: PuSong, m: JianpuGrid): void {
     const verses = Math.max(0, ...voices.map((v) => v.lyrics.filter(sung).length));
     if (verses <= m.style.look.verseNumberAutoMin) return;
   }
+  // 首字自带印刷段号（MusicXML 常把 `1.` 与字并成一个音节「1.圣」）的行也算写了，不再补
+  const printed = (l: { syllables: ReadonlyArray<{ text: string } | null> }): boolean => /^\d+\./.test(l.syllables.find((x) => !!x?.text)?.text ?? "");
   for (const v of voices) {
-    if (v.lyrics.filter(sung).length < 2 || v.lyrics.some((l) => l.annotation)) continue;
+    if (v.lyrics.filter(sung).length < 2 || v.lyrics.some((l) => l.annotation || printed(l))) continue;
     v.lyrics.forEach((l, k) => {
       if (sung(l)) l.annotation = `${k + 1}.`;
     });
