@@ -867,6 +867,8 @@ function rowsPart(
       }
       for (const orn of el.ornaments) if (orn.name === "yc" || orn.name === "ycy") ch.fermata = true;
       if (decorate) decorateChord(ch, el);
+      // 倚音两档都画（用户定：展开档也保留倚音；`.jpwabc` 那一路本来就留着）
+      ch.graceNotes = graceNotesOf(el);
 
       ch.duration = nominal(ch);
       mea.entries.push(ch);
@@ -887,7 +889,7 @@ function rowsPart(
 const ARTIC_OF_ORNAMENT: Readonly<Record<string, string>> = { zy: "accent", dy: "staccato", bc: "tenuto", hx: "breath" };
 
 /**
- * 原样档（`decorate`）才要的那几样：和弦、段落词、重音、力度/术语、倚音。展开档不画它们（投影片只要旋律与词）。
+ * 原样档（`decorate`）才要的那几样：和弦、段落词、重音、力度/术语。展开档不画它们（投影片只要旋律与词）；倚音两档都画（见 `rowsPart`）。
  * 只收引擎画得出的：奏法记号是重音、顿音、保持音、换气（`entry.ts::addNotations`），其余 `&xx` 暂不出现。
  */
 function decorateChord(ch: JChord, el: NoteElement): void {
@@ -903,7 +905,10 @@ function decorateChord(ch: JChord, el: NoteElement): void {
     else if (BARLINE_MARKS[orn.name]?.glyph) ch.directions.push({ text: BARLINE_MARKS[orn.name]!.glyph!, music: true, italic: false });
     else if (BARLINE_MARKS[orn.name]?.text) ch.directions.push({ text: BARLINE_MARKS[orn.name]!.text!, music: false, italic: false, atBarEnd: true });
   }
-  ch.graceNotes = el.graceBefore.map((g) => ({ number: String(g.pitch), jpOctave: g.octave, jpAlter: jpAlterOf(g), duration: g.duration }));
+}
+
+function graceNotesOf(el: NoteElement): JChord["graceNotes"] {
+  return el.graceBefore.map((g) => ({ number: String(g.pitch), jpOctave: g.octave, jpAlter: jpAlterOf(g), duration: g.duration }));
 }
 
 /** 按时值排出各条目的拍位与小节起点。`scaleInner`：多连音起止之间的音也乘 2/3（`.jpwabc` 旧口径只乘首尾两个）。 */
