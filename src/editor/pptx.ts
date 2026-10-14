@@ -403,7 +403,7 @@ function buildDeck(slides: string[], wEmu: number, hEmu: number): Zippable {
   return z;
 }
 
-/** buildPptx 只用到页面树与页面尺寸，与哪个引擎排的无关（`ScorePainter.pptxSource`：旧简谱引擎或原样文档引擎那一份）。 */
+/** buildPptx 只用到页面树与页面尺寸，与哪个引擎排的无关（`ScorePainter.pptxSource`：旧简谱引擎或简谱引擎那一份）。 */
 export interface PptxSource {
   pages: readonly Group[];
   /** 附点离数字的那道空（engrave/stack.ts）；没有就取缺省。 */

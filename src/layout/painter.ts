@@ -21,10 +21,10 @@ import { MixedOptions, type StaffLayout, type Sys } from "../mixed/model";
 import { layoutStaff } from "../mixed/layout";
 import { layoutStaffPages, PAGE_HEIGHT_FALLBACK } from "../mixed/staffpages";
 import { isStaffLeaf, STAFF_CHORD, STAFF_SYSTEM, staffLeafKey, type StaffChordData, type StaffLeafData, type StaffSystemData } from "../mixed/prims";
-import { layoutOriginalDocument, type OriginalDocumentLayout } from "./original/compose";
+import { layoutJianpu, type JianpuLayout } from "./jianpu/compose";
 import { clearSongBreaks } from "../model/breaks";
-import type { PlacedPage } from "./original/place";
-import type { JianpuGrid } from "./original/metrics";
+import type { PlacedPage } from "./jianpu/place";
+import type { JianpuGrid } from "./jianpu/metrics";
 import { ScoreIndex, type Hit } from "./scoreindex";
 import { Playhead, spanIn, svgBox } from "./playhead";
 import type { IdentityKind } from "./identity";
@@ -46,7 +46,7 @@ export interface StaffPaintRequest {
 
 /** 原样文档这一路（文本谱与多声部 123/ABC、MusicXML 的原样档）：整份 `ScoreDoc` 按源行排，印刷原版观感。
  *  `expanded`：展开档（反复逐遍展开、一遍一页、投影片纸），开发开关下才发（子计划 5）。 */
-export interface DocumentPaintRequest {
+export interface JianpuPaintRequest {
   readonly view: "original" | "expanded";
   readonly doc: ScoreDoc;
   /** computed 样式表（原样档那份，与旧简谱引擎同一份）。null = print 主题出厂。 */
@@ -63,9 +63,9 @@ export interface DocumentPaintRequest {
   readonly ink?: number;
 }
 
-export type PaintRequest = DocumentPaintRequest | StaffPaintRequest;
+export type PaintRequest = JianpuPaintRequest | StaffPaintRequest;
 /** 同步入口收的请求（排版不等资源的两路）。 */
-export type SyncPaintRequest = DocumentPaintRequest;
+export type SyncPaintRequest = JianpuPaintRequest;
 export type LoadOutcome = "committed" | "superseded";
 
 export interface PreparedResources {
@@ -108,7 +108,7 @@ export class PaintResources {
   }
 }
 
-/** 自然量宽（原样文档引擎，乐句重排用）：清掉换行、整首不折，量第 `song` 首旋律声部每个音（键为元素 id）的自然横向区间与版心宽。
+/** 自然量宽（简谱引擎，乐句重排用）：清掉换行、整首不折，量第 `song` 首旋律声部每个音（键为元素 id）的自然横向区间与版心宽。
  *  `slide`：按展开档的画法量（数字共基线、增时线「-」字）。不改 `doc`。 */
 export function measureDocument(
   doc: ScoreDoc, sheet: StyleSheet, width: number, slide = false, song = 0,
@@ -121,7 +121,7 @@ export function measureDocument(
   if (!lead) return { width: 0, spans: new Map() };
   const clone = structuredClone({ ...doc, songs: [{ ...one, parts: [lead] }] });
   if (doc.sourceFormat !== "pu") for (const song of clone.songs) clearSongBreaks(song);
-  const r = layoutOriginalDocument(clone, {
+  const r = layoutJianpu(clone, {
     style: jianpuStyleOf(sheet),
     page: { width, height: width, continuous: true },
     userMargins: pageMargins(sheet.page) !== undefined,
@@ -180,7 +180,7 @@ export class ScorePainter {
   private staffLeafOf = new WeakMap<Element, StaffLeafData>();
   private staff: StaffState | null = null;
   /** 简谱这一路提交的结果（页面、定位结构与 note / syllable 身份索引）。与 staff 互斥。 */
-  private original: OriginalDocumentLayout | null = null;
+  private original: JianpuLayout | null = null;
   private version = 0;
 
   constructor(readonly resources: PaintResources = PaintResources.shared()) {}
@@ -243,12 +243,12 @@ export class ScorePainter {
   }
 
   /** 简谱这一路（原样 / 展开档）：整份文档排好（不等资源，`Font` 同步量字），返回提交动作。 */
-  private _jianpuCommit(req: DocumentPaintRequest): () => void {
+  private _jianpuCommit(req: JianpuPaintRequest): () => void {
     const sheet = req.style ?? computeStyleForPaper([THEMES.print], { mode: "original", engine: "jianpu" });
     const paper = resolvePaper(sheet.page);
     // 展开档：投影片纸（展开档样式的 `page.size`）
     const slide = req.view === "expanded" ? { width: sheet.page.size?.[0] ?? 960, height: sheet.page.size?.[1] ?? 540, continuous: false } : null;
-    const r = layoutOriginalDocument(req.doc, {
+    const r = layoutJianpu(req.doc, {
       style: jianpuStyleOf(sheet),
       // 长图：宽与旧简谱引擎的长图同一张（500 首那张纸的宽），高由内容定
       page: slide ?? (req.page

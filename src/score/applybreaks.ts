@@ -27,7 +27,7 @@ export interface ApplyBreakResult {
   pages: number;
 }
 
-/** 原样文档引擎量出来的自然跨度（键是元素 id，`layoutBookDoc` 的 `measure`）换成按断句输入的和弦。 */
+/** 简谱引擎量出来的自然跨度（键是元素 id，`layoutBookDoc` 的 `measure`）换成按断句输入的和弦。 */
 export function fitForIds(
   fit: { width: number; spans: ReadonlyMap<string | number, { x0: number; x1: number }> },
   idOf: ReadonlyMap<PhraseChord, ElementId>,
@@ -50,7 +50,7 @@ function chordIdFrom(m: Measure, from: number): ElementId | null {
 }
 
 /**
- * 断句的断点写进文档（成书在原样文档引擎上排，`song` 是 `ScoreDoc` 克隆里的那首）：换成行首交 `model/breaks.ts::applyBreaks`，
+ * 断句的断点写进文档（成书在简谱引擎上排，`song` 是 `ScoreDoc` 克隆里的那首）：换成行首交 `model/breaks.ts::applyBreaks`，
  * **替换**原有的换行。口径同 `applyPhraseBreaks`（小节一一对应、和弦按元素 id 对上，对不上抛错；`linesPerPage` 0 = 不按行数换页）。
  */
 export function applyPhraseBreaksToDoc(

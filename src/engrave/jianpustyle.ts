@@ -1,7 +1,7 @@
 // 简谱的尺子：一份**样式值**（全是 pt，已折算好），旧简谱引擎从它取。
 //
 // 折算只在一处：`style/jianpu.ts::jianpuStyleOf`（样式表 → 这份）；成书走 `style/book.ts::bookJianpuStyle`。
-// 引擎自己不存样式常量——栅格（`layout/original/metrics.ts::JianpuGrid`）挂着它（`grid.style`）。
+// 引擎自己不存样式常量——栅格（`layout/jianpu/metrics.ts::JianpuGrid`）挂着它（`grid.style`）。
 //
 // 值为 0 的几项是「按引擎缺省 / 按字形量」（各字段注释里写明），不是「没有」。
 import type { CompressMode } from "../common/cjkpunct";

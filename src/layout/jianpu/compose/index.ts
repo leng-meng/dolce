@@ -38,7 +38,7 @@ import { playDataOfSong } from "../../../model/playsong";
 import type { PlayItem } from "../../../score/playorder";
 
 /** 原样文档排版的外部配置：尺子（`style/jianpu.ts::jianpuStyleOf`，与旧简谱引擎同一份）、纸、页脚模板。 */
-export interface OriginalDocumentConfig {
+export interface JianpuLayoutConfig {
   readonly style: JianpuStyle;
   readonly page: GridPage;
   /** 面板上给了边距：谱面自带的 `Margin:` 不再生效（用户说了算） */
@@ -46,7 +46,7 @@ export interface OriginalDocumentConfig {
   readonly foot: Region | null;
   /** 已经按窄纸重新断过行（`reflowLineStarts`），不再断第二次 */
   readonly noReflow?: boolean;
-  /** 内部用：连谱号、段号伸出音符起点的那一截（pt），版心左缘让出这么多再排（见 layoutOriginalDocument 末尾） */
+  /** 内部用：连谱号、段号伸出音符起点的那一截（pt），版心左缘让出这么多再排（见 layoutJianpu 末尾） */
   readonly leftIndent?: number;
   /** 内部用：重断行之前的那份文档（缩进那一遍要从它重新断行） */
   readonly reflowSource?: ScoreDoc;
@@ -57,7 +57,7 @@ export interface OriginalDocumentConfig {
   /** 成书（`pdflayout/browser.ts::layoutBookDoc`）：原样档的内容，成行与纵向同展开档——照源断点成行、单行放不下才折（`foldLineStarts`），
    *  谱行占位盒紧挨着码、放不满摊开，数字共基线、增时线「-」字；不放页眉、页脚、标题页（书级装饰由整本那一层加） */
   readonly book?: boolean;
-  /** 成书量宽：不折行，另给第一首的自然横向区间（`OriginalDocumentLayout.spans`，调用方先清掉换行） */
+  /** 成书量宽：不折行，另给第一首的自然横向区间（`JianpuLayout.spans`，调用方先清掉换行） */
   readonly measure?: boolean;
   /** 只排谱行：不放页眉、页脚，首组贴着上边距起（帮助页的谱例片段） */
   readonly snippet?: boolean;
@@ -66,7 +66,7 @@ export interface OriginalDocumentConfig {
 }
 
 /** 一份文档排好的原样页面与身份索引。 */
-export interface OriginalDocumentLayout {
+export interface JianpuLayout {
   readonly pages: Group[];
   /** 页宽高（排版坐标，即 pt）。连续长图时随内容而定。 */
   readonly width: number;
@@ -86,7 +86,7 @@ export interface OriginalDocumentLayout {
 }
 
 /** 排一份文档并生成全部页面（原 `PuPainter.load`）。 */
-export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentConfig): OriginalDocumentLayout {
+export function layoutJianpu(source: ScoreDoc, cfg: JianpuLayoutConfig): JianpuLayout {
   const input = originalInputOf(source);
   // 谱面自带的 `FontSize:` / `Margin:` 也要生效（真实语料里 `all=` 用得最多）：乘在尺子上
   const meta0 = input.songs[0]?.metadata;
@@ -191,7 +191,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
         const ls = starts[i];
         if (ls && applyBreaks(song, ls.map((id) => ({ id: id as ElementId })), { mid: cfg.book ? "inline" : "source", pages: "keep" })) changed = true;
       });
-      if (changed) return layoutOriginalDocument(clone, { ...cfg, noReflow: true, reflowSource: cfg.reflowSource ?? source });
+      if (changed) return layoutJianpu(clone, { ...cfg, noReflow: true, reflowSource: cfg.reflowSource ?? source });
     }
   }
   const placed = layoutDocument(doc.songs, m, headerBottoms, ink, doc.songs.map((_, i) => footerSpan(c, i)), slide);
@@ -208,7 +208,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
       const again = cfg.reflowSource
         ? { ...cfg, noReflow: false, reflowSource: undefined, leftIndent: indent }
         : { ...cfg, leftIndent: indent };
-      return layoutOriginalDocument(cfg.reflowSource ?? source, again);
+      return layoutJianpu(cfg.reflowSource ?? source, again);
     }
   }
   // 页脚（BL/BC/BR）：每首末页、最低一行之下。先排一遍拿到占高，连续长图的页高要把它算进去

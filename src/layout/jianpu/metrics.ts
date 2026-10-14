@@ -1,4 +1,4 @@
-// 原样文档引擎（文本谱、MusicXML、多声部 123/ABC 的原样档）的栅格与谱面自带的版面指令。
+// 简谱引擎（文本谱、MusicXML、多声部 123/ABC 的原样档）的栅格与谱面自带的版面指令。
 //
 // 样式值只有一把尺子 `JianpuStyle`（`style/jianpu.ts::jianpuStyleOf` 折算，与旧简谱引擎同一份）；
 // 这里只剩原版（番茄）量来的那套栅格，按音符字号等比缩放：
@@ -18,7 +18,7 @@ import type { NoteElement } from "../../pu/ast";
 import type { JianpuStyle } from "../../engrave/jianpustyle";
 
 /**
- * 原样文档引擎的**栅格**：贴着音符排的步进、记号槽位、页头基线，与版面。单位 pt。
+ * 简谱引擎的**栅格**：贴着音符排的步进、记号槽位、页头基线，与版面。单位 pt。
  * 样式值（字号、字体、笔画、点、竖向间距、写法）**不在这里**，一律从 `style`（尺子 `JianpuStyle`）取；
  * 栅格是照番茄原版量的一套（数字字号 25 时的值，`GRID_NOTE_SIZE`），按 `style.size.note` 等比缩放（`gridOf`）。
  * 子计划 4 换成上方带堆叠后，槽位与页头基线退役。

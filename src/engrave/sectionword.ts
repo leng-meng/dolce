@@ -1,5 +1,5 @@
 // 段落词（「（副歌）」）的量宽与落点：旧简谱引擎（`layout.ts::Line.addSectionWords` / `spreadForSectionWords` / `nudgeForSectionWords`）
-// 与原样文档（`layout/original/place/band.ts`、`spacing.ts`）共用这一份判据。
+// 与原样文档（`layout/jianpu/place/band.ts`、`spacing.ts`）共用这一份判据。
 import type { CompressMode } from "../common/cjkpunct";
 import type { Font } from "../layout/font";
 

@@ -99,7 +99,7 @@ const PRINT_JIANPU: Record<string, Length | boolean> = {
 };
 
 /** 每首末页底下的页脚（文本谱的 BL / BC / BR；语料里 BL 常写 `-` 占位，视为空）：区域顶在本曲末页最低一行之下
- *  一个歌词字高处，字号按 `as 角色` 取（`header` 与 TL/TR 同档）。现在只有原样文档引擎印。语法见 docs/格式/ss.md。 */
+ *  一个歌词字高处，字号按 `as 角色` 取（`header` 与 TL/TR 同档）。现在只有简谱引擎印。语法见 docs/格式/ss.md。 */
 const PRINT_FOOT = parseSs(`
 @template song-foot {
   flow: block;

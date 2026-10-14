@@ -23,7 +23,7 @@ import { keepFirstPart } from "../model/melodyonly";
 import { clearSongBreaks } from "../model/breaks";
 import { jianpuStyleOf } from "../style/jianpu";
 import type { JianpuStyle } from "../engrave/jianpustyle";
-import { layoutOriginalDocument, type OriginalDocumentLayout } from "../layout/original/compose";
+import { layoutJianpu, type JianpuLayout } from "../layout/jianpu/compose";
 
 /** 2D 仿射：[a b c d e f]，与 SVG 的 matrix(a b c d e f) 同序。 */
 type Mat6 = [number, number, number, number, number, number];
@@ -85,7 +85,7 @@ function roleOfItem(it: TextFrame): StyleRole {
   return "lyric";
 }
 
-/** 原样文档引擎排的成书页：文字叶子的角色（`pageItemsToDrawPage` 的 `roleOf`）。 */
+/** 简谱引擎排的成书页：文字叶子的角色（`pageItemsToDrawPage` 的 `roleOf`）。 */
 export const bookRoleOf = (it: TextFrame): StyleRole =>
   // 段号（`1.`，`compose/lyric.ts::paintLyricAnnotations`）：引擎按西文字（`font.text`）量宽、右对齐到首字，落笔也得是那个字——
   // 归 `verseNum`（成书样式里是 Times），随歌词的话 PDF 换成报宋，宽度对不上、伸出版心
@@ -303,11 +303,11 @@ function dropSectionWords(d: Direction): Direction[] {
 }
 
 /**
- * 成书这一路排一首（原样文档引擎）：按 BookStyle 排到宽 `style.page.w`、高 `pageH` 的纸上，没有标题页（书级装饰由整本那一层加）。
+ * 成书这一路排一首（简谱引擎）：按 BookStyle 排到宽 `style.page.w`、高 `pageH` 的纸上，没有标题页（书级装饰由整本那一层加）。
  * 断点由调用方先写进 `doc`（`applyPhraseBreaksToDoc`）；单行放不下引擎自己折。`naturalH` 是首页谱行自然叠起来的高（半页起排、紧排用）。
  */
-export function layoutBookDoc(doc: ScoreDoc, style: BookStyle, pageH: number, measure = false): OriginalDocumentLayout & { naturalH: number } {
-  const r = layoutOriginalDocument(doc, {
+export function layoutBookDoc(doc: ScoreDoc, style: BookStyle, pageH: number, measure = false): JianpuLayout & { naturalH: number } {
+  const r = layoutJianpu(doc, {
     style: bookStyleOf(style),
     page: { width: style.page.w, height: pageH, continuous: false },
     userMargins: false,
@@ -318,7 +318,7 @@ export function layoutBookDoc(doc: ScoreDoc, style: BookStyle, pageH: number, me
   return Object.assign(r, { naturalH: r.placed.pages[0]?.natural ?? 0 });
 }
 
-/** 成书这一路的尺子（原样文档引擎吃的那份 `JianpuStyle`；dev 的 style-snapshot 快照它）。 */
+/** 成书这一路的尺子（简谱引擎吃的那份 `JianpuStyle`；dev 的 style-snapshot 快照它）。 */
 export function bookStyleOf(style: BookStyle): JianpuStyle {
   return jianpuStyleOf(computeStyle([THEMES.book, [{ set: { book: style } }]], { engine: "book" }));
 }
