@@ -197,18 +197,23 @@ function plainBarline(el: BarlineElement): BarlineElement {
 /** 一遍里的符号区间 [a, b) 拼成一行行视图：记号截到行内（跨行的标续接），歌词只挂这一遍的那一行 */
 function rowOf(
   pass: Pass, a: number, b: number, rows: readonly RowView[], lyricsOf: readonly (readonly LyricLine[])[],
-  cursorOf: readonly (readonly number[])[], marks: readonly LogicalMark[], posOf: ReadonlyMap<string, number>,
+  cursorOf: readonly (readonly number[])[], marks: readonly LogicalMark[], posOf: ReadonlyMap<string, readonly number[]>,
   unrolled: boolean, idOf: Map<MusicElement, unknown>, owners: Map<LyricSyllable, unknown>,
   bars: { plain: boolean; finalAt: number },
 ): RowView {
   const first = rows[pass.slots[a]!.row]!;
   const elements: MusicElement[] = [];
   const refs: RowView["refs"] = [];
+  // 同一个符号在这一行里出现第二次（`.Layout` 把各遍接成一长串、遍内反复两次）要另给一个对象：
+  // 排版按 `elements.indexOf` 认下标，同一对象会落回第一次那一格
+  const used = new Set<MusicElement>();
   for (let i = a; i < b; i++) {
     const s = pass.slots[i]!;
     const src = rows[s.row]!;
     const orig = src.elements[s.idx]!;
     let el = bare(orig);
+    if (used.has(el)) el = { ...el };
+    used.add(el);
     if (unrolled && el.kind === "barline") el = plainBarline(el);
     // 小节线的样式（同简谱引擎）：`.jpwabc` 不认样式、一律细线，只有整首最后一条画终止线；
     // 其余格式照源，整首最后一条是细线的也补成终止线（`Barline` 的 `final`）
@@ -227,18 +232,21 @@ function rowOf(
     refs.push(src.refs[s.idx]!);
   }
   const outMarks: Mark[] = [];
+  // 同一个符号在这一遍里出现几次（`.Layout` 把各遍接成一长串、遍内反复）：每次出现各画一份，终点取起点之后最近的那次
   for (const lm of marks) {
-    const s = posOf.get(`${lm.start.row}:${lm.start.idx}`);
-    const e = posOf.get(`${lm.end.row}:${lm.end.idx}`);
-    if (s === undefined || e === undefined || e < s) continue;
-    if (e < a || s >= b) continue;
-    outMarks.push({
-      ...lm.mark,
-      start: Math.max(s, a) - a,
-      end: Math.min(e, b - 1) - a,
-      continuationFromPrevious: s < a,
-      continuationToNext: e >= b,
-    });
+    const ends = posOf.get(`${lm.end.row}:${lm.end.idx}`) ?? [];
+    for (const s of posOf.get(`${lm.start.row}:${lm.start.idx}`) ?? []) {
+      const e = ends.find((x) => x >= s);
+      if (e === undefined) continue;
+      if (e < a || s >= b) continue;
+      outMarks.push({
+        ...lm.mark,
+        start: Math.max(s, a) - a,
+        end: Math.min(e, b - 1) - a,
+        continuationFromPrevious: s < a,
+        continuationToNext: e >= b,
+      });
+    }
   }
   // 这一遍的歌词：各符号取它那一行里段号区间罩住本遍遍号的那行词（同 `NoteEntry.addLyric` 的 number === pass）
   const syllables: LyricSyllable[] = [];
@@ -478,8 +486,13 @@ export function expandSong(
     return { plain: exactBreaks, finalAt: tail && rows[tail.row]!.elements[tail.idx]!.kind === "barline" ? end : -1 };
   };
   for (const pass of passes) {
-    const posOf = new Map<string, number>();
-    pass.slots.forEach((s, i) => posOf.set(`${s.row}:${s.idx}`, i));
+    const posOf = new Map<string, number[]>();
+    pass.slots.forEach((s, i) => {
+      const k = `${s.row}:${s.idx}`;
+      const list = posOf.get(k);
+      if (list) list.push(i);
+      else posOf.set(k, [i]);
+    });
     const whole = rowOf(pass, 0, pass.slots.length, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners, bars(pass));
     const lines = fillLines(whole, pass.breaks, m, ink, width, meter);
     // 一遍一页起头；遍内源里的换页另起一页

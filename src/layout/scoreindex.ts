@@ -41,6 +41,8 @@ export class ScoreIndex {
   }
 
   private lastNoteId: ElementId | null = null;
+  /** 最近一个音符格的 id：带自己 id 的增时线格也记到它名下（排在音符格之后），按宿主 + 序数也认得出 */
+  private lastHostId: ElementId | null = null;
   /** 还等着后面那个音符来认领的小节线（`‖:` 画在小节第一个音符之前） */
   private pendingBefore: Hit[] = [];
 
@@ -62,6 +64,8 @@ export class ScoreIndex {
               const list = this.cells.get(ident.id) ?? [];
               list.push({ ...hit, pass: ident.pass ?? 0 });
               this.cells.set(ident.id, list);
+              if (ident.kind === "note") this.lastHostId = ident.id;
+              else if (this.lastHostId !== null && this.lastHostId !== ident.id) this.cells.get(this.lastHostId)?.push({ ...hit, pass: ident.pass ?? 0 });
               this.lastNoteId = ident.id;
               for (const b of this.pendingBefore) this.barlines.set(`${ident.id}:before`, b);
               this.pendingBefore = [];
