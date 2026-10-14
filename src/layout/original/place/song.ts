@@ -223,6 +223,7 @@ export function layoutSong(
           marks,
           lyricY,
           chordY: chordLane(voice, m),
+          band: [],
         });
         // 下一声部：先让过本声部的歌词块，再按「有没有歌词」取不同的间距
         //（歌词字块的下缘比数字低，所以它之后要多让一点）

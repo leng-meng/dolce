@@ -87,9 +87,11 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
         if (before > hx0 + m.ink.noteHeight) hx1 = before;
       }
       // 画法走公共那一份（engrave/hairpin.ts，与五线谱同一笔）
-      root.add(hairpinPath({
+      const hp = hairpinPath({
         x0: hx0, x1: hx1, y, half0: open ? 0 : half, half1: open ? half : 0, lineWidth: m.style.stroke.hairpin, color: c.ink,
-      }));
+      });
+      hp.classes.add("hairpin"); // 同简谱引擎（`Line.addWedges`）；叶子的类名不进 SVG，只给页面树上的检查脚本认
+      root.add(hp);
       break;
     }
     case "volta": {
@@ -134,6 +136,7 @@ export function paintLayer(c: OriginalCtx,
         underlines: layer.underlines.map((u) => ({ ...u, dy: 0 })),
         marks: split.marks,
         chordY: chordLane(split.line, m),
+        band: [],
         layers: [],
         lyricY: [],
       },

@@ -10,7 +10,7 @@
 import { GlyphCodes } from "../smufl/smufl";
 import { Font } from "../layout/font";
 import { Group, TextFrame } from "../layout/pageitem";
-import { Matrix33 } from "../common/geom";
+import { Matrix33, Rect } from "../common/geom";
 import { chordStepAlter } from "../score/harmonyparse";
 import type { AccidentalSide } from "./spacing";
 
@@ -36,6 +36,25 @@ export function harmonyWidth(segs: readonly HarmonySeg[], wordFont: Font, musicF
   let w = 0;
   for (const s of segs) w += (s.music ? musicFont : wordFont).measureText(s.text) * segScale(s);
   return w;
+}
+
+/** 分段的**墨迹盒**（原点在左侧基线，同 `layoutHarmonySegs`）：各段字形墨迹按各自缩放、上下标位移并起来。
+ *  定位端拿它让位（Bravura 段不能用字体盒，见 CLAUDE.md）。空串返回 null。 */
+export function harmonyInk(segs: readonly HarmonySeg[], wordFont: Font, musicFont: Font): Rect | null {
+  let ink: Rect | null = null;
+  let xpos = 0;
+  for (const s of segs) {
+    const font = s.music ? musicFont : wordFont;
+    const scl = segScale(s);
+    const dy = scl !== 1 ? (s.superscript === 1 ? -font.size / 4 : s.superscript === -1 ? font.size / 4 : 0) : s.dy;
+    if (s.text.trim()) {
+      const b = font.charBound(s.text);
+      const r = new Rect(xpos + b.left * scl, dy + b.top * scl, xpos + b.right * scl, dy + b.bottom * scl);
+      ink = ink ? new Rect(Math.min(ink.left, r.left), Math.min(ink.top, r.top), Math.max(ink.right, r.right), Math.max(ink.bottom, r.bottom)) : r;
+    }
+    xpos += font.measureText(s.text) * scl;
+  }
+  return ink;
 }
 
 /**

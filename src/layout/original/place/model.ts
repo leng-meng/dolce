@@ -93,6 +93,20 @@ export interface PlacedVoice {
   lyricY: number[];
   /** 和弦/注释那一槽的基线（相对音符基线，见 chordLane） */
   chordY: number;
+  /** 谱行上方那一带的字与记号（和弦、段落词、转调标签、力度/术语/跳转字、奏法记号），y 已定死（子计划 4 逐批接上） */
+  band: PlacedText[];
+}
+
+/** 上方带里的一件：和弦、段落词（音符注释）、转调标签、力度/术语/跳转字、奏法记号字形。 */
+export interface PlacedText {
+  kind: "chord" | "section-word" | "key-label" | "direction" | "artic";
+  el: MusicElement;
+  text: string;
+  /** 落笔点：行坐标 x、相对声部基线的 y */
+  x: number;
+  y: number;
+  /** 墨迹盒（同一坐标系）：堆叠与让位都按它 */
+  ink: Rect;
 }
 
 export interface PlacedGroup {
@@ -152,4 +166,14 @@ export interface InkMeasurer {
   readonly lyricSpace: number;
   /** 音符数字（`0`–`7`、`X`、增时线 `-`、附点 `·`）：字面宽，与墨迹盒（相对落笔原点、基线 y = 0）。 */
   digit(ch: string): { advance: number; ink: Rect };
+  /** 和弦（engrave/chord.ts 的分段，风格与升降号前后照尺子）：字面宽与墨迹盒（相对左侧基线）；空串墨迹为 null */
+  chord(text: string): { advance: number; ink: Rect | null };
+  /** 角色字：字面宽与墨迹盒（相对落笔原点、基线 y = 0） */
+  text(str: string, role: InkTextRole): { advance: number; ink: Rect };
+  /** SMuFL 字形的墨迹盒（相对落笔原点、基线 y = 0）：按字形量，不用 4 em 的字体盒 */
+  smufl(glyph: string, size: number): Rect;
 }
+
+/** 上方带里各种字的角色（字体与字号由绘制端按尺子定，`compose/index.ts`）：
+ *  段落词（歌词字、段落词字号）、术语 / 跳转字 / 转调标签（文字字、和弦字号）、房号（数字字、房号字号）、`W:` 说明行。 */
+export type InkTextRole = "section-word" | "term" | "jump" | "key-label" | "ending" | "words";

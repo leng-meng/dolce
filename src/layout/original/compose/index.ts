@@ -16,13 +16,14 @@ import { applyDocOptions, gridOf, type GridPage, type JianpuGrid } from "../metr
 import { Font } from "../../font";
 import { Group } from "../../pageitem";
 import { syllableRun } from "../../../engrave/syllable";
+import { chordTextSegs, harmonyInk, harmonyWidth } from "../../../engrave/chord";
 import type { Region } from "../../../style/ss";
 import type { JianpuStyle } from "../../../engrave/jianpustyle";
 import type { ElementId, ScoreDoc } from "../../../model/doc";
 import type { DocView } from "../../../pu/slots";
 import { originalInputOf } from "../input";
 import { applyBreaks } from "../../../model/breaks";
-import type { InkMeasurer, PlacedScore } from "../place/model";
+import type { InkMeasurer, InkTextRole, PlacedScore } from "../place/model";
 import { layoutDocument } from "../place/song";
 import { reflowLineStarts } from "../place/reflow";
 import type { OriginalCtx } from "./ctx";
@@ -83,6 +84,16 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   // 量具注入给排版（它不碰字体）。歌词量的是**画出来的**那串：与 paintSyllables 同一串挤压后的笔位，
   // 首尾留白的口径同简谱引擎的 `Lyric.headBlank / tailBlank`（横向避让的判据从那边整段搬来，见 place/spacing.ts）
   const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
+  const chordWord = new Font(m.style.font.text.family, m.style.size.chord);
+  const chordMusic = new Font("Bravura", m.style.size.chord);
+  const roleFont: Record<InkTextRole, Font> = {
+    "section-word": new Font(m.style.font.lyric.family, m.style.size.sectionWord),
+    term: chordWord,
+    jump: chordWord,
+    "key-label": chordWord,
+    ending: new Font(m.style.font.note.family, m.style.size.ending),
+    words: new Font(m.style.font.text.family, m.style.size.words),
+  };
   const ink: InkMeasurer = {
     lyric(syl) {
       const text = syl.text + (syl.trailingPunctuation ?? "");
@@ -103,6 +114,12 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     },
     lyricSpace: lyricFont.measureText(" "),
     digit: (ch) => ({ advance: c.digitFont.measureText(ch), ink: c.digitFont.charBound(ch) }),
+    chord(text) {
+      const segs = chordTextSegs(text, m.style.look.chordPlain, m.style.look.accidentalSide);
+      return { advance: harmonyWidth(segs, chordWord, chordMusic), ink: harmonyInk(segs, chordWord, chordMusic) };
+    },
+    text: (str, role) => ({ advance: roleFont[role].measureText(str), ink: roleFont[role].charBound(str) }),
+    smufl: (glyph, size) => new Font("Bravura", size).charBound(glyph),
   };
   // **源里的行放不下就整首重新断行**（用户定：原样档按排得下的位置断、中间不要短行）：断点写进文档克隆的换行位、
   // 整份重排一遍。元素 id 不变，编辑器的点选、高亮照旧对得上。多声部文本谱（各声部小节对不齐）`applyBreaks` 不重断

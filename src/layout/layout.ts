@@ -5,7 +5,7 @@ import { paginate } from "../jianpu/vertical";
 import { identityPlan, walkPlay } from "../jianpu/expand";
 import { Fraction } from "../common/fraction";
 import { Point } from "../common/geom";
-import { BandItem, bandTop, stackUpperBand } from "./upperband";
+import { BandItem, bandTop, stackUpperBand } from "../engrave/upperband";
 import { BarStyle, StartStopDiscontinue } from "../score/enums";
 import { addEndingBracket, labelBaseline } from "../engrave/ending";
 import { TupletGlyph } from "../engrave/tuplet";
