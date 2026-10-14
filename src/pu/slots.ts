@@ -604,7 +604,11 @@ function toMetadata(song: Song): Metadata {
   const scripture = [...getMeta(song, "scripture"), ...getMeta(song, "scripture-ref")].filter((t) => t.trim());
   if (scripture.length) meta.scripture = scripture;
   if (song.work.version !== undefined) meta.version = song.work.version;
-  for (const c of song.identification?.creators ?? []) meta.authors.push(c.text);
+  // `.jpwabc` 的词曲一条写了好几行（`作词：…\n作曲：…`）：作者条为写 123 的 `C:` 拼成了一行，原文的分行在 credits 里，照原文分行
+  for (const c of song.identification?.creators ?? []) {
+    const multi = song.credits?.find((k) => !k.type && k.text.includes("\n") && k.text.replace(/\n/g, " ") === c.text);
+    meta.authors.push(multi?.text ?? c.text);
+  }
   if (song.key) {
     if (song.key.display !== undefined) meta.mode = song.key.display;
     else if (song.key.spelling && song.key.spelling !== "none") meta.mode = song.key.spelling;

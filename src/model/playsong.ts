@@ -300,11 +300,8 @@ export function jpwInputOfSong(doc: ScoreDoc, songIdx = 0): JpwScoreIn | null {
     if (text) credit.push({ type, text, page: 0 });
   };
   meta.titles.forEach((t, i) => push(t, i === 0 ? "title" : "subtitle"));
-  // 作者条目在排版行视图里是一行（换行换成了空格）；模型的 credit 里还留着原来的换行（`.jpwabc` 的
-  // `WordsByAndMusicBy` 一条多行），写回时照 credit 原文
-  const credits = doc.songs[songIdx]!.credits ?? [];
-  const original = (a: string): string => credits.find((c) => c.text !== a && c.text.replace(/\n/g, " ") === a)?.text ?? a;
-  for (const a of meta.authors) push(original(a), "composer");
+  // 作者条目照原文分行（`.jpwabc` 的 `WordsByAndMusicBy` 一条多行，行视图已取 credit 原文，见 `pu/slots.ts::toMetadata`）
+  for (const a of meta.authors) push(a, "composer");
   for (const t of meta.topRight) push(t, "composer");
   for (const t of meta.topLeft) push(t, "lyricist");
 
