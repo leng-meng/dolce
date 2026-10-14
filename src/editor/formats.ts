@@ -164,14 +164,14 @@ const utf8 = (text: string): Uint8Array => new TextEncoder().encode(text);
 const stripBom = (bytes: Uint8Array): Uint8Array =>
   bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf ? bytes.subarray(3) : bytes;
 
-/** 123/ABC 的重排：断点写进模型（`$` 只落在小节之后，故小节中间的断点挪到下一根小节线），整份重出。
+/** 123/ABC 的重排：断点写进模型（小节中间的原位记在和弦上，写出端在那个音后写 `$`），整份重出。
  *  重出会丢注释（注释不进模型），所以再把原文的注释按「跟着哪个和弦」缝回去（`spliceComments`）。 */
 function emitFrom(
   text: string, measure: FitMeasure | null,
   parse: (text: string) => ScoreDoc, emit: (doc: ScoreDoc) => string,
 ): string {
   const doc = parse(text);
-  if (!relayoutDocBreaks(doc, { measure, midBreaks: "snap" })) return text;
+  if (!relayoutDocBreaks(doc, { measure, midBreaks: "inline" })) return text;
   const out = emit(doc);
   return spliceComments(text, doc, out, parse(out));
 }

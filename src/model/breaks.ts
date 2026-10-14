@@ -7,11 +7,11 @@
 //
 // - `breaksOf`：读出模型里现有的断行（回归比对用：写出 → 读回，断点集合应不变）；
 // - `applyBreaks`：把一组行首写进模型，**替换**原有断行。用它的有三处：乐句重排写回 123/ABC
-//   （`relayout.ts::relayoutDocBreaks`，`snap`）、导出 MusicXML 时照简谱视图重断（`xmlproject.ts`，
+//   （`relayout.ts::relayoutDocBreaks`，`inline`）、导出 MusicXML 时照简谱视图重断（`xmlproject.ts`，
 //   `source` / `inline`）、跨格式另存为带上简谱视图的断行（`App.convertTo`，`source`）。
 //
-// 小节中间的行首怎么落由 `mid` 定：原位记（`inline`）、挪到下一根小节线（`snap`，123 乐句重排：
-// `$` 写在代码行中间读回时歌词块会跟着断）、只留源文本来就写明的（`source`，简谱一行排不下自己在
+// 小节中间的行首怎么落由 `mid` 定：原位记（`inline`）、挪到下一根小节线（`snap`，只剩 MusicXML 转文本谱
+// 时给没有行结构的曲子兜底断行用）、只留源文本来就写明的（`source`，简谱一行排不下自己在
 // 小节中间折的只是版面宽度的产物，顺延到下一小节）。多声部各声部的切点对不齐，小节中间的一律顺延。
 
 import type { Chord, Element, ElementId, Measure, Song, Sustain } from "./doc";

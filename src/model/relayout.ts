@@ -13,15 +13,15 @@
 //   就够。`.Layout` 里按行号记的 `BreakPoints` 跟着行结构作废，重排时去掉（换页改由
 //   `$(true,0,0,true)` 原位表达）。
 //
-// **小节中间的断点**（弱起谱的乐句尾常落在这儿）两条路不一样：`.jpwabc` 的 `$` 写得进小节中间，
-// 原位保留；123 的 `$` 只落在小节之后（规范 §9，代码行中间的 `$` 读回时歌词块会跟着断，对位错位），
-// 所以挪到**下一根小节线**——那半个小节留在上一行行尾，下一句从小节线起头。
+// **小节中间的断点**（弱起谱的乐句尾常落在这儿）三种格式一样**原位保留**：`.jpwabc` 的 `$` 写在
+// 小节中间；123/ABC 记成 `Chord.lineBreakAfter`，写出端在那个音后面写 `$` 并收一行，歌词跟着
+// 各段归行（123 §9「小节中间换行」）。早先 123/ABC 挪到下一根小节线，弱起句的头几个字就留在了
+// 上一行行尾，与 `.jpwabc` 排出来的不一样。
 
 import type { ScoreDoc } from "./doc";
 import { applyBreaks, type LineStart } from "./breaks";
 import { phraseCuts, type FitMeasure, type PhraseCut } from "../pu/phrase";
-import { readJpwSource } from "./fromjpw";
-import { JpwFile, LayoutSection, VoiceSection, WordsSection } from "../jpword/jpwfile";
+import { JpwFile, LayoutSection, VoiceSection } from "../jpword/jpwfile";
 
 export interface DocRelayoutOptions {
   /** 行长尺子（见 `pu/phrase.ts::FitMeasure`）；不给就按出厂的小节数目标断。 */
@@ -179,73 +179,6 @@ function stripBreaks(text: string): string {
 }
 
 /**
- * 每个音符在 `.Words` 锚点坐标系里的 `(小节, 音符)`——**连小节中间的换行一起数**
- * （`fromjpw.ts::assignLyrics` 的口径：一个 `$` 写在小节中间就开出一个新的「小节」，
- * 音符序号跟着归零）。下标是这个声部的第几个音符。
- */
-function anchorTable(f: JpwFile): Array<{ mid: number; nid: number }> {
-  const out: Array<{ mid: number; nid: number }> = [];
-  let mid = 0;
-  for (const m of readJpwSource(f).measures) {
-    if (!m.entries.some((e) => e.kind === "note")) continue; // 没有音的小节不数（同 `assignLyrics`）
-    mid++;
-    let nid = 0;
-    for (const ent of m.entries) {
-      if (ent.kind === "break") {
-        if (ent !== m.entries[m.entries.length - 1]) {
-          mid++;
-          nid = 0;
-        }
-        continue;
-      }
-      if (ent.kind !== "note") continue;
-      nid++;
-      out.push({ mid, nid });
-    }
-  }
-  return out;
-}
-
-/** `.Words` 段头：`W1:` / `W1-2(ctrl)@5,1:`（同 `jpwfile.ts::WordsSection.regLrcSpec`，这里不带粘着标志）。 */
-const WORDS_SPEC_RE = /^W(\d+)(-\d+)?(\([0-9a-zA-Z.,]+\))?@(\d+),(\d+)/;
-
-/**
- * 重排挪了 `$`，`.Words` 的锚点跟着**换了坐标系**——不改的话第二段歌词整体错位
- * （沧海一声笑、基督更美实测错开一整句）。按「锚到第几个音符」重算：
- * 老坐标 → 音符序号（`assignLyrics` 怎么找就怎么找）→ 新坐标。
- */
-function retargetWords(oldFile: JpwFile, newText: string): string {
-  const newFile = JpwFile.fromString(newText);
-  const words = newFile?.getSection(WordsSection);
-  if (!newFile || !words) return newText;
-  let before: Array<{ mid: number; nid: number }>;
-  let after: Array<{ mid: number; nid: number }>;
-  try {
-    before = anchorTable(oldFile);
-    after = anchorTable(newFile);
-  } catch {
-    return newText;
-  }
-  if (before.length === 0 || before.length !== after.length) return newText; // 音符数都对不上就别动它
-  const raws = newText.split("\n");
-  for (const no of words.lineNos) {
-    const raw = raws[no];
-    if (raw === undefined) continue;
-    const m = WORDS_SPEC_RE.exec(raw);
-    if (!m) continue;
-    const mid = parseInt(m[4]!, 10);
-    const nid = parseInt(m[5]!, 10);
-    // `assignLyrics` 取的是第一个「不早于锚点」的音符
-    const at = before.findIndex((p) => p.mid > mid || (p.mid === mid && p.nid >= nid));
-    const to = at < 0 ? null : after[at];
-    if (!to) continue;
-    const head = m[0].slice(0, m[0].length - `@${m[4]},${m[5]}`.length);
-    raws[no] = `${head}@${to.mid},${to.nid}${raw.slice(m[0].length)}`;
-  }
-  return raws.join("\n");
-}
-
-/**
  * 按乐句重排一份 `.jpwabc` 原文：**只重切 `.Voice` 的行**（挪 `$`），别的节原样。
  *
  * @param text 编辑器里的原文
@@ -317,6 +250,6 @@ export function relayoutJpwabcText(text: string, sdoc: ScoreDoc, opt: { measure?
     if (no === first) merged.push(...out.map((l) => (crlf ? `${l}\r` : l)));
     if (!drop.has(no)) merged.push(raw);
   });
-  // 行结构换了，`.Words` 的锚点坐标系跟着换（见 retargetWords）
-  return retargetWords(file, merged.join("\n"));
+  // `.Words` 的锚点 `@m,n` 只按小节线数小节（`fromjpw.ts::assignLyrics`），挪 `$` 不动它
+  return merged.join("\n");
 }
