@@ -12,7 +12,7 @@ import { JP_HAIRPIN, jpHairpinLineWidth } from "../../../engrave/hairpin";
 import { tupletDigits } from "../../../engrave/tuplet";
 import { endingDrop, endingLabelDx, labelBaselineOf } from "../../../engrave/ending";
 import { stackBottom, stackTop as stackTopOf } from "../../../engrave/stack";
-import { barlineSpan, bracketLineWidth, jianpuSlurStyle, type JianpuGrid } from "../metrics";
+import { barlineSpan, bracketLineWidth, jianpuSlurStyle, keyLabelSize, type JianpuGrid } from "../metrics";
 import type { InkMeasurer, PlacedItem, PlacedLayer, PlacedMark, PlacedText } from "./model";
 import { articStack, entryTop, noteBeams, stackTop } from "./vertical";
 import { type ChordSpan, sectionWordOf, sectionWordSlot } from "./sectionword";
@@ -154,7 +154,7 @@ export function placeBand(
         // 左缘对齐数字左缘、往右写——居中的话行首那个会伸出左边距
         const r = ink.text(el.keyLabel, "key-label");
         const x = it.x - nh * 0.35;
-        key = { kind: "key-label", el, text: el.keyLabel, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
+        key = { kind: "key-label", el, text: el.keyLabel, face: "text", size: keyLabelSize(m), x, y: base, ink: r.ink.offset(x, base) };
         texts.push(key);
         // 第 2 层：与和弦同在时转调标记在外（上）、和弦在内贴音（用户定，2026-10-14：全局信息在外、局部信息在内）
         boxes.push({ key, x0: key.ink.left, x1: key.ink.right, top: key.ink.top, bottom: key.ink.bottom, layer: 2, kind: "key", ...lower(it) });

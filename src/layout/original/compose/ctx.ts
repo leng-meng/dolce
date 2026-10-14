@@ -28,6 +28,8 @@ export interface OriginalCtx {
   /** 墨色（`style.page.color`）。歌词同色。 */
   ink: number;
   lyricInk: number;
+  /** 展开档：正在画的那个符号所在那一遍的遍号（`place/expand.ts::passesOfRow`，`page.ts::paintVoice` 逐个设）；原样档不设 */
+  pass?: number;
   /** 各首的页眉定位（place/header.ts::placeHeader；`compose/index.ts` 排版前填） */
   heads?: readonly PlacedHeader[];
   /** 页脚模板（样式表的 `song-foot` 区域；没有就不印） */

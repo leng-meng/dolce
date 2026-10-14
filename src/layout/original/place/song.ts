@@ -66,6 +66,8 @@ export function layoutSong(
   songIndex = 0,
   headerBottom = 0,
   ink: InkMeasurer,
+  /** 展开档（`place/expand.ts` 展开过的行视图）：谱行按简谱引擎展开档的口径码页，见下面的 `slideBlock` */
+  expanded = false,
 ): PlacedPage[] {
   // 行占满版心：行首最左的内容（数字落笔原点、升降号、歌词左缘）贴左缘，两端对齐后行末的占位右缘
   //（末个音符的字面右缘、或末条小节线）贴右缘，同简谱引擎
@@ -223,7 +225,8 @@ export function layoutSong(
         const lastInk = ink.text(texts[texts.length - 1]!.text, "words").ink;
         y = Math.max(y, textY + (texts.length - 1) * wordsLead(m) + lastInk.bottom + m.style.vertical.systemGap);
       }
-      blocks.push({ group: placedGroup, top: 0, bottom: y, breakBefore: groupIdx === 0 && pageIdx > 0 });
+      const box = expanded ? slideBlock(pre.map((p) => ({ pv: p.pv, inkBottom: p.inkBottom })), ink) : { top: 0, bottom: y };
+      blocks.push({ group: placedGroup, ...box, breakBefore: groupIdx === 0 && pageIdx > 0 });
     }
   }
   // 连谱号的上下花头各伸出首/末声部 ≈1.5 个墨迹高（粗线探出 0.85，花头字形高 1.18 线距 =
@@ -253,7 +256,13 @@ export function layoutSong(
     firstTop = headerBottom + m.style.size.lyric - inkTop;
   }
   const otherTop = m.page.margin.top + m.page.firstSystemTop * 0.35;
-  const laid = paginate(blocks, {
+  // 展开档：同简谱引擎 `Layout.layoutVertically`——块按占位盒紧挨着码（块间 `staffDist`），放不满的页把行距摊开到 `systemSpread`、整块居中
+  const laid = expanded ? paginate(blocks, {
+    pageTop: () => m.page.margin.top,
+    bottom: bottomLimit,
+    gap: m.style.vertical.staffDist,
+    spread: { maxGap: m.style.vertical.systemSpread, center: () => true },
+  }) : paginate(blocks, {
     pageTop: (i) => (i === 0 ? firstTop : otherTop),
     // 连续长图不按高度分页，页高随内容长
     bottom: m.page.longImage ? Infinity : bottomLimit,
@@ -270,6 +279,25 @@ export function layoutSong(
   }));
 }
 
+/**
+ * 展开档的谱行占位盒（相对组原点）：照简谱引擎谱行 Group 的包围盒——数字、歌词按**字体盒**（ascent / descent）算，
+ * 弧、高八度点、低音点等按墨迹，取并集。页数、每页行数要与简谱引擎展开档一致（用户定）。
+ */
+function slideBlock(voices: ReadonlyArray<{ pv: PlacedVoice; inkBottom: number }>, ink: InkMeasurer): { top: number; bottom: number } {
+  const d = ink.digit("1").ink;
+  const baseRel = -(d.top + d.bottom) / 2; // 数字按墨迹居中于声部 y，落笔基线在这里（compose/ctx.ts::digitOrigin）
+  const note = ink.fontBox("note");
+  const lyric = ink.fontBox("lyric");
+  let top = Infinity;
+  let bottom = -Infinity;
+  for (const { pv, inkBottom } of voices) {
+    top = Math.min(top, pv.y + pv.top, pv.y + baseRel + note.top);
+    bottom = Math.max(bottom, pv.y + inkBottom, pv.y + baseRel + note.bottom);
+    for (const ly of pv.lyricY) bottom = Math.max(bottom, ly + lyric.bottom);
+  }
+  return Number.isFinite(top) ? { top, bottom } : { top: 0, bottom: 0 };
+}
+
 /** 排一整份文档（可含多首「一首多唱」）。 */
 export function layoutDocument(
   songs: readonly PuSong[],
@@ -278,9 +306,11 @@ export function layoutDocument(
   ink: InkMeasurer,
   /** 各首页脚（BL/BC/BR）从本曲最低一行往下占多高（compose/footer.ts::footerSpan）；连续长图接下一首时要让开 */
   footerSpans: readonly number[] = [],
+  /** 展开档（见 `layoutSong`） */
+  expanded = false,
 ): PlacedScore {
   let pages: PlacedPage[] = [];
-  songs.forEach((song, i) => pages.push(...layoutSong(song, m, i, headerBottoms[i] ?? 0, ink)));
+  songs.forEach((song, i) => pages.push(...layoutSong(song, m, i, headerBottoms[i] ?? 0, ink, expanded)));
 
   // 连续长图：所有页面首尾相接成一张，源里的 `[fenye]` 只当作一段额外留白。
   // 换曲时连页眉一起接：页眉整块下移（`PlacedPage.headers`），本曲的谱跟着同一个量走——layoutSong 已按页眉高排好首组

@@ -16,6 +16,7 @@ import { paintBand, paintNote } from "./note";
 import { bandOf } from "../place/band";
 import { paintBarline } from "./barline";
 import { paintJoinBrace, paintLyricAnnotations, paintSyllables } from "./lyric";
+import { passesOfRow } from "../place/expand";
 
 /**
  * 把一组声部切成若干「小节线贯穿块」：歌词行会把竖线截断，所以带歌词的声部就是
@@ -211,8 +212,10 @@ export function paintVoice(c: OriginalCtx,
   /** 前面那个音符的元素 id：小节线没有自己的 id，借它认（口径同 `editor/sync.ts::addPartExtras`）。
    *  增时线不改它——模型里「小节线前面那个元素」指的是和弦，不是挂在它上面的增时线。 */
   let prevNoteId: ElementId | undefined;
+  const passes = passesOfRow.get(voice.voice);
 
   for (const it of voice.items) {
+    c.pass = passes?.[it.srcIndex];
     const x = left + it.x;
     // `{dsb}` 并排块里，主旋律这一段整体下移（it.dy）
     const base = baseline + (it.dy ?? 0);
@@ -231,7 +234,7 @@ export function paintVoice(c: OriginalCtx,
       root.add(line);
       // 增时线有自己的 id（`Chord.sustains[]` 各带一个），可视化编辑按它点选这一条
       const sid = c.doc?.idOf.get(it.element);
-      if (sid !== undefined) line.ident = { kind: "sustain", id: sid };
+      if (sid !== undefined) line.ident = { kind: "sustain", id: sid, ...(c.pass !== undefined ? { pass: c.pass } : {}) };
       // 长音里换的和弦印在增时线上方（`- "hx:C/G"`），画法与音符上方那个一样
       paintBand(c, root, it.element);
       paintSyllables(c, root, it, x, voice, lyricRight);
@@ -241,6 +244,7 @@ export function paintVoice(c: OriginalCtx,
     prevNoteId = c.doc?.idOf.get(it.element) ?? prevNoteId;
     paintSyllables(c, root, it, x, voice, lyricRight);
   }
+  c.pass = undefined;
 
   // 减时线
   for (const u of voice.underlines) {

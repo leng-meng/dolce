@@ -5,6 +5,7 @@
 //
 // 点选 / 高亮部分移植自 mp/layout/draw.kt。
 
+import type { PlayItem } from "../score/playorder";
 import { Rect } from "../common/geom";
 import { Group, PageItem } from "./pageitem";
 import { Layout } from "./layout";
@@ -215,6 +216,11 @@ export class ScorePainter {
     return this.original !== null;
   }
 
+  /** 原样文档引擎排的展开档：各首实际走的演唱顺序（`page-check` 的 P5 按它数遍数）；别的结果为 null */
+  get expandPlans(): ReadonlyArray<readonly PlayItem[] | null> | null {
+    return this.original?.plans ?? null;
+  }
+
   /** 当前结果是哪一路画的。 */
   get renderer(): "jianpu" | "staff" | null {
     return this.staff ? "staff" : this.result ? "jianpu" : null;
@@ -328,6 +334,8 @@ export class ScorePainter {
       userMargins: pageMargins(sheet.page) !== undefined,
       foot: (sheet.template?.regions?.["song-foot"] as Region | undefined) ?? null,
       noReflow: req.noReflow,
+      expanded: req.view === "expanded",
+      breakDesc: req.breakDesc ?? null,
     });
     const result: LayoutResult = {
       title: r.view.songs[0]?.metadata.titles[0] ?? "",

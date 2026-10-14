@@ -6,7 +6,7 @@ import { TimeSigGlyph } from "../../../engrave/timesig";
 import { KeyLabel, keyNameOf } from "../../../engrave/keysig";
 import { EQ_PAD_EM } from "../../../engrave/spacing";
 import { emptyMetadata, type Meter } from "../../../pu/ast";
-import { timeSigRule, type HeaderMeasurer, type HeaderTextRole, type PlacedHeader } from "../place/header";
+import { timeSigRule, type HeaderMeasurer, type HeaderTextRole, type PlacedHeader, type PlacedHeaderLine } from "../place/header";
 import { type OriginalCtx, text } from "./ctx";
 
 /** 页眉各角色的字（`scale` 是窄纸缩排倍率，只作用于标题、副标题、经文、署名）。 */
@@ -21,7 +21,17 @@ export function headerRoleFont(m: JianpuGrid, role: HeaderTextRole, scale = 1): 
     case "top": return new Font(fam, m.style.size.header);
     case "index": return new Font(fam, hs.title.size * 0.62);
     case "tempo": return new Font(fam, m.style.size.keyMeter * 0.85);
+    case "slide-title": return slideFont(m, hs.title, hs.title.size);
+    case "slide-subtitle": return slideFont(m, hs.subtitle, hs.subtitle.size);
+    case "slide-scripture": return slideFont(m, hs.scripture, hs.scripture.size ?? hs.subtitle.size);
+    case "slide-credit": return slideFont(m, hs.credit, hs.credit.size);
+    case "slide-footer": return new Font(m.style.font.lyric.family, m.style.size.lyric * 0.8);
   }
+}
+
+/** 展开档标题页的字：设置里给了族 / 粗体就用，否则歌词字、不加粗（同简谱引擎 `headerRoleFont(…, lrcFont)`） */
+function slideFont(m: JianpuGrid, face: { family?: string; bold?: boolean }, size: number): Font {
+  return new Font(face.family ?? m.style.font.lyric.family, size, face.bold ?? false);
 }
 
 /** 页眉量具（place/header.ts 用）：角色字按出厂字号量（缩排倍率由定位端乘）；调号拍号行的墨迹上下缘与「=」中心。 */
@@ -48,6 +58,16 @@ export function headerMeasurer(m: JianpuGrid): HeaderMeasurer {
       return { top, bottom, eqMid };
     },
   };
+}
+
+/** 展开档的标题页、页脚各行（`placeTitlePage` / `placeSlideFooter` 定好的位置；居中按页宽）。文字标 `hdr`（标题页，可视化编辑认页眉）。 */
+export function paintSlideLines(c: OriginalCtx, root: Group, lines: readonly PlacedHeaderLine[], tag: boolean): void {
+  const anchor = { left: 0, center: c.pageWidth / 2, right: c.pageWidth };
+  for (const l of lines) {
+    const t = text(l.text, anchor[l.anchor] + l.dx, l.baseline, headerRoleFont(c.metrics, l.role), c.ink);
+    if (tag) t.classes.add("hdr");
+    root.add(t);
+  }
 }
 
 export function paintHeader(c: OriginalCtx, root: Group, songIndex: number, systemLeft: number): void {

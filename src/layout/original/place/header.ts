@@ -8,7 +8,9 @@ import type { JianpuGrid } from "../metrics";
 import type { Rect } from "../../../common/geom";
 
 /** 页眉各行的角色（字体与字号由绘制端定，`compose/header.ts::headerRoleFont`） */
-export type HeaderTextRole = "title" | "subtitle" | "scripture" | "credit" | "top" | "index" | "tempo";
+export type HeaderTextRole = "title" | "subtitle" | "scripture" | "credit" | "top" | "index" | "tempo"
+  // 展开档的标题页与页脚（`placeTitlePage` / `placeSlideFooter`）：字体沿用歌词字（同简谱引擎 `titlePage` / `addFooters`），标题不加粗
+  | "slide-title" | "slide-subtitle" | "slide-scripture" | "slide-credit" | "slide-footer";
 
 /** 页眉量具（`compose/index.ts` 注入）：角色字的字面宽与墨迹盒（相对落笔原点、基线 y = 0）；调号拍号行的墨迹上下缘 */
 export interface HeaderMeasurer {
@@ -160,4 +162,40 @@ export function placeHeader(meta: Metadata, m: JianpuGrid, ink: HeaderMeasurer):
     meterDy: key.eqMid + timeSigRule(m) / 2,
     bottom: Math.max(titleInkBottom, blockBottom, keyBottom),
   };
+}
+
+/**
+ * 展开档的标题页（同简谱引擎 `jianpupages.ts::titlePage`）：标题 → 副标题 → 经文 → 词曲逐行居中，
+ * 首行基线在页高 0.3 处，往下每行下移本行的字号。
+ */
+export function placeTitlePage(meta: Metadata, m: JianpuGrid, ink: HeaderMeasurer): PlacedHeaderLine[] {
+  const hs = m.style.header;
+  const items: Array<{ text: string; role: HeaderTextRole; size: number }> = [];
+  meta.titles.forEach((t, i) => items.push(i === 0 ? { text: t, role: "slide-title", size: hs.title.size } : { text: t, role: "slide-subtitle", size: hs.subtitle.size }));
+  for (const t of meta.scripture ?? []) items.push({ text: t, role: "slide-scripture", size: hs.scripture.size ?? hs.subtitle.size });
+  for (const t of authorLines(meta)) items.push({ text: t, role: "slide-credit", size: hs.credit.size });
+  let y = m.page.height * 0.3;
+  return items.map(({ text, role, size }) => {
+    const line: PlacedHeaderLine = { role, text, anchor: "center", dx: -ink.headerText(text, role).advance / 2, baseline: y };
+    y += size;
+    return line;
+  });
+}
+
+/**
+ * 展开档每个谱页的页脚（同简谱引擎 `addFooters`）：曲名在版心里居中，「i/n」页码左缘落在 左边距 + 0.8 × 纸宽、
+ * 放不下时收回到版心右缘以内；基线在下边距的一半处。`x` 以页面左缘为原点（锚点 left = 0）。
+ */
+export function placeSlideFooter(title: string, page: number, pages: number, m: JianpuGrid, ink: HeaderMeasurer): PlacedHeaderLine[] {
+  const { width, height, margin } = m.page;
+  const y = height - margin.bottom * 0.5;
+  const out: PlacedHeaderLine[] = [];
+  if (title) {
+    const w = ink.headerText(title, "slide-footer").advance;
+    out.push({ role: "slide-footer", text: title, anchor: "left", dx: margin.left + (width - margin.left - margin.right - w) / 2, baseline: y });
+  }
+  const no = `${page}/${pages}`;
+  const w = ink.headerText(no, "slide-footer").advance;
+  out.push({ role: "slide-footer", text: no, anchor: "left", dx: Math.min(margin.left + 0.8 * width, width - margin.right - w), baseline: y });
+  return out;
 }

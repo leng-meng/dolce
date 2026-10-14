@@ -1,7 +1,7 @@
 // 跨若干符号的记号（弧线 / 多连音 / 跳房子 / 渐强渐弱）换算成行内坐标，弧按嵌套定层。
 import type { Mark, ScoreLine } from "../../../pu/ast";
-import { jianpuSlurRise, type JianpuGrid } from "../metrics";
-import { ARC_CHAIN_INSET_DIV, arcClearShift, jpArcY } from "../../../engrave/arc";
+import { jianpuSlurRise, jianpuSlurStyle, type JianpuGrid } from "../metrics";
+import { ARC_CHAIN_INSET_DIV, arcClearShift, arcRise, jpArcY } from "../../../engrave/arc";
 import type { InkMeasurer, PlacedItem, PlacedMark } from "./model";
 import { articStack, stackTop } from "./vertical";
 import { barlineLines } from "./spacing";
@@ -106,11 +106,13 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid,
   // （260《感恩的泪》`2⌒2 3 2` 两条弧原先同一个起点、贴在一起）
   const arcs = out.filter((p) => p.y !== undefined && isArcMark(p.mark));
   arcs.sort((p, q) => (p.mark.end - p.mark.start) - (q.mark.end - q.mark.start));
-  const rise = jianpuSlurRise(m);
+  // 弧高没有上限的档（展开档的 pptx 预设 `arc.maxHeight` = 0）按各条弧的跨度算，否则一律取上限那一份
+  const capped = jianpuSlurRise(m);
+  const riseOf = (p: PlacedMark): number => (Number.isFinite(capped) ? capped : arcRise(p.x1 - p.x0, jianpuSlurStyle(m, 0)));
   for (const [i, outer] of arcs.entries()) {
     const inner = arcs.slice(0, i).filter((q) => nests(q.mark, outer.mark))
-      .map((q) => ({ x: (q.x0 + q.x1) / 2, y: q.y! - rise - m.style.stroke.slur }));
-    outer.y = outer.y! + arcClearShift(outer.x0, outer.y!, outer.x1, outer.y!, rise, true, inner, m.ink.stack.gap);
+      .map((q) => ({ x: (q.x0 + q.x1) / 2, y: q.y! - riseOf(q) - m.style.stroke.slur }));
+    outer.y = outer.y! + arcClearShift(outer.x0, outer.y!, outer.x1, outer.y!, riseOf(outer), true, inner, m.ink.stack.gap);
   }
   // 跳房子、松叶的 y 按上方带堆叠的结果定（band.ts::placeBand）
   return out;

@@ -160,7 +160,7 @@ function columnsOf(lines: ReadonlyArray<{ items: PlacedItem[]; pad: number[] }>,
 }
 
 /** 紧排 + 歌词避让后的列锚点（还没两端对齐），以及每列歌词伸到的最右处。 */
-function packColumns(cols: readonly Column[], voices: number, m: JianpuGrid, ink: InkMeasurer): { X: number[]; lyricRight: number[] } {
+function packColumns(cols: readonly Column[], voices: number, m: JianpuGrid, ink: InkMeasurer): { X: number[]; lyricRight: number[]; lyricLeft: number[] } {
   const gap = m.style.spacing.lyricGap;
   // 紧排：落笔原点挨着上一列的占位右缘（+ 硬让位）；行首那一列的倚音、临时记号整个让出来
   const N: number[] = [];
@@ -176,6 +176,7 @@ function packColumns(cols: readonly Column[], voices: number, m: JianpuGrid, ink
   // 取各段里最靠左的左缘、最靠右的右缘；推开一列，后面的列整体跟着右移
   const X: number[] = [];
   const lyricRight: number[] = cols.map(() => -Infinity);
+  const lyricLeft: number[] = cols.map(() => Infinity);
   // 游标从行首起（0）：行首那个字的左缘也不出行首
   const state = Array.from({ length: voices }, () => ({ curX: 0, prevBlank: 0, prevLatin: [] as string[] }));
   let offset = 0;
@@ -208,9 +209,10 @@ function packColumns(cols: readonly Column[], voices: number, m: JianpuGrid, ink
       st.prevBlank = Math.min(...rs.map((r) => r.tailBlank));
       st.prevLatin = rs.map((r) => r.text);
       lyricRight[ci] = Math.max(lyricRight[ci]!, x + rightMost);
+      lyricLeft[ci] = Math.min(lyricLeft[ci]!, x + Math.min(...rs.map((r) => -(r.lead + r.body / 2))));
     }
   });
-  return { X, lyricRight };
+  return { X, lyricRight, lyricLeft };
 }
 
 /**
@@ -497,14 +499,21 @@ export function naturalColumns(
   lines: ReadonlyArray<{ items: PlacedItem[]; pad: number[] }>,
   m: JianpuGrid,
   ink: InkMeasurer,
-): { xOf: Map<PlacedItem, number>; width: number } {
+): { xOf: Map<PlacedItem, number>; leftOf: Map<PlacedItem, number>; rightOf: Map<PlacedItem, number>; width: number } {
   const cols = columnsOf(lines, m, ink);
-  const { X, lyricRight } = packColumns(cols, lines.length, m, ink);
+  const { X, lyricRight, lyricLeft } = packColumns(cols, lines.length, m, ink);
   const xOf = new Map<PlacedItem, number>();
+  // 各列占到的最左 / 最右处（占位与歌词字取并集，同简谱引擎条目的 `entryBounds`）：展开档逐行装满按它判放不放得下（place/expand.ts::fillLines）
+  const leftOf = new Map<PlacedItem, number>();
+  const rightOf = new Map<PlacedItem, number>();
   let width = 0;
   cols.forEach((c, i) => {
-    for (const { it } of c.members) xOf.set(it, X[i]!);
+    for (const { it } of c.members) {
+      xOf.set(it, X[i]!);
+      leftOf.set(it, Math.min(X[i]! - c.left, lyricLeft[i]!));
+      rightOf.set(it, Math.max(X[i]! + c.right, lyricRight[i]!));
+    }
     width = Math.max(width, X[i]! + c.right + c.pad, lyricRight[i]!);
   });
-  return { xOf, width };
+  return { xOf, leftOf, rightOf, width };
 }

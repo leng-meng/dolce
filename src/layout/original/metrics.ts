@@ -139,6 +139,11 @@ export function barlineSpan(m: JianpuGrid): { top: number; bottom: number } {
   return { top: base - h * 0.75, bottom: base + h * 0.25 };
 }
 
+/** 转调标签（「转1=D」）的字号：同和弦；不排和弦的档（展开档 `chord` = 0）取歌词字号的 0.6（同简谱引擎 `KeySig`）。 */
+export function keyLabelSize(m: JianpuGrid): number {
+  return m.style.size.chord > 0 ? m.style.size.chord : m.style.size.lyric * 0.6;
+}
+
 /** 括线（房号、连音括线）的线宽：尺子给了 `bracket` 就用它，否则同小节线（同简谱引擎 `Line.drawEnding`）。两者同一个值（用户定）。 */
 export function bracketLineWidth(m: JianpuGrid): number {
   return m.style.stroke.bracket > 0 ? m.style.stroke.bracket : m.style.stroke.barline;

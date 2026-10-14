@@ -119,7 +119,7 @@ export function paintNote(c: OriginalCtx,
 
   root.add(g);
   const id = c.doc?.idOf.get(note);
-  if (id !== undefined) g.ident = { kind: "note", id };
+  if (id !== undefined) g.ident = { kind: "note", id, ...(c.pass !== undefined ? { pass: c.pass } : {}) };
 }
 
 /**
