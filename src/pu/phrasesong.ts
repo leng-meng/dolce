@@ -1,7 +1,7 @@
 // 简谱形状的 `ScoreDoc`（文本谱 / 123 / ABC）→ 断句输入（`score/phraseinput.ts`）；试听输入与演唱顺序也用这份小节序列。
 //
 // 与 `model/phrasedoc.ts`（MusicXML 形状）分工同 `pu/slots.ts::docView` 与 `jianpuproject.ts`：
-// 这里经排版行视图 `docView` 读，和原样档谱面、简谱引擎输入（`jianpuInputOfDoc`）是同一批对象。
+// 这里经排版行视图 `docView` 读，和原样档谱面、简谱输入模型（`jianpuInputOfDoc`）是同一批对象。
 // **口径逐条同 `jianpuinput.ts::rowsPart`**（`forExpanded` 那一份：带歌词的声部当主旋律、同号歌词顺延），
 // 本轮只换输入、不动判据，靠 `scripts/phrase-dual-check.mjs --jianpu` 双跑逐项一致。
 // 断点集合以这里拼出的对象为键，`idOf` 把它们换回元素 id。
@@ -248,6 +248,9 @@ export function buildMeasures(
             break;
           default: mea.barline = BarStyle.NONE;
         }
+        // 下一小节左线上的反复起点挂在这条线上（`|] |:` 这类两条线并成一条，`slots.ts::carryToPrevBarline`），
+        // 漏了的话后面那个 `:|` 找不到起点、跳回曲首（116《献上感恩》第二段反复）
+        if (el.repeatForwardAfter) pendingRepeatForward = true;
         newMeasureNeeded = true;
         if (pitch) pitch.key.alter = {}; // 临时记号到小节线为止
         return;
