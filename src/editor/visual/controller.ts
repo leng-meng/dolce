@@ -910,6 +910,33 @@ export class VisualEditController {
     return true;
   }
 
+  /** 双击文字进来、焦点在代码区改字时的 Enter / Shift+Enter（代码区键位，`app.ts`）：
+   *  歌词里在这个字的音处换行 / 换页（光标在字前 = 这个音之前，否则之后），按格式改原文，焦点回谱面；
+   *  页眉字段里结束改字，回到谱面选中这个字段。光标不在文字里时返回 false，代码区照常插换行。 */
+  textEnter(page: boolean): boolean {
+    if (!this.host.visualEnabled() || this.host.modelEditing()) return false;
+    if (!this.host.syncFresh()) this.host.reloadNow();
+    const sel = this.host.view.state.selection.main;
+    if (!sel.empty) return false;
+    const head = sel.head;
+    const e = this.host.sync.ordered().find((x) => isText(x) && head >= x.from && head <= x.to);
+    if (!e) return false;
+    const pane = this.host.scorePane;
+    if (e.kind === "header") {
+      this.select(e.from, e.to);
+      pane.focus({ preventScroll: true });
+      return true;
+    }
+    const span = this.host.sync.spanOfNote(e.id);
+    const note = span && this.navigable().find((x) => x.kind === "note" && x.from === span.from);
+    pane.focus({ preventScroll: true });
+    if (!note) {
+      this.host.setStatus(tr("vis.selectNote"));
+      return true;
+    }
+    return this.insertBreakAt(page, head === e.from ? note.from : this.groupEnd(note));
+  }
+
   /** 点在文字条目的哪个字前后 → 原文偏移。字对不上（`♭B` 对 `bB`、叠排的拍号）时按点在那一项的左半还是右半落到字段两端。 */
   private textCaretAt(e: SyncEntry, cx: number, cy: number): number {
     const src = this.host.view.state.doc.sliceString(e.from, e.to);
@@ -1060,6 +1087,48 @@ export class VisualEditController {
   private newlineSelected(b: BreakMark, from: number, to: number): boolean {
     if (to !== from + 1) return false;
     return this.newlineOf(b) === from;
+  }
+
+  /** 原文里没有符号可指的换行（ABC 的代码行末、文本谱另起一行 `Q:`），连同它的位置：挂换行那个音所在代码行的行末。
+   *  它们不进索引条目，方向键、插入模式的删除要另外认。 */
+  private virtualBreaks(): { b: BreakMark; nl: number }[] {
+    if (this.host.modelEditing()) return [];
+    const out: { b: BreakMark; nl: number }[] = [];
+    for (const b of this.host.sync.breaks()) {
+      if (b.span) continue;
+      const nl = this.newlineOf(b);
+      if (nl !== null) out.push({ b, nl });
+    }
+    return out;
+  }
+
+  /** `pos` 与 `dir` 那边相邻元素之间夹着的虚拟换行（插入光标贴着它：行首往前、行末往后）。 */
+  private virtualBreakBeside(pos: number, dir: -1 | 1): { b: BreakMark; nl: number } | null {
+    const nav = this.navigable();
+    if (dir < 0) {
+      const prev = [...nav].reverse().find((e) => e.to <= pos);
+      return prev ? this.virtualBreaks().find((v) => prev.to <= v.nl && v.nl < pos) ?? null : null;
+    }
+    const next = nav.find((e) => e.from >= pos);
+    return next ? this.virtualBreaks().find((v) => pos <= v.nl && v.nl < next.from) ?? null : null;
+  }
+
+  /** 选中一处虚拟换行：ABC 选中代码行末的换行符，文本谱光标落行末并记下「点中了这处换行」（与点谱面上的换行符同）。 */
+  private pickVirtualBreak(v: { b: BreakMark; nl: number }): void {
+    if (this.host.editDialect()?.lyricBlockByCodeLine) {
+      this.select(v.nl, v.nl + 1);
+      return;
+    }
+    this.select(v.nl, v.nl);
+    this.pickedBreak = { after: v.b.after, sel: v.nl };
+    this.host.setStatus(tr("vis.puBreakSelected"));
+    this.refresh();
+  }
+
+  /** 删一处虚拟换行：ABC 两条代码行接成一条（`w:` 跟着并），文本谱与下一行合并。 */
+  private deleteVirtualBreak(c: EditCtx, v: { b: BreakMark; nl: number }): boolean {
+    if (c.dialect.relayoutBreaks) return this.relayoutBreak(c, v.b.after, false, false);
+    return this.apply(deleteBreak(c, { kind: "break", from: v.nl, to: v.nl + 1, id: -1, verse: null }));
   }
 
   /** 屏幕坐标 → 插入位置：同一行（纵向覆盖点击点）里水平最近的元素，点在它中线左边就落在它前面。 */
@@ -1343,8 +1412,24 @@ export class VisualEditController {
     const nav = this.navigable();
     if (nav.length === 0) return false;
     const sel = this.host.view.state.selection.main;
+    // 点中的文本谱换行（光标在行末、另记了一笔）：当它是选中的元素，往两边走到相邻的元素
+    if (this.pickedBreak && sel.empty && sel.head === this.pickedBreak.sel && !extend) {
+      this.pickedBreak = null;
+      const target = dir > 0 ? nav.find((e) => e.from >= sel.head) : [...nav].reverse().find((e) => e.to <= sel.head);
+      if (!target) return false;
+      const span = this.noteSel(target);
+      this.select(span.from, span.to);
+      return true;
+    }
     if (sel.empty && !extend) {
-      // 插入模式：光标跨过一个元素（连同音符的增时线一起跨）
+      // 插入模式：光标跨过一个元素（连同音符的增时线一起跨）；跨过虚拟换行算一步（行末 → 下一行行首）
+      const vb = this.virtualBreakBeside(sel.head, dir);
+      if (vb) {
+        const at = dir > 0 ? nav.find((e) => e.from > vb.nl)?.from : [...nav].reverse().find((e) => e.to <= vb.nl)?.to;
+        if (at === undefined) return false;
+        this.select(at, at);
+        return true;
+      }
       if (dir > 0) {
         const next = nav.find((e) => e.from >= sel.head);
         if (!next) return false;
@@ -1375,12 +1460,22 @@ export class VisualEditController {
       return true;
     }
     let target: SyncEntry | undefined;
+    let edge: number;
     if (dir > 0) {
-      const edge = cur.length ? cur[cur.length - 1]!.to : sel.to;
+      edge = cur.length ? cur[cur.length - 1]!.to : sel.to;
       target = nav.find((e) => e.from >= edge);
     } else {
-      const edge = cur.length ? cur[0]!.from : sel.from;
+      edge = cur.length ? cur[0]!.from : sel.from;
       target = [...nav].reverse().find((e) => e.to <= edge);
+    }
+    // 中间夹着虚拟换行：先停在换行上（选中的换行符本身不算夹着）
+    const selNl = sel.to === sel.from + 1 ? sel.from : -1;
+    const vb = this.virtualBreaks().find((v) => v.nl !== selNl && (dir > 0
+      ? edge <= v.nl && (!target || v.nl < target.from)
+      : v.nl < edge && (!target || target.to <= v.nl)));
+    if (vb) {
+      this.pickVirtualBreak(vb);
+      return true;
     }
     if (!target) return false;
     const span = this.noteSel(target);
@@ -1919,18 +2014,25 @@ export class VisualEditController {
     return last ? groupEnd(c, last) : sel.to;
   }
 
-  /** 换行 / 换页：换行是符号的格式插符号（`breaks.ts`），不是符号的（文本谱）重切行。 */
-  private insertBreakAt(page: boolean): boolean {
+  /** 换行 / 换页：换行是符号的格式插符号（`breaks.ts`），不是符号的（文本谱）重切行。`at` 缺省取光标处 / 选中段之后。 */
+  private insertBreakAt(page: boolean, at?: number): boolean {
     const c = this.editCtx();
     if (!c) return true;
-    const pos = this.insertPos(c);
+    const pos = at ?? this.insertPos(c);
     if (c.dialect.relayoutBreaks) {
       const prev = [...this.navigable()].reverse().find((e) => e.to <= pos && (e.kind === "note" || e.kind === "sustain"));
       if (!prev) {
         this.host.setStatus(tr("vis.lineStart"));
         return true;
       }
-      return this.relayoutBreak(c, prev.id, true, page);
+      // 重切行的补丁按整段前后差异算，光标映射过去落不准：按元素序号落到新起那一行的行首
+      const solid = (): SyncEntry[] => this.navigable().filter((e) => e.kind !== "break");
+      const k = solid().indexOf(prev);
+      const before = c.state.doc.toString();
+      this.relayoutBreak(c, prev.id, true, page);
+      const next = k >= 0 && this.host.view.state.doc.toString() !== before ? solid()[k + 1] : undefined;
+      if (next) this.select(next.from, next.from);
+      return true;
     }
     return this.apply(insertBreak(c, pos, page));
   }
@@ -2029,6 +2131,9 @@ export class VisualEditController {
     if (!sel.empty && c.dialect.lyricBlockByCodeLine && c.state.doc.sliceString(sel.from, sel.to) === "\n") {
       return this.apply(deleteBreak(c, { kind: "break", from: sel.from, to: sel.to, id: -1, verse: null }));
     }
+    // 插入光标贴着一处虚拟换行（行首退格、行末 Delete）：删的是换行，不是隔壁的元素
+    const vb = sel.empty ? this.virtualBreakBeside(sel.head, dir) : null;
+    if (vb) return this.deleteVirtualBreak(c, vb);
     // 选中的是附点：只去掉附点
     if (this.pickedDot()) return this.apply(toggleDot(c, sel.from, sel.to));
     // 选中的是减时线：只去掉减时线（时值回到四分音符）

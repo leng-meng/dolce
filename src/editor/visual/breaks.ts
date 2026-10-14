@@ -133,9 +133,11 @@ export function insertBreak(ctx: EditCtx, pos: number, page: boolean): EditOutco
   // 换行就是代码行末（ABC）时不写符号
   const head = tok ? `${left} ${tok}` : left;
   // 没有歌词：就地拆行
+  // 换行不是符号（ABC）：光标落到新起那一行的行首，紧接着退格撤掉的就是这处换行（123 的光标在 `$` 后，同理）
   if (lyr.length === 0) {
     const insert = right ? `${head}\n${right}` : head;
-    return { changes: [{ from: line.from, to: line.to, insert }], anchor: line.from + head.length, head: line.from + head.length };
+    const caret = line.from + (right && !tok ? head.length + 1 : head.length);
+    return { changes: [{ from: line.from, to: line.to, insert }], anchor: caret, head: caret };
   }
 
   // 有歌词：每条 `w:` 在第 k 格处拆开，前一半挪到前一行曲下面
@@ -163,7 +165,7 @@ export function insertBreak(ctx: EditCtx, pos: number, page: boolean): EditOutco
   const tail = [...rest, ...b];
   const insert = [...parts, ...tail].join("\n");
   const end = lyr[lyr.length - 1]!.to;
-  const caret = line.from + head.length;
+  const caret = line.from + (right && !tok ? [...parts, ""].join("\n").length : head.length);
   return { changes: [{ from: line.from, to: end, insert }], anchor: caret, head: caret };
 }
 

@@ -2,7 +2,7 @@
 // Mirrors EditorController in CodeEditor.kt (doBind/tryLoad/updateLayout/paint/load/doSave).
 
 import { EditorView, keymap, lineNumbers } from "@codemirror/view";
-import { Compartment, EditorState } from "@codemirror/state";
+import { Compartment, EditorState, Prec } from "@codemirror/state";
 import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { sniffDialect, type Dialect } from "../pu";
 import type { ElementId, ScoreDoc } from "../model/doc";
@@ -729,6 +729,11 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
           lineNumbers(),
           history(),
           keymap.of([...defaultKeymap, ...historyKeymap]),
+          // 双击歌词 / 页眉进来改字时的回车：按格式换行或结束改字（不是文字时照旧插换行）
+          Prec.highest(keymap.of([
+            { key: "Enter", run: () => this.visual.textEnter(false) },
+            { key: "Shift-Enter", run: () => this.visual.textEnter(true) },
+          ])),
           this._highlightCompartment.of(this.adapter.highlighter),
           updateListener,
           visualCursorExtension,
