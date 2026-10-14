@@ -339,7 +339,8 @@ function readVoice(sec: VoiceSectionLike, fifths: number, time: { beats: number;
 
 type VoiceSectionLike = Section & { voiceData: JpwToken[] };
 
-/** 歌词落点：按源文小节数，小节中间的换行也让小节序号加一。
+/** 歌词落点：按源文小节线数小节，**小节中间的换行不算**（JP-Word 原生的 013 有福的确据：行末 `(5. 5.)` 与下行
+ *  `3_ 2_ 1_ |` 是一个 9/8 小节，副歌 `W1-3@9,3` 照这样数才落在副歌第一个音上；按换行再加一就早一小节、压进主歌）。
  *  没有音的小节不算：曲首 `|:|` 词法成 `|:` `|` 两根线，`readVoice` 为收它们开出一个空小节，
  *  数进去的话 `W1@1,2` 就落空、词整体早一格（`J14.你们要专心` 第一个字挂到了休止上）。 */
 function assignLyrics(measures: readonly SrcMeasure[], f: JpwFile): void {
@@ -351,13 +352,6 @@ function assignLyrics(measures: readonly SrcMeasure[], f: JpwFile): void {
       mid++;
       let nid = 0;
       for (const ent of m.entries) {
-        if (ent.kind === "break") {
-          if (ent !== m.entries[m.entries.length - 1]) {
-            mid++;
-            nid = 0;
-          }
-          continue;
-        }
         if (ent.kind !== "note") continue;
         nid++;
         if (mid < seg.measure) continue;

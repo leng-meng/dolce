@@ -248,6 +248,8 @@ function rowOf(
       // 终止线只画在整首最后（用户定 2026-10-14）：D.C. 前、曲中 `|]` 唱到半路的都画成细线
       if (type === "end" && i !== bars.finalAt) type = "normal";
       if (i === bars.finalAt && type === "normal") type = "end";
+      // 唱完这里就跳走（往回跳的同一遍、一遍的末尾）：原谱跳转处的双线展开后接的是别处，画成细线（250 D.S. 前的 `||`）
+      if (type === "double" && (pass.hard?.has(i + 1) || (i === pass.slots.length - 1 && bars.finalAt < 0))) type = "normal";
       if (type !== el.type) el = { ...el, type };
     }
     if (el !== orig) {

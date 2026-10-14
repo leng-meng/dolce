@@ -935,9 +935,11 @@ class DocPartLoader {
   /** MusicXML <words> 字体 → tenths 空间字号（pt / scaling，对齐 loader.cpp::makeFont）。 */
   private makeWordsFont(f: FontSpec | undefined): Font {
     const fam = f?.family ?? "Times New Roman";
-    const sz = f?.size !== undefined ? f.size : 16;
     const bold = f?.weight === "bold";
-    return new Font(fam, sz / this.score.scaling, bold, f?.style === "italic");
+    // 没写字号：照 `<word-font>`（005「（副歌）」只该 7.5pt）
+    const d = this.score.defaults;
+    const tenths = f?.size !== undefined ? f.size / this.score.scaling : d.wordFontGiven ? d.wordFont.size : 16 / this.score.scaling;
+    return new Font(fam, tenths, bold, f?.style === "italic");
   }
 
   private processHarmony(src: Harmony, md: PartMeasureLayout, tick: Fraction): void {
@@ -1298,6 +1300,7 @@ export function layoutStaff(doc: ScoreDoc, options: MixedOptions): StaffLayout {
       const family = wordFont.family ?? score.defaults.wordFont.family;
       const sz = wordFont.size || score.defaults.wordFont.size;
       score.defaults.wordFont = new Font(family, ptToTenths(sz));
+      score.defaults.wordFontGiven = !!wordFont.size;
     }
   }
   // 用户给了谱表大小：换 scaling，纸与边距按 pt 不变（tenths 跟着换算）

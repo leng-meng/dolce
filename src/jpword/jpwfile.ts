@@ -361,7 +361,10 @@ export class JpwFile {
       // JP-Word 存的是 Windows 换行（\r\n）：按 \n 切完行尾还挂着 \r。不去掉的话歌词段把每个行尾的 \r
       // 当成一个音节，整段往后错一格（语料 567 份、3414 处，报「unsupported char?」）。偏移仍按原行长算。
       const l = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
-      if (l.startsWith("//")) continue;
+      // `//` 开头是注释，**歌词段里除外**：那里 `/` 是跳过一个音，整行跳过（爱是不保留「////////////////////」
+      // 跳过第二房、「///////////得主称赞已足够！」）当注释丢掉，后面的词整体前移进了不该有词的地方
+      const cur = this.sections[this.sections.length - 1];
+      if (l.startsWith("//") && !(cur instanceof WordsSection)) continue;
       if (l.length === 0) continue;
       if (l.startsWith(".")) {
         this.sections.push(Section.create(l));

@@ -3067,6 +3067,8 @@ export class MixedDefaults {
   topMargin = 85;
   bottomMargin = 85;
   wordFont = new Font("Times New Roman", 20);
+  /** 谱里给了 `<defaults><word-font font-size>`：没写字号的 `<words>` 照它（不然按 16pt） */
+  wordFontGiven = false;
   lyricFont = new Font("Times New Roman", 20);
   musicTextFont = new Font("Bravura Text", 20);
 }

@@ -63,7 +63,8 @@ export function formatMixedScore(score: StaffLayout, jianpuPart = 0): void {
 }
 
 /** 第一声部谱表上方那一摞：量上沿（`calcMixedStaffY`）→ 和弦 y → 自动放置的速度/文字记号抬过去。
- *  混排（`formatMixedScore`）与自动铺排的五线谱档共用；带坐标的五线谱档不走（和弦、文字照原文的 default-y）。 */
+ *  混排（`formatMixedScore`）与五线谱档共用。带坐标的五线谱档也走：原文和弦的 default-y 常贴着谱表上沿
+ *  （Finale 出的 500 首是 9），朝上符干、符杠一高就压上去（007、008），和弦行一律让开谱面内容。 */
 export function placeAboveStaff(score: StaffLayout, mixed: boolean): void {
   const p = score.parts[0];
   if (!p || p.staves.length === 0) return;
@@ -86,7 +87,7 @@ export function placeAboveStaff(score: StaffLayout, mixed: boolean): void {
       // 自动铺排的速度/文字记号：缺省高度只让开了五线谱。混排时简谱层（连同其上的弧、高音点）在它上面，抬过去；
       // 自动铺排时和弦行也在它下面，再抬过和弦。带 default-y 的原文不动（照 musicpp）。
       let floor = mixed ? -st.minY + eng.mixStaffDist + eng.mixStaffHeight + MIXED_TEXT_CLEAR : -st.minY + MIXED_TEXT_CLEAR;
-      if (score.autoLayout && st.hasHarmony) floor = Math.max(floor, st.harmonyY + 3 + harmTop + MIXED_TEXT_CLEAR / 2);
+      if (st.hasHarmony) floor = Math.max(floor, st.harmonyY + 3 + harmTop + MIXED_TEXT_CLEAR / 2);
       // 横向撞上的（曲首的速度记号与 `mp` 落在同一拍上）往上摞：y 是谱表之上的高度，大的在上
       const placed: { x0: number; x1: number; y0: number; y1: number }[] = [];
       // **速度记号最后排**（摞在最上面）：力度、文字记号贴着谱面，速度是整段的标题性记号，
@@ -95,7 +96,9 @@ export function placeAboveStaff(score: StaffLayout, mixed: boolean): void {
       const blocks = sys.measures.flatMap((m) => (p.measures[m.index]?.textBlocks ?? []).map((t) => ({ m, t })));
       blocks.sort((a, b) => Number(isTempo(a.t)) - Number(isTempo(b.t)));
       for (const { m, t } of blocks) {
-        if (!t.autoY || t.staff !== 0) continue;
+        // 原文带 default-y 的谱表上方文字（「（副歌）」）也只往上抬不往下压：混排时简谱层插在谱表与它之间，
+        // 五线谱档和弦被抬离符干后原高度会压在和弦行上（006）
+        if (t.staff !== 0 || (!t.autoY && !(t.y > 0))) continue;
         if (t.y < floor) t.y = floor;
         const w = t.width();
         const x0 = m.xpos() + t.x - (t.justify === LCR.Center ? w / 2 : t.justify === LCR.Right ? w : 0);
@@ -125,6 +128,8 @@ const FRAME_GAP = 20;
 const TITLE_OFFSET = 170; // hh(150) + 20
 /** 自动铺排：标题块最低一行的基线到首行谱内容顶的余量（含该行字的下伸） */
 const TITLE_GAP = 30;
+/** 页眉墨迹底到首行谱内容（和弦、高音、符干）顶的最小净空 */
+const HEADER_GAP = 12;
 
 interface FrameItem {
   system: Sys;
@@ -182,6 +187,91 @@ function flowLayout(items: FrameItem[], ph: number): LayoutFrame[] {
   return result;
 }
 
+interface HeadLine { tf: TextFrame; x: number; y: number; inkTop: number; inkBottom: number }
+
+/** 一页的页眉（credit）逐行排好：落笔点与墨迹上下沿（SVG 自上而下，tenths） */
+function headerLines(
+  score: StaffLayout,
+  credits: ScoreCredit[],
+  topMargin: number,
+  pageHeight: number,
+  pageWidthTenths: number,
+): HeadLine[] {
+  // Credits (title block text) for this frame. credit-words 可含换行 → 逐行排版。
+  // Sibelius MusicXML 导出 bug：credit-words 的 default-y 被整体压到页面底部
+  //（绝对原点错误，但各 credit 间的相对间距仍然正确）。
+  // 检测：最高的 credit（default-y 最大者）按 spec 解释（pageHeight - y）后仍落在
+  // 页面下半 → 判定为该 bug，以页首为锚重排整个标题块，保留相对间距与水平对齐。
+  // 正常文件标题 default-y≈页高（落在上半），不触发，绝对定位照旧。
+  const creditMaxY = credits.length
+    ? Math.max(...credits.map((c) => c.y))
+    : 0;
+  const reanchorTop = credits.length > 0 && pageHeight - creditMaxY > pageHeight / 2;
+  // 重排时把最高 credit（标题）的基线放在上边距下方一个标题字高处。
+  const titleCredit = credits.find((c) => c.y === creditMaxY);
+  const titleFontSz = titleCredit && titleCredit.fontSize > 0
+    ? titleCredit.fontSize / score.scaling
+    : 20;
+
+  const maxCreditSize = Math.max(0, ...credits.map((c) => c.fontSize));
+  /** 本页画出的页眉各行：落笔点与墨迹顶（排完整块不得高过上边距） */
+  const headLines: HeadLine[] = [];
+  for (const cr of credits) {
+    // 页眉字体（设置面板「页眉」一组 / 谱里 credit 自带的，`style/header.ts`）：给了的盖过 credit 自己的
+    const justify = cr.justify === LCR.Right ? "right" : cr.justify === LCR.Center ? "center" : "left";
+    const role = headerRoleOfCredit(cr.type ?? undefined, justify, maxCreditSize > 0 && cr.fontSize === maxCreditSize);
+    const hf = role ? score.options.headerFonts[role] : undefined;
+    const fntSz = hf?.size ? hf.size / score.scaling : cr.fontSize > 0 ? cr.fontSize / score.scaling : 20;
+    const base = new Font(cr.family ?? (cr.fontSize > 0 ? score.defaults.lyricFont.family : "PingFang SC"), fntSz, cr.bold ?? false);
+    const font = headerRoleFont(hf, fntSz, base);
+    const anchorX = cr.x > 0 ? cr.x : pageWidthTenths / 2;
+    // MusicXML y from page bottom → SVG top-down；Sibelius bug 时改以页首为锚。
+    const lineH = fntSz * 1.2;
+    const lines = cr.text.split(/\r?\n/);
+    // `valign`：`default-y` 是字顶 / 中线 / 底时换成首行基线（缺省就是基线）。陶我成器的标题是 top，当基线用就伸出上边距
+    const first = font.charBound(lines[0] ?? "");
+    const last = font.charBound(lines[lines.length - 1] ?? "");
+    const vshift = cr.valign === "top" ? -first.top
+      : cr.valign === "middle" ? -(first.top + last.bottom + (lines.length - 1) * lineH) / 2
+      : cr.valign === "bottom" ? -last.bottom - (lines.length - 1) * lineH
+      : 0;
+    const baseY = (reanchorTop
+      ? topMargin + titleFontSz + (creditMaxY - cr.y)
+      : pageHeight - cr.y) + vshift;
+    // 右对齐的多行 credit：Sibelius 把整块按最宽行右对齐，块内各行左缘对齐
+    //（参考 PDF 里"词曲…/翻译…"两行 xMin 相同、右缘不同），而非逐行各自右对齐。
+    const blockW = cr.justify === LCR.Right
+      ? Math.max(...lines.map((l) => font.measureText(l)))
+      : 0;
+    lines.forEach((line, li) => {
+      const tf = new TextFrame();
+      tf.text = line;
+      tf.font = font;
+      tf.ident = { kind: "header" }; // 可视化编辑按所画的字认页眉
+      let x = anchorX;
+      const w = font.measureText(line);
+      if (cr.justify === LCR.Center) x -= w / 2;
+      else if (cr.justify === LCR.Right) x -= blockW;
+      const m = new Matrix33();
+      m.setAffine([1, 0, 0, 1, x, baseY + li * lineH]);
+      tf.matrix = m;
+      const cb = font.charBound(line);
+      headLines.push({ tf, x, y: baseY + li * lineH, inkTop: cb.top, inkBottom: cb.bottom });
+    });
+  }
+  // 页眉整块不得高过上边距：有一行伸出去就整块往下挪
+  const over = topMargin - Math.min(Infinity, ...headLines.map((h) => h.y + h.inkTop));
+  if (over > 0) {
+    for (const h of headLines) {
+      const m = new Matrix33();
+      m.setAffine([1, 0, 0, 1, h.x, h.y + over]);
+      h.tf.matrix = m;
+      h.y += over;
+    }
+  }
+  return headLines;
+}
+
 function drawFrames(
   score: StaffLayout,
   items: FrameItem[],
@@ -204,79 +294,7 @@ function drawFrames(
       pages.push(page);
     }
 
-    // Credits (title block text) for this frame. credit-words 可含换行 → 逐行排版。
-    const pg = page; // non-null here (ensured above); capture for closure
-
-    // Sibelius MusicXML 导出 bug：credit-words 的 default-y 被整体压到页面底部
-    //（绝对原点错误，但各 credit 间的相对间距仍然正确）。
-    // 检测：最高的 credit（default-y 最大者）按 spec 解释（pageHeight - y）后仍落在
-    // 页面下半 → 判定为该 bug，以页首为锚重排整个标题块，保留相对间距与水平对齐。
-    // 正常文件标题 default-y≈页高（落在上半），不触发，绝对定位照旧。
-    const creditMaxY = data.credits.length
-      ? Math.max(...data.credits.map((c) => c.y))
-      : 0;
-    const reanchorTop = data.credits.length > 0 && pageHeight - creditMaxY > pageHeight / 2;
-    // 重排时把最高 credit（标题）的基线放在上边距下方一个标题字高处。
-    const titleCredit = data.credits.find((c) => c.y === creditMaxY);
-    const titleFontSz = titleCredit && titleCredit.fontSize > 0
-      ? titleCredit.fontSize / score.scaling
-      : 20;
-
-    const maxCreditSize = Math.max(0, ...data.credits.map((c) => c.fontSize));
-    /** 本页画出的页眉各行：落笔点与墨迹顶（排完整块不得高过上边距） */
-    const headLines: { tf: TextFrame; x: number; y: number; inkTop: number }[] = [];
-    for (const cr of data.credits) {
-      // 页眉字体（设置面板「页眉」一组 / 谱里 credit 自带的，`style/header.ts`）：给了的盖过 credit 自己的
-      const justify = cr.justify === LCR.Right ? "right" : cr.justify === LCR.Center ? "center" : "left";
-      const role = headerRoleOfCredit(cr.type ?? undefined, justify, maxCreditSize > 0 && cr.fontSize === maxCreditSize);
-      const hf = role ? score.options.headerFonts[role] : undefined;
-      const fntSz = hf?.size ? hf.size / score.scaling : cr.fontSize > 0 ? cr.fontSize / score.scaling : 20;
-      const base = new Font(cr.family ?? (cr.fontSize > 0 ? score.defaults.lyricFont.family : "PingFang SC"), fntSz, cr.bold ?? false);
-      const font = headerRoleFont(hf, fntSz, base);
-      const anchorX = cr.x > 0 ? cr.x : pageWidthTenths / 2;
-      // MusicXML y from page bottom → SVG top-down；Sibelius bug 时改以页首为锚。
-      const lineH = fntSz * 1.2;
-      const lines = cr.text.split(/\r?\n/);
-      // `valign`：`default-y` 是字顶 / 中线 / 底时换成首行基线（缺省就是基线）。陶我成器的标题是 top，当基线用就伸出上边距
-      const first = font.charBound(lines[0] ?? "");
-      const last = font.charBound(lines[lines.length - 1] ?? "");
-      const vshift = cr.valign === "top" ? -first.top
-        : cr.valign === "middle" ? -(first.top + last.bottom + (lines.length - 1) * lineH) / 2
-        : cr.valign === "bottom" ? -last.bottom - (lines.length - 1) * lineH
-        : 0;
-      const baseY = (reanchorTop
-        ? topMargin + titleFontSz + (creditMaxY - cr.y)
-        : pageHeight - cr.y) + vshift;
-      // 右对齐的多行 credit：Sibelius 把整块按最宽行右对齐，块内各行左缘对齐
-      //（参考 PDF 里"词曲…/翻译…"两行 xMin 相同、右缘不同），而非逐行各自右对齐。
-      const blockW = cr.justify === LCR.Right
-        ? Math.max(...lines.map((l) => font.measureText(l)))
-        : 0;
-      lines.forEach((line, li) => {
-        const tf = new TextFrame();
-        tf.text = line;
-        tf.font = font;
-        tf.ident = { kind: "header" }; // 可视化编辑按所画的字认页眉
-        let x = anchorX;
-        const w = font.measureText(line);
-        if (cr.justify === LCR.Center) x -= w / 2;
-        else if (cr.justify === LCR.Right) x -= blockW;
-        const m = new Matrix33();
-        m.setAffine([1, 0, 0, 1, x, baseY + li * lineH]);
-        tf.matrix = m;
-        pg.add(tf);
-        headLines.push({ tf, x, y: baseY + li * lineH, inkTop: font.charBound(line).top });
-      });
-    }
-    // 页眉整块不得高过上边距：有一行伸出去就整块往下挪
-    const over = topMargin - Math.min(Infinity, ...headLines.map((h) => h.y + h.inkTop));
-    if (over > 0) {
-      for (const h of headLines) {
-        const m = new Matrix33();
-        m.setAffine([1, 0, 0, 1, h.x, h.y + over]);
-        h.tf.matrix = m;
-      }
-    }
+    for (const h of headerLines(score, data.credits, topMargin, pageHeight, pageWidthTenths)) page.add(h.tf);
 
     // System group positioned at (leftMargin+sys.leftMargin, topMargin+ypos+topY+musicYOffset)
     const sysGrp = drawSystem(page, sys);
@@ -300,7 +318,7 @@ export interface StaffPages {
 /** 一份已读入的 `StaffLayout` 排成页（`showJianpuLayer` = 混排叠简谱层）。长图会改写 `score.defaults.pageHeight`。 */
 export function layoutStaffPages(score: StaffLayout, showJianpuLayer: boolean, jianpuPart = 0): StaffPages {
   if (showJianpuLayer) formatMixedScore(score, jianpuPart);
-  else if (score.autoLayout) placeAboveStaff(score, false);
+  else placeAboveStaff(score, false);
 
   // M5: flow layout
   const items = getFrames(score);
@@ -310,9 +328,12 @@ export function layoutStaffPages(score: StaffLayout, showJianpuLayer: boolean, j
     // 自动铺排的标题块由 autoLayoutHeader 从上往下堆，词曲行多了会高过缺省的 TITLE_OFFSET：按最低那行让开
     const d = score.defaults;
     const lowest = Math.min(...items[0].credits.map((c) => c.y));
-    const offset = score.autoLayout && items[0].credits.length
+    let offset = score.autoLayout && items[0].credits.length
       ? Math.max(TITLE_OFFSET, d.pageHeight - lowest - d.topMargin + TITLE_GAP)
       : TITLE_OFFSET;
+    // 带坐标的页眉也不得压到首行（和弦、高音）：页眉墨迹底下留一道空（005 的作曲行压在首行和弦上）
+    const heads = headerLines(score, items[0].credits, d.topMargin, d.pageHeight ?? PAGE_HEIGHT_FALLBACK, d.pageWidth ?? 1200);
+    if (heads.length) offset = Math.max(offset, Math.max(...heads.map((h) => h.y + h.inkBottom)) - d.topMargin + HEADER_GAP);
     items[0].musicYOffset = offset;
     items[0].height += offset;
   }

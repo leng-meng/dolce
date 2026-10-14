@@ -331,6 +331,10 @@ export function playOrderFromSpec(repeat: { readonly items: readonly RepeatSpecI
 
 /** 歌词段号的种数（原 `Part.getVerseCount`）。 */
 function verseCount(part: PlayPart, beg: number, end: number): number {
+  return verseNumbers(part, beg, end).size;
+}
+
+function verseNumbers(part: PlayPart, beg: number, end: number): Set<number> {
   const num = new Set<number>();
   part.measures.forEach((m, idx) => {
     if (idx < beg || idx >= end) return;
@@ -339,7 +343,7 @@ function verseCount(part: PlayPart, beg: number, end: number): number {
       for (const n of ent.notes) for (const l of n.lyrics) num.add(l.number);
     }
   });
-  return num.size;
+  return num;
 }
 
 /** 「一房只有第 1 段 + 歌词段数多于房数」的赞美诗谱（如《我心等候祢》）补救展开。
@@ -466,6 +470,13 @@ class RepeatProcessor {
       if (this.inJump && v.kind === PlaySpecKind.ToCoda) tocoda = v.value as string;
       if (this.inJump && v.kind === PlaySpecKind.Fine) res = true;
     }
+    // 同一房里 D.S. 与 D.C. 都写了（064《啊！圣善夜》一二房 `:|` 上两个都有）：各管一遍——下一遍的词在 segno 之前
+    // 就有就回曲首（D.C.），只从 segno 起才有就回 segno（D.S.，第 3 段词只从 segno 写起）
+    if (seg !== null && dacapo) {
+      const t = this.jumps.segno.get(seg) ?? new TimePosition(parseInt(seg, 10) - 1, new Fraction(0));
+      if (this.getPassCountByLrc(0, t.mid) > m.pass) seg = null;
+      else dacapo = false;
+    }
     let newItem = false;
     if (this.result.length === 0) {
       newItem = true;
@@ -550,10 +561,18 @@ class RepeatProcessor {
     if (this.inJump) return;
     this.endingActive = false;
     this.inEnding = false;
-    if (resetPass) {
+    // 收房之后的小节只写了当前这一遍的词、没有第 1 段（064 三房之后的结尾只写第 3 段）：遍号不归 1
+    if (resetPass && !this.tailKeepsPass(m)) {
       m.pass = 1;
       this.passCount = -1;
     }
+  }
+
+  private tailKeepsPass(m: TimePosition): boolean {
+    if (m.pass <= 1) return false;
+    const nums = new Set<number>();
+    for (const p of this.parts) for (const n of verseNumbers(p, m.mid + 1, p.measures.length)) nums.add(n);
+    return !nums.has(1) && nums.has(m.pass);
   }
 
   private onForward(mid: number, pass: number): void {
