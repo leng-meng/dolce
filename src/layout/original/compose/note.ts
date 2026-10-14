@@ -37,8 +37,9 @@ export function paintBand(c: OriginalCtx, g: Group, el: MusicElement, kinds?: Re
       paintChord(c, g, t, x, y);
       continue;
     }
-    const font = t.face === "music" ? new Font("Bravura", t.size) : new Font(m.style.font.text.family, t.size);
-    const tf = text(t.text, x, y, font, c.ink);
+    const family = t.face === "music" ? "Bravura" : t.face === "lyric" ? m.style.font.lyric.family : m.style.font.text.family;
+    const tf = text(t.text, x, y, new Font(family, t.size), c.ink);
+    if (t.xs) tf.charXs = t.xs; // 段落词按标点挤压后的笔位画（量宽同一份，`sectionWordRun`）
     if (t.kind === "section-word") {
       tf.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
       tf.classes.add("section-word"); // 成书 line-check 认段落词（`pdflayout/browser.ts::CLS_TAGS`）

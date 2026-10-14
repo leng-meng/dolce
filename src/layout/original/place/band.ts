@@ -14,6 +14,7 @@ import { stackBottom, stackTop as stackTopOf } from "../../../engrave/stack";
 import { barlineSpan, bracketLineWidth, jianpuSlurStyle, type JianpuGrid } from "../metrics";
 import type { InkMeasurer, PlacedItem, PlacedLayer, PlacedMark, PlacedText } from "./model";
 import { articStack, entryTop, noteBeams, stackTop } from "./vertical";
+import { type ChordSpan, sectionWordOf, sectionWordSlot } from "./sectionword";
 import { barlineBox } from "./spacing";
 
 /** 一个声部（或并排块上行）的上方带排完的结果。 */
@@ -126,8 +127,9 @@ export function placeBand(
   }
 
   // ---- 层 0：奏法记号字形（延长记号等）。点状标记让弧，不是弧让它：`rank` 最大、层内最后定；不为连音括线让 ----
-  // ---- 层 1：和弦、注释（注释 `rank` 在后，压到和弦就让）；层 2：转调标签 ----
-  for (const it of items) {
+  // ---- 层 1：和弦、段落词（音符注释，和弦横向让位之后才摆，见下）；层 2：转调标签 ----
+  const words: Array<{ it: PlacedItem; i: number; base: number }> = [];
+  for (const [itemIndex, it] of items.entries()) {
     const el = it.element;
     const dy = it.dy ?? 0;
     if (el.kind === "note") {
@@ -156,31 +158,31 @@ export function placeBand(
         // 第 2 层：与和弦同在时转调标记在外（上）、和弦在内贴音（用户定，2026-10-14：全局信息在外、局部信息在内）
         boxes.push({ key, x0: key.ink.left, x1: key.ink.right, top: key.ink.top, bottom: key.ink.bottom, layer: 2, kind: "key", ...lower(it) });
       }
-      if (!el.chord && el.annotation) {
-        // 注释：子计划 4.3 改按段落词排；这里先与和弦同一行，压到和弦就让到它之上（同层异类，`rank` 在和弦之后）
-        const r = ink.text(el.annotation, "term");
-        let x = it.x - r.advance / 2;
-        let layer = 1;
-        let kind = "section-word";
+      if (el.annotation) {
         if (key) {
           // 同一个音上还有转调标记：排在它右边同一行（用户定：避开转调，要么在右、要么在上）；
           // 本小节里放不下（越过下一条小节线或出版心）就摞到它之上
+          const r = ink.sectionWord(el.annotation);
           const bar = items.find((o) => o.element.kind === "barline" && o.x > it.x);
           const at = key.ink.right + m.style.size.chord * 0.4 - r.ink.left;
-          if (at + r.ink.right <= Math.min(bar ? bar.x - nh * 0.3 : Infinity, width || Infinity)) {
-            x = at;
-            layer = 2;
-            kind = "key"; // 与转调标记同一行，同类不互避
-          } else layer = 2.2;
-        }
-        const t: PlacedText = { kind: "section-word", el, text: el.annotation, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
-        texts.push(t);
-        boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer, rank: 1, kind, ...lower(it) });
+          const fits = at + r.ink.right <= Math.min(bar ? bar.x - nh * 0.3 : Infinity, width || Infinity);
+          const x = fits ? at : it.x - nh * 0.35;
+          const t = sectionWordText(el, el.annotation, x, base, r);
+          texts.push(t);
+          // 与转调标记同一行时同类（`key`）不互避
+          boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: fits ? 2 : 2.2, rank: 1, kind: fits ? "key" : "section-word", ...lower(it) });
+        } else words.push({ it, i: itemIndex, base });
       }
-    } else if (el.kind === "sustain" && el.chord) {
+    } else if (el.kind === "sustain") {
       // 长音里换的和弦印在增时线上方：增时线比数字矮，基准取数字墨迹顶（同 `addHarmony` 的 min）
-      pushChord(el, it.x, -nh / 2 - m.style.vertical.chordGap + dy, el.chord, dy);
+      const base = -nh / 2 - m.style.vertical.chordGap + dy;
+      if (el.chord) pushChord(el, it.x, base, el.chord, dy);
+      if (el.annotation) words.push({ it, i: itemIndex, base });
     }
+  }
+
+  function sectionWordText(el: MusicElement, text: string, x: number, base: number, r: ReturnType<InkMeasurer["sectionWord"]>): PlacedText {
+    return { kind: "section-word", el, text, face: "lyric", size: m.style.size.sectionWord, x, y: base, ink: r.ink.offset(x, base), xs: r.xs };
   }
 
   function pushChord(el: MusicElement, cx: number, base: number, chord: string, dy: number): void {
@@ -194,6 +196,31 @@ export function placeBand(
   }
 
   spreadChords(items, texts, boxes, m, width);
+
+  // ---- 段落词（用户定：音符注释一律按段落词排）：歌词字、段落词字号，落点搬 `Line.addSectionWords`——
+  // 和弦那一行、本小节里横向找不撞和弦的空档（判据 engrave/sectionword.ts，与横向撑开 spacing.ts 同一份换算），
+  // 找不到才抬到和弦之上（同层 `rank` 在和弦之后，堆叠自然摞上去）；没抬的与和弦同一条基线（进下面的同基线那一圈），
+  // 被弧、连音压住时单独上提（层 0 在下，搬 `liftSectionWordsUnderSlurs`）。行首那一条横向不够由 spacing.ts 先匀过，仍不够才抬
+  /** 与和弦同基线的段落词，及各自的起始基线（同基线那一圈只往上取齐，不压回自己那一摞的让位之下） */
+  const laneWords = new Map<PlacedText, number>();
+  if (words.length > 0 && m.style.size.sectionWord > 0) {
+    const itemOf = new Map(items.map((it) => [it.element as MusicElement, it]));
+    const spans: ChordSpan[] = [];
+    for (const t of texts) {
+      const at = t.kind === "chord" ? itemOf.get(t.el) : undefined;
+      if (at) spans.push({ x0: t.ink.left, x1: t.ink.right, at });
+    }
+    for (const w of words) {
+      const text = sectionWordOf(w.it.element)!;
+      const r = ink.sectionWord(text);
+      const row = spans.filter((c) => (c.at.dy ?? 0) === (w.it.dy ?? 0));
+      const slot = sectionWordSlot(items, w.i, (it) => it.x, row, r.advance, m, width || Infinity);
+      const t = sectionWordText(w.it.element, text, slot.x, w.base, r);
+      texts.push(t);
+      boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 1, rank: 1, kind: "section-word", ...lower(w.it) });
+      if (!slot.lifted && w.it.dy === undefined) laneWords.set(t, w.base);
+    }
+  }
 
   // ---- 层 1.5：松叶（用户定：松叶在和弦之上——起始落点贴音，跨度里有和弦、注释撞上才抬到它们之上） ----
   const hairpinGap = Math.max(gap, nh * 0.3) + m.style.stroke.hairpin / 2;
@@ -223,8 +250,8 @@ export function placeBand(
   if (laneChords.length > 0) {
     let lane = Math.min(...laneChords.map((t) => t.y));
     for (let iter = 0; iter < 6; iter++) {
-      for (const t of laneChords) {
-        const d = lane - t.y;
+      for (const t of [...laneChords, ...laneWords.keys()]) {
+        const d = Math.min(lane, laneWords.get(t) ?? Infinity) - t.y;
         if (d === 0) continue;
         t.y += d;
         t.ink = t.ink.offset(0, d);

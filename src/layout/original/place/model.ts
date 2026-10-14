@@ -105,14 +105,16 @@ export interface PlacedText {
   kind: "chord" | "section-word" | "key-label" | "direction" | "artic";
   el: MusicElement;
   text: string;
-  /** 字体：乐谱字体（Bravura）或文字字体；字号 pt */
-  face: "music" | "text";
+  /** 字体：乐谱字体（Bravura）、文字字体或歌词字体（段落词）；字号 pt */
+  face: "music" | "text" | "lyric";
   size: number;
   /** 落笔点：行坐标 x、相对声部基线的 y */
   x: number;
   y: number;
   /** 墨迹盒（同一坐标系）：堆叠与让位都按它 */
   ink: Rect;
+  /** 逐字笔位（相对 `x`，标点挤压后的，`engrave/sectionword.ts::sectionWordRun`）：段落词才有 */
+  xs?: number[] | null;
 }
 
 export interface PlacedGroup {
@@ -176,6 +178,8 @@ export interface InkMeasurer {
   chord(text: string): { advance: number; ink: Rect | null };
   /** 角色字：字面宽与墨迹盒（相对落笔原点、基线 y = 0） */
   text(str: string, role: InkTextRole): { advance: number; ink: Rect };
+  /** 段落词（歌词字、段落词字号，标点挤压同 `sectionWordRun`）：量宽、逐字笔位与墨迹盒（相对落笔原点、基线 y = 0） */
+  sectionWord(str: string): { advance: number; xs: number[] | null; ink: Rect };
   /** SMuFL 字形的墨迹盒（相对落笔原点、基线 y = 0）：按字形量，不用 4 em 的字体盒 */
   smufl(glyph: string, size: number): Rect;
 }

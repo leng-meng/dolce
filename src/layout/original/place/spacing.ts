@@ -15,6 +15,7 @@ import { BarlineGlyph } from "../../../engrave/barline";
 import { timeSigWidth } from "../../../engrave/timesig";
 import { puBarlineSpec } from "../barspec";
 import type { InkMeasurer, PlacedItem } from "./model";
+import { type ChordSpan, lineStartIndex, sectionWordOf, sectionWordSlot } from "./sectionword";
 
 /** 一列：同一拍位（或同一条小节线）上各声部的符号。 */
 interface Column {
@@ -269,16 +270,27 @@ export function placeColumns(
   if (cols.length === 0) return 0;
   const { X, lyricRight } = packColumns(cols, lines.length, m, ink);
   // 行右缘：从末列往回，到最后一个带歌词的列为止，取占位与歌词右缘里最靠右的（同 `Line.adjust`）
-  let right = 0;
-  for (let i = cols.length - 1; i >= 0; i--) {
-    right = Math.max(right, X[i]! + cols[i]!.right, lyricRight[i]!);
-    if (lyricRight[i]! > -Infinity) break;
-  }
+  const rightOf = (): number => {
+    let r = 0;
+    for (let i = cols.length - 1; i >= 0; i--) {
+      r = Math.max(r, X[i]! + cols[i]!.right, lyricRight[i]!);
+      if (lyricRight[i]! > -Infinity) break;
+    }
+    return r;
+  };
+  // 往空档里加的总量最多是自然宽的 `maxHorizontalScale` 倍
+  const extraOf = (r: number): { extra: number; capped: boolean } => {
+    const cap = m.style.spacing.maxHorizontalScale * r;
+    return width - r > cap ? { extra: cap, capped: true } : { extra: width - r, capped: false };
+  };
+  const words = new SectionWordRoom(lines, cols, m, ink, width);
+  words.spread(X, lyricRight, rightOf, (xs) => {
+    const r = rightOf();
+    if (width > r) justify(cols, xs, extraOf(r).extra);
+  });
+  const right = rightOf();
   if (width > right) {
-    let extra = width - right;
-    const cap = m.style.spacing.maxHorizontalScale * right;
-    const capped = extra > cap;
-    if (capped) extra = cap;
+    const { extra, capped } = extraOf(right);
     justify(cols, X, extra);
     // 末一条小节线贴到版心右缘（`Line.adjustLastBarline`）：离前一个音最多三个字号
     const n = cols.length;
@@ -290,6 +302,7 @@ export function placeColumns(
       if (space > 0) X[n - 1] = X[n - 1]! + Math.max(0, Math.min(space, m.style.size.note * 3 - dx));
     }
   }
+  words.nudge(X);
   cols.forEach((c, i) => {
     for (const { it } of c.members) {
       it.x = X[i]!;
@@ -297,6 +310,100 @@ export function placeColumns(
     }
   });
   return right;
+}
+
+/**
+ * 段落词要的横向地方（搬 `Line.spreadForSectionWords` / `nudgeForSectionWords`）。落点判据与真正摆的 band.ts 同一份
+ * （`sectionword.ts::sectionWordSlot`），这里只问「要撑多少才不用抬」：
+ *   - 行中那几条（justify 前）：先问 justify 之后放不放得下，放得下就不撑（撑出来的空档 justify 收不回去）；
+ *     放不下就把本小节撑开——锚点之后、下一条小节线之前的各列按份右移，小节线及其后整体右移，按判据二分求最小撑开量；
+ *     撑完整行出版心就不撑，维持抬到和弦之上。
+ *   - 行首那一条（justify 后）：差的那点从锚点之后的各列里线性衰减地匀出来（行末不动，行长不变）。
+ * 和弦按各自锚点居中、没做横向让位（`spreadChords` 在带里才跑），同简谱引擎的预演。
+ */
+class SectionWordRoom {
+  private readonly colOf = new Map<PlacedItem, number>();
+  private readonly words: Array<{ items: PlacedItem[]; i: number; width: number; start: boolean }> = [];
+
+  constructor(
+    lines: ReadonlyArray<{ items: PlacedItem[] }>,
+    private readonly cols: readonly Column[],
+    private readonly m: JianpuGrid,
+    private readonly ink: InkMeasurer,
+    private readonly width: number,
+  ) {
+    if (m.style.size.sectionWord <= 0) return;
+    cols.forEach((c, ci) => { for (const { it } of c.members) this.colOf.set(it, ci); });
+    for (const l of lines) {
+      const start = lineStartIndex(l.items);
+      l.items.forEach((it, i) => {
+        const w = sectionWordOf(it.element);
+        if (w) this.words.push({ items: l.items, i, width: ink.sectionWord(w).advance, start: i === start });
+      });
+    }
+  }
+
+  private slot(w: { items: PlacedItem[]; i: number; width: number }, X: readonly number[]) {
+    const xOf = (it: PlacedItem): number => X[this.colOf.get(it)!]!;
+    const chords: ChordSpan[] = [];
+    for (const it of w.items) {
+      const el = it.element;
+      const text = el.kind === "note" || el.kind === "sustain" ? el.chord : undefined;
+      if (!text) continue;
+      const r = this.ink.chord(text);
+      if (!r.ink) continue;
+      const x = xOf(it) - r.advance / 2;
+      chords.push({ x0: x + r.ink.left, x1: x + r.ink.right, at: it });
+    }
+    return sectionWordSlot(w.items, w.i, xOf, chords, w.width, this.m, this.width);
+  }
+
+  spread(X: number[], lyricRight: number[], rightOf: () => number, justified: (xs: number[]) => void): void {
+    const size = this.m.style.size.sectionWord;
+    for (const w of this.words) {
+      if (w.start) continue;
+      const probe = [...X];
+      justified(probe);
+      if (!this.slot(w, probe).lifted) continue;
+      const now = this.slot(w, X);
+      if (!now.lifted) continue;
+      const ca = this.colOf.get(w.items[w.i]!)!;
+      let cb = ca + 1;
+      while (cb < this.cols.length && !this.cols[cb]!.bar) cb++;
+      const steps = cb - ca;
+      const frac = (k: number): number => (k <= ca ? 0 : k >= cb ? 1 : (k - ca) / steps);
+      const shifted = (s: number): number[] => X.map((x, k) => x + s * frac(k));
+      // 上界：末尾那个空档只分到 1/steps，shortfall × steps 一定够；撑到上界仍让不开（左右都是密和弦）就别白撑
+      let hi = now.shortfall * steps + size;
+      if (this.slot(w, shifted(hi)).lifted) continue;
+      let lo = 0;
+      while (hi - lo > 0.25) {
+        const mid = (lo + hi) / 2;
+        if (this.slot(w, shifted(mid)).lifted) lo = mid;
+        else hi = mid;
+      }
+      // 撑完整行出版心就不撑（120《耶稣是我亲爱救主》曾整行越出右缘 57pt），维持抬起
+      if (rightOf() + hi > this.width) continue;
+      X.forEach((x, k) => {
+        const d = hi * frac(k);
+        X[k] = x + d;
+        if (lyricRight[k]! > -Infinity) lyricRight[k] = lyricRight[k]! + d;
+      });
+    }
+  }
+
+  nudge(X: number[]): void {
+    const n = this.cols.length;
+    for (const w of this.words) {
+      if (!w.start) continue;
+      const slot = this.slot(w, X);
+      if (!slot.lifted || slot.shortfall <= 0) continue;
+      const ca = this.colOf.get(w.items[w.i]!)!;
+      const denom = n - 2 - ca;
+      if (denom <= 0) continue;
+      for (let k = ca + 1; k < n; k++) X[k] = X[k]! + (slot.shortfall * (n - 1 - k)) / denom;
+    }
+  }
 }
 
 /**

@@ -1,5 +1,5 @@
 // 一首（及一份文档）的定位：逐组排声部、组间让位、分页，长图把各页接成一张。
-import type { Meter, PuSong } from "../../../pu/ast";
+import type { Meter, MusicElement, NoteElement, PuSong } from "../../../pu/ast";
 import { contentWidth, type JianpuGrid } from "../metrics";
 import { paginate, type SystemBlock } from "../../../jianpu/vertical";
 import type { InkMeasurer, PlacedGroup, PlacedPage, PlacedScore, PlacedVoice } from "./model";
@@ -70,6 +70,7 @@ export function layoutSong(
   // 行占满版心：行首最左的内容（数字落笔原点、升降号、歌词左缘）贴左缘，两端对齐后行末的占位右缘
   //（末个音符的字面右缘、或末条小节线）贴右缘，同简谱引擎
   const width = contentWidth(m);
+  moveTrailingSectionWords(song);
 
   const bottomLimit = m.page.height - m.page.margin.bottom;
   // 拍号一路带过来：头部 `1=D4/4 3/4 5/4` 这类混合拍只有首个是起头拍号，其余由曲中
@@ -349,5 +350,30 @@ function shiftGroup(g: PlacedGroup, dy: number): void {
   for (const v of g.voices) {
     v.y += dy;
     for (let i = 0; i < v.lyricY.length; i++) v.lyricY[i]! += dy;
+  }
+}
+
+/**
+ * 段落词挂在**行末那个音符**上时，它标的其实是下一行的起句（「（副歌）」印在主歌最后一行的行尾没有意义，
+ * 副歌是从下一行开始唱的）——挪到下一行（同一声部）行首那个音符上，那里已有段落词就不挪（同简谱引擎 `Line.layout` 那一段）。
+ * 只改行视图（`docView` 每次排版现做的那份），不改 ScoreDoc。
+ */
+function moveTrailingSectionWords(song: PuSong): void {
+  const groups = song.pages.flatMap((p) => p.groups);
+  const notes = (els: readonly MusicElement[]) => els.filter((e): e is NoteElement => e.kind === "note" && !e.placeholder);
+  for (let gi = 0; gi + 1 < groups.length; gi++) {
+    groups[gi]!.voices.forEach((voice, vi) => {
+      const next = groups[gi + 1]!.voices[vi];
+      if (!next) return;
+      const ns = notes(voice.elements);
+      const last = ns[ns.length - 1];
+      const first = notes(next.elements)[0];
+      if (!last?.annotation || !first || first.annotation !== undefined) return;
+      // 原文位置跟着走：可视化编辑点这个字改的仍是源里那一处
+      first.annotation = last.annotation;
+      if (last.annotationSource) first.annotationSource = last.annotationSource;
+      delete last.annotation;
+      delete last.annotationSource;
+    });
   }
 }

@@ -17,7 +17,8 @@ import { hairpinPath } from "../engrave/hairpin";
 import { latinWordBreak } from "../engrave/syllable";
 import { beatGroupIndex, beatGroupSize, pickupOffset } from "../engrave/beatgroup";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, arcRise, jpArcY, type SlurStyle } from "../engrave/arc";
-import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, beamLineOf, EntryItemInfo, entryBounds, normalizeEntryX, placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "./entry";
+import { Entry, KeySig, TimeSig, NoteEntry, Barline, LineBreak, beamLineOf, EntryItemInfo, entryBounds, normalizeEntryX } from "./entry";
+import { placeSectionWord, sectionWordHangLeft, sectionWordRun, type SectionWordSlot } from "../engrave/sectionword";
 import { LayoutOptions } from "./options";
 
 /** LayoutOptions → SlurStyle。谱面这一路的弧全由它配参数，别在调用点各配各的。 */

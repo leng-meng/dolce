@@ -16,6 +16,8 @@ import { applyDocOptions, gridOf, type GridPage, type JianpuGrid } from "../metr
 import { Font } from "../../font";
 import { Group } from "../../pageitem";
 import { syllableRun } from "../../../engrave/syllable";
+import { sectionWordRun } from "../../../engrave/sectionword";
+import { Rect } from "../../../common/geom";
 import { chordTextSegs, harmonyInk, harmonyWidth } from "../../../engrave/chord";
 import type { Region } from "../../../style/ss";
 import type { JianpuStyle } from "../../../engrave/jianpustyle";
@@ -118,6 +120,12 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
       return { advance: harmonyWidth(segs, chordWord, chordMusic), ink: harmonyInk(segs, chordWord, chordMusic) };
     },
     text: (str, role) => ({ advance: roleFont[role].measureText(str), ink: roleFont[role].charBound(str) }),
+    sectionWord(str) {
+      const font = roleFont["section-word"];
+      const run = sectionWordRun(font, str, m.style.look.punctCompress);
+      const b = font.charBound(str);
+      return { advance: run.width, xs: run.xs, ink: new Rect(0, b.top, run.width, b.bottom) };
+    },
     smufl: (glyph, size) => new Font("Bravura", size).charBound(glyph),
   };
   // **源里的行放不下就整首重新断行**（用户定：原样档按排得下的位置断、中间不要短行）：断点写进文档克隆的换行位、

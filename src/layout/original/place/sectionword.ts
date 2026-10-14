@@ -1,0 +1,60 @@
+// 段落词（音符注释，「（副歌）」）的横向落点：判据是 `engrave/sectionword.ts::placeSectionWord`（与简谱引擎同一份），
+// 这里只把一行里的符号换算成它要的几何——横向撑开（spacing.ts，justify 前预演、行首那条 justify 后匀）
+// 与真正摆（band.ts）用同一个换算，两边不会错配。
+import type { MusicElement } from "../../../pu/ast";
+import { placeSectionWord, sectionWordHangLeft, type SectionWordSlot } from "../../../engrave/sectionword";
+import type { JianpuGrid } from "../metrics";
+import type { PlacedItem } from "./model";
+
+/** 挂得住段落词的符号（音符、增时线）上的那条注释 */
+export function sectionWordOf(el: MusicElement): string | undefined {
+  return el.kind === "note" || el.kind === "sustain" ? el.annotation : undefined;
+}
+
+/** 一行里第一个音符/增时线：行首那一条段落词不往右让、不撑开，justify 之后从行内匀（`nudgeForSectionWords`） */
+export function lineStartIndex(items: readonly PlacedItem[]): number {
+  return items.findIndex((it) => it.element.kind === "note" || it.element.kind === "sustain");
+}
+
+/** 和弦在行里的横向范围（按墨迹） */
+export interface ChordSpan {
+  x0: number;
+  x1: number;
+  /** 挂在哪个符号上 */
+  at: PlacedItem;
+}
+
+/**
+ * 第 `i` 个符号上那条段落词落在哪儿。`xOf` 给符号的锚点 x（数字墨迹中心）——撑开预演时是试算的列坐标，真正摆时是定好的 `it.x`。
+ * 锚点取数字墨迹左缘（同简谱引擎 `anchorX`），本小节界取前后两条小节线；和弦都当作在同一条基线上（用户定：同一行和弦同基线）。
+ */
+export function sectionWordSlot(
+  items: readonly PlacedItem[],
+  i: number,
+  xOf: (it: PlacedItem) => number,
+  chords: readonly ChordSpan[],
+  wordWidth: number,
+  m: JianpuGrid,
+  lineRight: number,
+): SectionWordSlot & { anchorX: number } {
+  const it = items[i]!;
+  const anchorX = xOf(it) - m.ink.noteHeight * 0.35;
+  const bars = items.filter((o) => o.element.kind === "barline").map(xOf).sort((a, b) => a - b);
+  const barLeftAt = [...bars].reverse().find((bx) => bx <= anchorX);
+  let own: number | undefined;
+  for (const c of chords) if (c.at === it) own = Math.max(own ?? -Infinity, c.x1);
+  const slot = placeSectionWord({
+    anchorX,
+    width: wordWidth,
+    size: m.style.size.sectionWord,
+    baseY: 0,
+    chords: chords.map((c) => ({ x0: c.x0, x1: c.x1, y: 0 })),
+    barLeft: barLeftAt ?? 0,
+    barRight: bars.find((bx) => bx > anchorX) ?? lineRight,
+    hangLeft: sectionWordHangLeft(barLeftAt),
+    rightLimit: lineRight,
+    atLineStart: lineStartIndex(items) === i,
+    ...(own !== undefined ? { ownChordRight: own } : {}),
+  });
+  return { ...slot, anchorX };
+}
