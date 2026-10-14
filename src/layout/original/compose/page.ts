@@ -12,7 +12,8 @@ import { type OriginalCtx, text } from "./ctx";
 import { paintHeader } from "./header";
 import { paintBrace } from "./brace";
 import { paintLayer, paintMark } from "./marks";
-import { chordWidth, paintChord, paintNote } from "./note";
+import { paintBand, paintNote } from "./note";
+import { bandOf } from "../place/band";
 import { paintBarline } from "./barline";
 import { paintJoinBrace, paintLyricAnnotations, paintSyllables } from "./lyric";
 
@@ -194,31 +195,6 @@ export function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): 
   return root;
 }
 
-/** 本行里注释（不带和弦的音上的 `"副歌"`）横向压到别的音的和弦的那些音：它们的注释抬到上一行 */
-function liftedAnnotations(c: OriginalCtx, voice: PlacedVoice): Set<object> {
-  const out = new Set<object>();
-  const m = c.metrics;
-  const chords: Array<{ x0: number; x1: number; el: object }> = [];
-  for (const it of voice.items) {
-    const el = it.element;
-    if ((el.kind === "note" || el.kind === "sustain") && el.chord) {
-      const w = chordWidth(c, el.chord);
-      chords.push({ x0: it.x - w / 2, x1: it.x + w / 2, el });
-    }
-  }
-  if (chords.length === 0) return out;
-  const font = new Font(m.style.font.text.family, m.style.size.chord);
-  const pad = m.style.size.chord * 0.3;
-  for (const it of voice.items) {
-    const el = it.element;
-    if (el.kind !== "note" || el.chord || !el.annotation) continue;
-    const w = font.measureText(el.annotation);
-    const x0 = it.x - w / 2, x1 = it.x + w / 2;
-    if (chords.some((ch) => ch.el !== el && ch.x1 + pad > x0 && ch.x0 - pad < x1)) out.add(el);
-  }
-  return out;
-}
-
 export function paintVoice(c: OriginalCtx,
   root: Group,
   voice: PlacedVoice,
@@ -228,8 +204,8 @@ export function paintVoice(c: OriginalCtx,
   const m = c.metrics;
   const left = m.page.margin.left;
   const baseline = voice.y;
-  c.chordLane = voice.chordY;
-  c.liftedAnnotations = liftedAnnotations(c, voice);
+  c.band = bandOf(voice.band);
+  c.bandOrigin = { x: left, y: baseline };
   /** 各段歌词墨迹的最右缘，联合括号据此定位 */
   const lyricRight: number[] = [];
   /** 前面那个音符的元素 id：小节线没有自己的 id，借它认（口径同 `editor/sync.ts::addPartExtras`）。
@@ -257,7 +233,7 @@ export function paintVoice(c: OriginalCtx,
       const sid = c.doc?.idOf.get(it.element);
       if (sid !== undefined) line.ident = { kind: "sustain", id: sid };
       // 长音里换的和弦印在增时线上方（`- "hx:C/G"`），画法与音符上方那个一样
-      if (it.element.chord) paintChord(c, root, it.element.chord, x, base);
+      paintBand(c, root, it.element);
       paintSyllables(c, root, it, x, voice, lyricRight);
       continue;
     }

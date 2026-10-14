@@ -1,0 +1,480 @@
+// 谱行**上方那一带**的定位：弧、连音、奏法记号、和弦、注释、松叶、转调标签、力度/术语/跳转字、临时伴奏行、房号。
+// 判据整段从简谱引擎搬来（`layout.ts::Line.collectBandItems` / `stackAbove` / `placeDirections` / `addEnding`），
+// 堆叠走公共那一份（`engrave/upperband.ts::stackUpperBand`）：按实际墨迹盒一次排清，不再按固定槽位摆。
+// y 一律在这里定死（相对声部基线、行坐标 x），`compose/` 只照 `PlacedText` / `PlacedMark` 画。
+import type { BarlineElement, MusicElement } from "../../../pu/ast";
+import { BARLINE_MARKS, DYNAMICS, ORNAMENTS, TERMS } from "../../../pu/glyph";
+import { Point, Rect } from "../../../common/geom";
+import { Slur } from "../../pageitem";
+import { bandTop, stackUpperBand, type BandItem } from "../../../engrave/upperband";
+import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
+import { tupletDigits } from "../../../engrave/tuplet";
+import { accidentalRise, type AccidentalKind } from "../../../engrave/accidental";
+import { stackBottom, stackTop as stackTopOf } from "../../../engrave/stack";
+import { barlineSpan, jianpuSlurStyle, type JianpuGrid } from "../metrics";
+import type { InkMeasurer, PlacedItem, PlacedLayer, PlacedMark, PlacedText } from "./model";
+import { graceTop, noteBeams, stackTop } from "./vertical";
+import { barlineBox } from "./spacing";
+
+/** 一个声部（或并排块上行）的上方带排完的结果。 */
+export interface VoiceBand {
+  texts: PlacedText[];
+  /** 堆叠完的全部墨迹盒（已含抬升）：房号车道、头顶留空都读它 */
+  boxes: BandItem[];
+  /** 本行头顶最高的墨迹（相对基线，负为上）：音符那一摞、倚音、带里一切 */
+  top: number;
+  /** 字（和弦、注释、转调标签、力度/术语/跳转字）里最高的墨迹顶；没有字为 null（组间留空另加一个数字高，见 vertical.ts::groupHeadroom） */
+  textTop: number | null;
+}
+
+/** 带里算「字」的那几种（组间让位要多留一截，见 `VoiceBand.textTop`） */
+const TEXT_KINDS = new Set(["chord", "section-word", "key", "direction"]);
+
+/** 并排块下行（主旋律下移的那一段）上的东西不为上行让位：它本来就在上行底下 */
+const LOWER_ROW = ["split"] as const;
+
+/** 和弦字号（没设就按数字字号的 0.6，同简谱引擎 `directionWidth`） */
+function textSize(m: JianpuGrid): number {
+  return m.style.size.chord > 0 ? m.style.size.chord : m.style.size.note * 0.6;
+}
+
+/** 音符那一摞（数字、高八度点、临时记号、倚音）的墨迹顶，相对基线（不含 dy） */
+function entryTop(el: MusicElement, m: JianpuGrid): number {
+  let top = Math.min(-m.ink.noteHeight / 2, stackTop(el, m));
+  const g = graceTop(el, m);
+  if (g !== null) top = Math.min(top, g);
+  return top;
+}
+
+/** 弧（简谱弧，同页 slur 那一条月牙）的墨迹盒与「这一段 x 上多高」：照 `Line.collectBandItems` 的弧那一段 */
+function arcBox(mk: PlacedMark, m: JianpuGrid, y: number, gap?: { x0: number; x1: number }): { top: number; bottom: number; flat: boolean } {
+  const arc = new Slur();
+  const x1 = Math.max(mk.x1, mk.x0 + 6);
+  arc.init(new Point(mk.x0, y), new Point(x1, y), { ...jianpuSlurStyle(m, 0), ...(gap ? { gap } : {}) });
+  return { top: arc.y, bottom: arc.y + arc.height, flat: arc.flatHx > 0 };
+}
+
+/**
+ * 上方带：收集 → 堆叠 → 力度/跳转字 → 临时伴奏行 → 房号。`marks` 里弧与连音的 y 已由 `placeMarks` 定好，
+ * 这里只按堆叠结果整条抬；松叶、房号的 y 在这里定。`width` 是版心宽（字不出版心）。
+ */
+export function placeBand(
+  items: readonly PlacedItem[],
+  marks: PlacedMark[],
+  layers: PlacedLayer[],
+  m: JianpuGrid,
+  ink: InkMeasurer,
+  width: number,
+): VoiceBand {
+  const nh = m.ink.noteHeight;
+  const gap = m.style.vertical.slurGap;
+  const texts: PlacedText[] = [];
+  const boxes: BandItem[] = [];
+  const lower = (it: { dy?: number }): { skipKinds?: readonly string[] } => (it.dy !== undefined ? { skipKinds: LOWER_ROW } : {});
+
+  // ---- 层 0：并排块的上行（整块是一个障碍：跨过它的弧、房号要抬到它之上，旧 `voltaLift`） ----
+  for (const lay of layers) {
+    const sp = lay.split;
+    if (!sp || lay.items.length === 0) continue;
+    const inner = placeBand(lay.items, sp.marks, [], m, ink, width);
+    sp.band = inner.texts;
+    const xs = lay.items.map((it) => it.x);
+    boxes.push({
+      key: sp, x0: Math.min(...xs) - nh / 2, x1: Math.max(...xs) + nh / 2,
+      top: sp.dy + Math.min(inner.top, sp.braceTop - sp.dy), bottom: sp.dy + nh / 2,
+      layer: 0, rank: -1, kind: "split",
+    });
+  }
+
+  // ---- 层 0：弧、连音（`rank` = 跨度，短的留在下面） ----
+  for (const mk of marks) {
+    if (mk.y === undefined || (mk.mark.type !== "slur" && mk.mark.type !== "tuplet")) continue;
+    const dy = mk.dy ?? 0;
+    const x0 = mk.x0, x1 = Math.max(mk.x1, mk.x0 + 6);
+    if (mk.mark.type === "slur") {
+      const b = arcBox(mk, m, mk.y + dy);
+      // 弧在某一段里多高：按抛物线近似，端点贴音、中点最高；扁平长连音线整条按顶（同 `Line.collectBandItems`）
+      const at = (x: number): number => {
+        if (b.flat) return b.top;
+        const u = x1 > x0 ? Math.min(1, Math.max(0, (x - x0) / (x1 - x0))) : 0;
+        return b.bottom - 4 * (b.bottom - b.top) * u * (1 - u);
+      };
+      const topAt = (a: number, c: number): number => {
+        const lo = Math.max(a, x0), hi = Math.min(c, x1);
+        if (lo > hi) return b.bottom;
+        const mid = (x0 + x1) / 2;
+        return lo <= mid && mid <= hi ? b.top : Math.min(at(lo), at(hi));
+      };
+      boxes.push({ key: mk, x0, x1, top: b.top, bottom: b.bottom, layer: 0, rank: x1 - x0, kind: "slur", topAt, ...lower(mk) });
+      continue;
+    }
+    // 连音：括线（横线那一截只有线宽、数字那一小段高）或两段弧；画法同 compose/marks.ts 的 tuplet 分支
+    const n = Number(mk.mark.caption) || mk.mark.end - mk.mark.start + 1;
+    const num = ink.smufl(tupletDigits(n), m.style.size.note);
+    const halfW = num.width / 2;
+    const cx = (x0 + x1) / 2;
+    const halfGap = halfW + m.style.size.note * 0.15;
+    let lineTop: number;
+    let numCy: number;
+    if (m.style.look.tupletStyle === "bracket") {
+      const foot = m.style.vertical.bracketFoot > 0 ? m.style.vertical.bracketFoot * 0.55 : m.style.size.note * 0.25;
+      const lw = m.style.stroke.bracket > 0 ? m.style.stroke.bracket : 1;
+      const ly = mk.y + dy - foot;
+      lineTop = ly - lw / 2;
+      numCy = ly;
+    } else {
+      const b = arcBox(mk, m, mk.y + dy, { x0: cx - halfGap, x1: cx + halfGap });
+      lineTop = b.top;
+      numCy = b.top + m.style.stroke.slur / 4;
+    }
+    const numTop = numCy - num.height / 2;
+    const top = Math.min(lineTop, numTop);
+    const topAt = (a: number, c: number): number => (c > cx - halfW && a < cx + halfW ? top : lineTop);
+    boxes.push({ key: mk, x0, x1, top, bottom: mk.y + dy, layer: 0, rank: x1 - x0, kind: "tuplet", topAt, ...lower(mk) });
+  }
+
+  // ---- 层 0：奏法记号字形（延长记号等）。点状标记让弧，不是弧让它：`rank` 最大、层内最后定；不为连音括线让 ----
+  // ---- 层 1：转调标签、和弦、注释（同层异类按 `rank` 让：转调最先定、注释最后） ----
+  for (const it of items) {
+    const el = it.element;
+    const dy = it.dy ?? 0;
+    if (el.kind === "note") {
+      // 起始落点照 `NoteEntry.notationTop`：叠层顶（数字 + 高八度点）之上一道空，有临时记号再让它 1.6 道
+      const half = nh / 2;
+      let artBottom = stackTopOf(-half, Math.max(0, el.octave), m.ink.stack) - gap;
+      if (el.accidental !== undefined) {
+        artBottom = Math.min(artBottom, -half - accidentalRise(el.accidental as AccidentalKind, nh, m.style.look.accidentalScale) - gap * 1.6);
+      }
+      let top = entryTop(el, m);
+      for (const orn of el.ornaments) {
+        // 换气是挂在右上角的 V（compose/note.ts 贴着音符画），不进带
+        const g = orn.name === "hx" ? undefined : ORNAMENTS[orn.name];
+        if (!g) continue;
+        const fs = m.style.size.note * g.scale;
+        const r = ink.smufl(g.glyph, fs);
+        // 同一个音上几个记号往上摞（各自一道空）；`+` 抬高级别照旧按级预抬
+        const y = artBottom - r.bottom - orn.level * m.note.levelStep;
+        const x = it.x - (r.left + r.right) / 2;
+        const t: PlacedText = { kind: "artic", el, text: g.glyph, face: "music", size: fs, x, y: y + dy, ink: r.offset(x, y + dy) };
+        texts.push(t);
+        boxes.push({
+          key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom,
+          layer: 0, rank: Number.MAX_SAFE_INTEGER, kind: "artic", skipKinds: dy ? ["tuplet", ...LOWER_ROW] : ["tuplet"],
+        });
+        artBottom = y + r.top - m.ink.stack.gap;
+        top = Math.min(top, y + r.top);
+      }
+      // 和弦/注释/转调标签的起始基线：本音那一摞（含临时记号、倚音、奏法记号）的墨迹顶之上 `chordGap`（`NoteEntry.addHarmony`）
+      const base = top - m.style.vertical.chordGap + dy;
+      if (el.chord) pushChord(el, it.x, base, el.chord, dy);
+      else if (el.annotation) {
+        // 注释：子计划 4.3 改按段落词排；这里先与和弦同一行，压到和弦就让到它之上（同层异类，`rank` 在和弦之后）
+        const r = ink.text(el.annotation, "term");
+        const x = it.x - r.advance / 2;
+        const t: PlacedText = { kind: "section-word", el, text: el.annotation, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
+        texts.push(t);
+        boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 1, rank: 1, kind: "section-word", ...lower(it) });
+      }
+      if (el.keyLabel) {
+        // 左缘对齐数字左缘、往右写——居中的话行首那个会伸出左边距
+        const r = ink.text(el.keyLabel, "key-label");
+        const x = it.x - nh * 0.35;
+        const t: PlacedText = { kind: "key-label", el, text: el.keyLabel, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
+        texts.push(t);
+        // 与和弦同在一个音上时转调占贴音那一行、和弦让到它之上（用户定：转调优先）：同在第 1 层、`rank` 排在和弦之前
+        boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 1, rank: -1, kind: "key", ...lower(it) });
+      }
+    } else if (el.kind === "sustain" && el.chord) {
+      // 长音里换的和弦印在增时线上方：增时线比数字矮，基准取数字墨迹顶（同 `addHarmony` 的 min）
+      pushChord(el, it.x, -nh / 2 - m.style.vertical.chordGap + dy, el.chord, dy);
+    }
+  }
+
+  function pushChord(el: MusicElement, cx: number, base: number, chord: string, dy: number): void {
+    const r = ink.chord(chord);
+    if (!r.ink) return;
+    const x = cx - r.advance / 2;
+    const t: PlacedText = { kind: "chord", el, text: chord, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
+    texts.push(t);
+    // 被同一个下层对象压住的和弦整排取齐（`spread`）
+    boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 1, rank: 0, kind: "chord", spread: "chord", ...(dy ? { skipKinds: LOWER_ROW } : {}) });
+  }
+
+  // ---- 层 1.5：松叶（用户定：松叶在和弦之上——起始落点贴音，跨度里有和弦、注释撞上才抬到它们之上） ----
+  const hairpinGap = Math.max(gap, nh * 0.3) + m.style.stroke.hairpin / 2;
+  for (const mk of marks) {
+    if (mk.mark.type !== "crescendo" && mk.mark.type !== "decrescendo") continue;
+    let top = Infinity;
+    for (const it of items) {
+      if (it.element.kind === "barline" || it.x < mk.x0 - nh || it.x > mk.x1 + nh) continue;
+      top = Math.min(top, entryTop(it.element, m) + (it.dy ?? 0));
+    }
+    if (!Number.isFinite(top)) top = -nh / 2 + (mk.dy ?? 0);
+    // `y` 记松叶的**底边**（compose/marks.ts 照它画）
+    mk.y = top - hairpinGap - (mk.level - 1) * m.note.levelStep;
+    const x1 = Math.max(mk.x1, mk.x0 + 6);
+    boxes.push({
+      key: mk, x0: mk.x0, x1, top: mk.y - m.note.hairpinOpening - m.style.stroke.hairpin, bottom: mk.y,
+      layer: 1.5, rank: x1 - mk.x0, kind: "wedge", ...lower(mk),
+    });
+  }
+
+  // ---- 堆叠，dy 回填 ----
+  const lift = stackUpperBand(boxes, gap);
+  const textKeys = new Set<object>(texts);
+  const markKeys = new Set<object>(marks);
+  for (const b of boxes) {
+    const d = lift.get(b.key) ?? 0;
+    if (d === 0) continue;
+    b.top += d;
+    b.bottom += d;
+    if (textKeys.has(b.key)) {
+      const t = b.key as PlacedText;
+      t.y += d;
+      t.ink = t.ink.offset(0, d);
+    } else if (markKeys.has(b.key)) {
+      const mk = b.key as PlacedMark;
+      if (mk.y !== undefined) mk.y += d;
+    }
+    if (b.topAt) {
+      const f = b.topAt;
+      b.topAt = (a, c) => f(a, c) + d;
+    }
+  }
+
+  placeDirections(items, boxes, texts, m, ink, width);
+  placeCue(items, layers, boxes, m);
+  placeEndings(items, marks, boxes, m);
+  // 松叶、房号的 y 上面是按声部基线算的（已含下行的 dy）；compose 画记号时还要再加 `mk.dy`，这里扣回去
+  for (const mk of marks) {
+    if (mk.y !== undefined && mk.dy !== undefined && mk.mark.type !== "slur" && mk.mark.type !== "tuplet") mk.y -= mk.dy;
+  }
+
+  // ---- 头顶：音符那一摞、换气、伴奏括弧、带里一切 ----
+  let top = -nh / 2;
+  let textTop: number | null = null;
+  for (const it of items) {
+    const el = it.element;
+    const dy = it.dy ?? 0;
+    if (el.kind === "note" && !el.hidden) top = Math.min(top, entryTop(el, m) + dy);
+    if (el.kind === "note" || el.kind === "sustain" || el.kind === "barline") {
+      // 换气的 V（原版放在基线上方约一个墨迹高）、伴奏括弧（1.5 个墨迹高居中于基线）不进带
+      for (const orn of el.ornaments) {
+        if (orn.name === "hx") top = Math.min(top, -nh * 1.05 + dy);
+        else if (orn.name === "zkh" || orn.name === "ykh") top = Math.min(top, -nh * 0.75 + dy);
+      }
+    }
+  }
+  for (const b of boxes) {
+    top = Math.min(top, b.top);
+    if (b.kind && TEXT_KINDS.has(b.kind)) textTop = Math.min(textTop ?? Infinity, b.top);
+  }
+  return { texts, boxes, top, textTop };
+}
+
+/**
+ * **力度、术语、跳转字的落位**（搬 `Line.addDirections` 的横向 + `placeDirections` / `placeDirection` 的纵向），排在堆叠之后：
+ * 与和弦**接近同一行**——基线取离它最近的那个和弦；只有真撞上了才让，先沿 x 往左让（不越过左边那条小节线），
+ * 让不开抬到它那一段真正的最高墨迹之上一道空。挂在小节线上的（`Fine` / `D.S.`）右缘对到线的墨迹右缘、抬过线顶。
+ * 定完才进带（房号车道要算它们）。
+ */
+function placeDirections(
+  items: readonly PlacedItem[], boxes: BandItem[], texts: PlacedText[], m: JianpuGrid, ink: InkMeasurer, width: number,
+): void {
+  const nh = m.ink.noteHeight;
+  const gap = m.style.vertical.slurGap;
+  const size = textSize(m);
+  const chords = texts.filter((t) => t.kind === "chord").map((t) => ({ x0: t.ink.left, x1: t.ink.right, base: t.y, inkTop: t.ink.top }));
+  const bars = items.filter((it) => it.element.kind === "barline").map((it) => {
+    const b = barlineBox(it.element as BarlineElement, m);
+    return { x: it.x, left: it.x - (b?.left ?? 0), right: it.x + (b?.right ?? 0), dy: it.dy ?? 0 };
+  });
+  for (const it of items) {
+    const el = it.element;
+    if (el.kind !== "note" && el.kind !== "barline") continue;
+    const dy = it.dy ?? 0;
+    // 一组记号横排（各段之间空 0.25 个字号），整组一起落位
+    const group: PlacedText[] = [];
+    let pen = 0;
+    let level = 0;
+    for (const orn of el.ornaments) {
+      let t: PlacedText | null = null;
+      const dyn = DYNAMICS[orn.name];
+      const term = TERMS[orn.name];
+      const bm = BARLINE_MARKS[orn.name];
+      if (dyn) {
+        const fs = m.style.size.note * DYNAMIC_SIZE;
+        const r = ink.smufl(dyn, fs);
+        t = { kind: "direction", el, text: dyn, face: "music", size: fs, x: pen - r.left, y: 0, ink: r.offset(pen - r.left, 0) };
+      } else if (term || bm?.text) {
+        const s = term ?? bm!.text!;
+        const r = ink.text(s, bm ? "jump" : "term");
+        t = { kind: "direction", el, text: s, face: "text", size: m.style.size.chord, x: pen, y: 0, ink: r.ink.offset(pen, 0) };
+        t.ink = new Rect(Math.min(t.ink.left, pen), t.ink.top, Math.max(t.ink.right, pen + r.advance), t.ink.bottom);
+      } else if (bm?.glyph) {
+        const fs = m.style.size.note * 0.95;
+        const r = ink.smufl(bm.glyph, fs);
+        t = { kind: "direction", el, text: bm.glyph, face: "music", size: fs, x: pen - r.left, y: 0, ink: r.offset(pen - r.left, 0) };
+      }
+      if (!t) continue;
+      group.push(t);
+      pen = t.ink.right + size * 0.25;
+      level = Math.max(level, orn.level);
+    }
+    if (group.length === 0) continue;
+    const gw = Math.max(...group.map((t) => t.ink.right)) - Math.min(...group.map((t) => t.ink.left));
+    const move = (dx: number, dyy: number): void => {
+      for (const t of group) {
+        t.x += dx;
+        t.y += dyy;
+        t.ink = t.ink.offset(dx, dyy);
+      }
+    };
+    const gx = (): number => Math.min(...group.map((t) => t.ink.left));
+    const gTop = (): number => Math.min(...group.map((t) => t.ink.top));
+    const gBottom = (): number => Math.max(...group.map((t) => t.ink.bottom));
+    const atBar = el.kind === "barline";
+    const barRight = atBar ? bars.find((b) => Math.abs(b.x - it.x) < 1e-6) : bars.find((b) => b.left > it.x);
+    const barLeft = [...bars].reverse().find((b) => b.right <= it.x - (atBar ? 1e-6 : 0));
+    // 小节线上的贴着线右对齐（右缘对到整条线墨迹的右缘），音符上的居中在音符上
+    let x = atBar && barRight ? barRight.right - gw : it.x - gw / 2;
+    x = Math.max(0, Math.min(x, (width || Infinity) - gw));
+    move(x - gx(), 0);
+    // 纵向：本行没有和弦时退回音符上方（那一摞的墨迹顶之上一个和弦字号，`chordGap` 设了就用它）
+    const above = el.kind === "note" ? Math.min(-nh / 2, stackTop(el, m)) : -nh / 2;
+    const fallback = above - (m.style.vertical.chordGap > 0 ? m.style.vertical.chordGap : size) + dy;
+    placeDirection(chords, boxes, fallback, barLeft ? barLeft.right : 0, size, gap, move, gx, gTop, gBottom, gw);
+    if (atBar && barRight) {
+      // 线比数字高出一截：照和弦基线摆会压在线头上，整块抬到线顶之上一道空
+      const barTop = barlineSpan(m).top + barRight.dy;
+      if (gBottom() > barTop - gap) move(0, barTop - gap - gBottom());
+    }
+    if (level > 0) move(0, -level * m.note.levelStep);
+    texts.push(...group);
+    boxes.push({ key: group[0]!, x0: gx(), x1: gx() + gw, top: gTop(), bottom: gBottom(), layer: 1, kind: "direction" });
+  }
+}
+
+/** 一组记号的纵向落位（`Line.placeDirection`）。 */
+function placeDirection(
+  chords: ReadonlyArray<{ x0: number; x1: number; base: number; inkTop: number }>,
+  boxes: readonly BandItem[], fallback: number, barLeft: number, size: number, gap: number,
+  move: (dx: number, dy: number) => void, gx: () => number, gTop: () => number, gBottom: () => number, gw: number,
+): void {
+  if (!chords.length) {
+    move(0, fallback);
+    return;
+  }
+  // 基线取**离它最近的那个和弦**：同一行的和弦并不总是等高（八度点、被弧抬过的那些）
+  const anchorX = gx();
+  const near = chords.reduce((a, c) =>
+    Math.abs((c.x0 + c.x1) / 2 - anchorX) < Math.abs((a.x0 + a.x1) / 2 - anchorX) ? c : a, chords[0]!);
+  move(0, near.base);
+  // 撞没撞上按墨迹盒判；力度按数字字号排，比和弦字号估的那一截高——取实际墨迹盒与估值的并
+  const top = Math.min(near.base - size * 0.85, gTop()), bot = Math.max(near.base + size * 0.25, gBottom());
+  // 底下那一层（弧、连音括线、奏法记号、松叶）也得算
+  const low = boxes.filter((b) => b.layer !== 1 && b.layer !== 2);
+  const pad = size * 0.35;
+  const hitChord = (c: { x0: number; x1: number; base: number; inkTop: number }, x0: number): boolean =>
+    c.inkTop < bot && c.base + size * 0.25 > top && c.x1 > x0 - pad && c.x0 < x0 + gw + pad;
+  const hits = (x0: number): boolean =>
+    chords.some((c) => hitChord(c, x0))
+    || low.some((b) => b.top < bot && b.bottom > top && b.x1 > x0 - pad && b.x0 < x0 + gw + pad);
+  if (!hits(gx())) return;
+  // 沿 x 让：挪到压着它的那些和弦的左边；挡路的按 `hits` 那把尺子筛（含净空容差）
+  const left = chords.filter((c) => hitChord(c, gx())).reduce((a, c) => Math.min(a, c.x0), Infinity);
+  // 让位不许越过左边那条小节线：`D.S.` / `Fine` 标的是这一小节唱到哪儿为止
+  const alt = left - gw - size * 0.3;
+  if (Number.isFinite(alt) && alt >= barLeft && alt >= 0 && !hits(alt)) {
+    move(alt - gx(), 0);
+    return;
+  }
+  // 本小节里让不开：抬到它那一段真正的最高墨迹（弧、括线、和弦）之上一道空；下面什么都没有才固定抬 1.2 个字号
+  const x0 = gx(), x1 = x0 + gw;
+  let lowTop = Infinity;
+  for (const b of low) {
+    if (b.x1 <= x0 || b.x0 >= x1) continue;
+    lowTop = Math.min(lowTop, b.topAt ? b.topAt(x0, x1) : b.top);
+  }
+  for (const c of chords) {
+    if (c.x1 <= x0 || c.x0 >= x1) continue;
+    lowTop = Math.min(lowTop, c.inkTop);
+  }
+  move(0, Number.isFinite(lowTop) ? lowTop - gap - gBottom() : -size * 1.2);
+}
+
+/** `{bz}` 临时伴奏行：小字号行的墨迹底贴它那一段带顶（或音符那一摞）之上一道空（旧固定槽位 `cueY`）。 */
+function placeCue(items: readonly PlacedItem[], layers: PlacedLayer[], boxes: BandItem[], m: JianpuGrid): void {
+  const nh = m.ink.noteHeight;
+  const cs = m.style.size.cue;
+  const h = nh * cs;
+  const st = { gap: m.ink.stack.gap * cs, dotRadius: m.ink.stack.dotRadius * cs, beamWidth: m.ink.stack.beamWidth * cs };
+  for (const lay of layers) {
+    if (lay.split || lay.items.length === 0) continue;
+    let cueTop = -h / 2;
+    let cueBottom = h / 2;
+    for (const it of lay.items) {
+      const el = it.element;
+      if (el.kind !== "note" || el.hidden) continue;
+      cueTop = Math.min(cueTop, stackTopOf(-h / 2, Math.max(0, el.octave), st));
+      cueBottom = Math.max(cueBottom, stackBottom(h / 2, noteBeams(el), Math.max(0, -el.octave), st));
+    }
+    const xs = lay.items.map((it) => it.x);
+    const x0 = Math.min(...xs) - h / 2, x1 = Math.max(...xs) + h / 2;
+    let above = bandTop(boxes, x0, x1) ?? Infinity;
+    for (const it of items) {
+      if (it.x < x0 || it.x > x1 || it.element.kind === "barline") continue;
+      above = Math.min(above, entryTop(it.element, m) + (it.dy ?? 0));
+    }
+    if (!Number.isFinite(above)) above = -nh / 2;
+    lay.y = above - m.style.vertical.slurGap - cueBottom;
+    boxes.push({ key: lay, x0, x1, top: lay.y + cueTop, bottom: lay.y + cueBottom, layer: 2.5, kind: "cue" });
+  }
+}
+
+/**
+ * **房号**：全行同一条车道（一房二房的横线是一条）。高度 = 房区间内音符墨迹顶、带顶（区间左边多看一个房号字号：
+ * 竖脚与房号画在左端外侧）、区间内小节线顶，取最高，再往上「0.7 个房号字号 + 竖脚」（搬 `Line.addEnding`）。
+ * 字号、竖脚仍照原样文档的画法（小节线高的一半，compose/marks.ts）；改走尺子是子计划 4.2。
+ */
+function placeEndings(items: readonly PlacedItem[], marks: PlacedMark[], boxes: BandItem[], m: JianpuGrid): void {
+  const voltas = marks.filter((mk) => mk.mark.type === "volta");
+  if (voltas.length === 0) return;
+  const H = m.style.vertical.barlineHeight;
+  const labelSize = H * 0.5;
+  const drop = H * 0.5;
+  const span = barlineSpan(m);
+  let above = Infinity;
+  for (const mk of voltas) {
+    for (const it of items) {
+      const dy = it.dy ?? 0;
+      if (it.element.kind === "barline") {
+        if (it.x >= mk.x0 - 0.5 && it.x <= mk.x1 + 0.5) above = Math.min(above, span.top + dy);
+      } else if (it.x >= mk.x0 && it.x <= mk.x1 && !(it.element.kind === "note" && it.element.hidden)) {
+        above = Math.min(above, entryTop(it.element, m) + dy);
+      }
+    }
+    const t = bandTop(boxes, mk.x0 - labelSize, mk.x1);
+    if (t !== null) above = Math.min(above, t);
+  }
+  if (!Number.isFinite(above)) above = -m.ink.noteHeight / 2;
+  const lw = m.style.stroke.barline;
+  const level = Math.max(...voltas.map((mk) => mk.level));
+  const top = above - labelSize * 0.7 - drop - (level - 1) * m.note.levelStep;
+  for (const mk of voltas) {
+    mk.y = top;
+    boxes.push({ key: mk, x0: mk.x0, x1: mk.x1, top: top - lw / 2, bottom: top + drop, layer: 3, kind: "ending" });
+  }
+}
+
+/** 带里属于这个元素的那几件（compose 画音符、小节线时取）。 */
+export function bandOf(band: readonly PlacedText[]): Map<MusicElement, PlacedText[]> {
+  const out = new Map<MusicElement, PlacedText[]>();
+  for (const t of band) {
+    const arr = out.get(t.el) ?? [];
+    arr.push(t);
+    out.set(t.el, arr);
+  }
+  return out;
+}
+

@@ -72,7 +72,6 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     doc,
     placed: null,
     digitFont: new Font(m.style.font.note.family, m.style.size.note, m.style.look.noteBold),
-    chordLane: m.note.chordY,
     pageWidth: m.page.width,
     pageHeight: m.page.height,
     _pageShiftX: 0,

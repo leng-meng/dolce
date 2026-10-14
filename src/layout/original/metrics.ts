@@ -42,23 +42,10 @@ export interface JianpuMetrics {
     augDotStep: number;
     /** 减时线左右各伸出锚点多少 */
     beamHalfSpan: number;
-    /** 音符上方的记号槽位（相对音符基线，负为上；同槽内按 level 继续上移）：
-     *  `&xx` 装饰与力度 / 弧线与多连音的兜底（有音符可依据时坐在堆叠顶端再上一个 slurGap）/ 渐强渐弱 / 跳房子 */
-    ornamentY: number;
-    slurY: number;
-    slurLevelStep: number;
-    hairpinY: number;
-    voltaY: number;
-    /** 同一槽内每级 `+` 上移多少 */
+    /** 源码里 `+` 抬高级别每级上移多少（记号先按级预抬再进上方带堆叠，place/band.ts） */
     levelStep: number;
     /** 渐强渐弱楔形的开口高度 */
     hairpinOpening: number;
-    /** 内联层（临时伴奏）相对主旋律的上移量 */
-    cueY: number;
-    /** 音符注释 / 和弦相对音符锚点的 y */
-    chordY: number;
-    /** 说明性文字行（`W:`）相对该组首行音符基线的 y */
-    wordsY: number;
   };
   /** 页头逐项落位（基线 y）。 */
   head: {
@@ -93,16 +80,8 @@ const GRID = {
     barlineSpace: 35,
     augDotStep: 12.5,
     beamHalfSpan: 6,
-    ornamentY: -17,
-    slurY: -25,
-    slurLevelStep: 5,
-    hairpinY: -44,
-    voltaY: -53,
     levelStep: 6,
     hairpinOpening: 7,
-    cueY: -40,
-    chordY: -26,
-    wordsY: -34,
   },
   head: { titleBaseline: 110, creditBaseline: 175, creditLineHeight: 21, keyMeterBaseline: 176 },
 } as const;

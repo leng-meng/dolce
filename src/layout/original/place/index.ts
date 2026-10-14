@@ -12,4 +12,4 @@ export type { NoteElement, SustainElement } from "../../../pu/ast";
 export { elementBeats } from "./voice";
 export { layoutSong, layoutDocument } from "./song";
 export { reflowLineStarts } from "./reflow";
-export { chordLane, graceLayout, graceTop, noteBeams, noteInkBottom, stackTop } from "./vertical";
+export { graceLayout, graceTop, noteBeams, noteInkBottom, stackTop } from "./vertical";

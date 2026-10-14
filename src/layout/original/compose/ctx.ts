@@ -7,7 +7,8 @@ import { jpDot } from "../../../engrave/dot";
 import { fillRect, strokePath, textItem } from "../../../engrave/prims";
 import type { Region } from "../../../style/ss";
 import type { DocView } from "../../../pu/slots";
-import type { PlacedScore } from "../place/model";
+import type { PlacedScore, PlacedText } from "../place/model";
+import type { MusicElement } from "../../../pu/ast";
 
 /** 一次原样文档排版的上下文（原 PuPainter 的实例状态）。墨色也在这里：
  *  原先是模块级可变量、在 `load` 开头设一次，现在随上下文传，多个实例互不影响。 */
@@ -16,10 +17,9 @@ export interface OriginalCtx {
   doc: DocView;
   placed: PlacedScore | null;
   digitFont: Font;
-  /** 正在画的这一行和弦/注释那一槽的基线（相对音符基线，place/vertical.ts::chordLane）。 */
-  chordLane: number;
-  /** 正在画的这一行里，注释（`"副歌"` 等）横向压到别的音上的和弦、要抬到上一行的那些音（`page.ts::paintVoice` 先量） */
-  liftedAnnotations?: ReadonlySet<object>;
+  /** 正在画的这一行的上方带（`PlacedVoice.band` 按元素分好）与它的坐标原点（行左缘、声部基线）：`page.ts::paintVoice` 设 */
+  band?: ReadonlyMap<MusicElement, readonly PlacedText[]>;
+  bandOrigin?: { x: number; y: number };
   pageWidth: number;
   pageHeight: number;
   /** 连续长图裁紧后，整页要平移多少（把墨迹推到左侧留白处） */

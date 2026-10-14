@@ -43,7 +43,7 @@ export const TIME_SIG_PAD_EM = 1 / 4;
  * 反复点按墨迹。compose/barline.ts 把 `BarlineGlyph` 居中于锚点画（原点 = 锚点 − 宽/2）。
  * 另给出线前那一小格要按的「组里第一个图元的高」（普通线是线高，`:‖` 先画点，是点径）。隐藏线 null。
  */
-function barlineBox(el: BarlineElement, m: JianpuGrid): { left: number; right: number; first: number } | null {
+export function barlineBox(el: BarlineElement, m: JianpuGrid): { left: number; right: number; first: number } | null {
   const bs = puBarlineSpec(el);
   if (!bs) return null;
   const span = barlineSpan(m);

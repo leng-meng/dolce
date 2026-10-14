@@ -11,7 +11,7 @@ import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
 import { DYNAMICS } from "../../../pu/glyph";
 import { jianpuSlurStyle } from "../metrics";
 import type { PlacedLayer, PlacedMark } from "../place/model";
-import { chordLane, noteBeams } from "../place/vertical";
+import { noteBeams } from "../place/vertical";
 import { type OriginalCtx, dot, rect, text } from "./ctx";
 import { braceItem } from "./brace";
 import { paintVoice } from "./page";
@@ -32,7 +32,7 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
   const x1 = Math.max(left + mk.x1, x0 + 6);
   switch (mk.mark.type) {
     case "slur": {
-      const y = baseline + (mk.y ?? m.note.slurY - (mk.level - 1) * m.note.slurLevelStep);
+      const y = baseline + (mk.y ?? -m.ink.noteHeight / 2);
       const arc = paintArc(c, root, x0, x1, y);
       // 弧没有自己的 id，可视化编辑按「起点:终点」认它（同 `Tie.startId`）。
       // **不能用 `mk.mark.start/end`**——那是行内下标，元素 id 要从两端实际落在的符号上取
@@ -45,7 +45,7 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
       // 多连音：括线或两段弧（样式键 `tuplet-style`，出厂括线同 500 首；番茄、诗歌本风格是弧），在正中**被连音数字断开**。
       // 画法走公共那一份（engrave/tuplet.ts，与简谱引擎同一套）：弧与同页 slur 同一条月牙挖掉数字那一截；
       // 括线的脚落在弧端那条线上（`mk.y`），横线在它之上一个脚长。数字是 SMuFL 的 tuplet 字形、按墨迹坐在线上。
-      const y = baseline + (mk.y ?? m.note.slurY - (mk.level - 1) * m.note.slurLevelStep);
+      const y = baseline + (mk.y ?? -m.ink.noteHeight / 2);
       // 连音数取模型里的实际数（`caption` = tupletActual），没有才按跨了几个符号数
       const n = Number(mk.mark.caption) || mk.mark.end - mk.mark.start + 1;
       const bracket = m.style.look.tupletStyle === "bracket";
@@ -65,9 +65,8 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
     case "crescendo":
     case "decrescendo": {
       const half = m.note.hairpinOpening / 2;
-      // `mk.y` 是松叶底边（`placeMarks` 按跨度里的音符与和弦定的）；没有才退回固定槽位
-      const y = mk.y !== undefined ? baseline + mk.y - half - m.style.stroke.hairpin / 2
-        : baseline + m.note.hairpinY - (mk.level - 1) * m.note.levelStep;
+      // `mk.y` 是松叶底边（上方带按墨迹堆好的，place/band.ts）
+      const y = baseline + (mk.y ?? -m.ink.noteHeight / 2) - half - m.style.stroke.hairpin / 2;
       const open = mk.mark.type === "crescendo";
       // 起点音上有力度（`9>&mf`）：松叶从力度字右边起（同原版 `mf>`），不从音符左边压过去
       // 收尾音上有力度（`9)!&pp`）同理：松叶收在力度字左边
@@ -95,7 +94,7 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
       break;
     }
     case "volta": {
-      const y = baseline + (mk.y ?? m.note.voltaY - (mk.level - 1) * m.note.levelStep);
+      const y = baseline + (mk.y ?? -m.ink.noteHeight / 2);
       // 画法走公共那一份（engrave/ending.ts，与简谱引擎、混排同一套）：比例照混排——
       // 竖脚与房号字号都是谱高的一半（谱高取小节线高），房号在左脚右侧、横线下方按墨迹定位。
       const H = m.style.vertical.barlineHeight;
@@ -135,8 +134,9 @@ export function paintLayer(c: OriginalCtx,
         items: layer.items,
         underlines: layer.underlines.map((u) => ({ ...u, dy: 0 })),
         marks: split.marks,
-        chordY: chordLane(split.line, m),
-        band: [],
+        band: split.band ?? [],
+        top: 0,
+        textTop: null,
         layers: [],
         lyricY: [],
       },
@@ -154,7 +154,7 @@ export function paintLayer(c: OriginalCtx,
     }
     return;
   }
-  const y = baseline + m.note.cueY;
+  const y = baseline + (layer.y ?? -m.ink.noteHeight);
   const cs = m.style.size.cue;
   const font = new Font(m.style.font.text.family, c.digitFont.size * cs);
   const st = m.ink.stack;

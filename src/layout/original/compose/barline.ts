@@ -29,7 +29,7 @@ export function paintBarline(c: OriginalCtx,
     // 线本身不画，但挂在它上面的记号与临时拍号仍要画
     if (el.ornaments.length > 0) {
       const g = new Group();
-      paintOrnaments(c, g, el.ornaments, x, baseline);
+      paintOrnaments(c, g, el, x, baseline);
       root.add(g);
     }
     if (el.temporaryMeter) {
@@ -48,7 +48,7 @@ export function paintBarline(c: OriginalCtx,
   if (!bs) {
     if (el.ornaments.length > 0) {
       const og = new Group();
-      paintOrnaments(c, og, el.ornaments, x, baseline);
+      paintOrnaments(c, og, el, x, baseline);
       root.add(og);
     }
     return null;
@@ -72,7 +72,7 @@ export function paintBarline(c: OriginalCtx,
   }
   if (el.ornaments.length > 0) {
     const og = new Group();
-    paintOrnaments(c, og, el.ornaments, x, baseline, undefined, { right: ox + r.width, top: baseline + span.top });
+    paintOrnaments(c, og, el, x, baseline);
     root.add(og);
   }
   const g = new Group();

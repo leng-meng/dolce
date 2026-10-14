@@ -1,37 +1,56 @@
 // 音符：数字、升降号、八度点、附点、和弦与注释、倚音、`&xx` 记号。
-import type { NoteElement } from "../../../pu/ast";
-import { noteMarkGap } from "../metrics";
+import type { BarlineElement, MusicElement, NoteElement } from "../../../pu/ast";
 import { AccidentalGlyph, type AccidentalKind } from "../../../engrave/accidental";
-import { ACCIDENTAL_GLYPH, ACCOMP_BRACKET, BARLINE_MARKS, DYNAMICS, ORNAMENTS, TERMS } from "../../../pu/glyph";
+import { ACCIDENTAL_GLYPH, ACCOMP_BRACKET } from "../../../pu/glyph";
 import { Font } from "../../font";
-import { Group, type JpNumber, type PageItem } from "../../pageitem";
-import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../../../engrave/chord";
-import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
+import { Group, type JpNumber } from "../../pageitem";
+import { chordTextSegs, layoutHarmonySegs } from "../../../engrave/chord";
 import { highDotY, lowDotY } from "../../../engrave/stack";
 import { augDotCenter } from "../../../engrave/augdot";
 import { breathPath } from "../../../engrave/breath";
-import type { PlacedItem } from "../place/model";
-import { graceLayout, noteBeams, noteTextTop, stackTop } from "../place/vertical";
+import type { PlacedItem, PlacedText } from "../place/model";
+import { graceLayout, noteBeams } from "../place/vertical";
 import { type OriginalCtx, digitItem, digitOrigin, dot, octaveDot, rect, stroke, text } from "./ctx";
 
-/** 和弦画出来多宽（与 paintChord 同一套字体与分段）。 */
-export function chordWidth(c: OriginalCtx, chord: string): number {
+/** 音符/增时线上方的和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）。位置照定位端（`PlacedText`）。 */
+function paintChord(c: OriginalCtx, g: Group, t: PlacedText, x: number, baseline: number): void {
   const m = c.metrics;
-  const segs = chordTextSegs(chord, m.style.look.chordPlain, m.style.look.accidentalSide);
-  return harmonyWidth(segs, new Font(m.style.font.text.family, m.style.size.chord), new Font("Bravura", m.style.size.chord));
-}
-
-/** 音符/增时线上方的和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）。 */
-export function paintChord(c: OriginalCtx, g: Group, chord: string, x: number, baseline: number): void {
-  const m = c.metrics;
-  const wordFont = new Font(m.style.font.text.family, m.style.size.chord);
-  const musicFont = new Font("Bravura", m.style.size.chord);
-  const segs = chordTextSegs(chord, m.style.look.chordPlain, m.style.look.accidentalSide);
-  const grp = layoutHarmonySegs(segs, wordFont, musicFont, c.ink);
-  grp.x = x - harmonyWidth(segs, wordFont, musicFont) / 2;
-  grp.y = baseline + c.chordLane;
+  const wordFont = new Font(m.style.font.text.family, t.size);
+  const musicFont = new Font("Bravura", t.size);
+  const grp = layoutHarmonySegs(chordTextSegs(t.text, m.style.look.chordPlain, m.style.look.accidentalSide), wordFont, musicFont, c.ink);
+  grp.x = x;
+  grp.y = baseline;
   g.add(grp);
 }
+
+/** 上方带里挂在 `el` 上的字（和弦、注释、转调标签、力度/术语/跳转字、奏法记号）：y 已在定位端定死（place/band.ts），这里只照画。
+ *  `kinds` 给了就只画这几种。 */
+export function paintBand(c: OriginalCtx, g: Group, el: MusicElement, kinds?: ReadonlySet<PlacedText["kind"]>): void {
+  const list = c.band?.get(el);
+  const o = c.bandOrigin;
+  if (!list || !o) return;
+  const m = c.metrics;
+  for (const t of list) {
+    if (kinds && !kinds.has(t.kind)) continue;
+    const x = o.x + t.x, y = o.y + t.y;
+    if (t.kind === "chord") {
+      paintChord(c, g, t, x, y);
+      continue;
+    }
+    const font = t.face === "music" ? new Font("Bravura", t.size) : new Font(m.style.font.text.family, t.size);
+    const tf = text(t.text, x, y, font, c.ink);
+    if (t.kind === "section-word") {
+      tf.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
+      tf.classes.add("section-word"); // 成书 line-check 认段落词（`pdflayout/browser.ts::CLS_TAGS`）
+      tf.ident = { kind: "annotation" };
+    } else if (t.kind === "key-label") tf.classes.add("key-change");
+    else tf.classes.add(t.kind); // `artic` / `direction`（成书 line-check 认，`pdflayout/browser.ts::CLS_TAGS`）
+    g.add(tf);
+  }
+}
+
+const NOTE_TEXT = new Set<PlacedText["kind"]>(["chord", "section-word", "key-label"]);
+const NOTE_MARKS = new Set<PlacedText["kind"]>(["artic", "direction"]);
 
 export function paintNote(c: OriginalCtx,
   root: Group,
@@ -85,30 +104,8 @@ export function paintNote(c: OriginalCtx,
     g.add(d);
   }
 
-  // 曲中转调标签与和弦/注释同在一个音上时，转调占贴音符那一槽（用户定：转调优先），和弦/注释让到上一行
-  // 注释横向压到邻音的和弦（`C` 旁边的「（副歌）」）也让到上一行（同简谱引擎段落词挂在和弦之上）
-  const textLift = (note.keyLabel && (note.chord || note.annotation)) || c.liftedAnnotations?.has(note) ? m.style.size.chord * 1.2 : 0;
-  // 和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）
-  if (note.chord) {
-    paintChord(c, g, note.chord, x, baseline - textLift);
-  } else if (note.annotation) {
-    const font = new Font(m.style.font.text.family, m.style.size.chord);
-    const a = note.annotation;
-    const t = text(a, x - font.measureText(a) / 2, baseline + c.chordLane - textLift, font, c.ink);
-    t.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
-    t.classes.add("section-word"); // 成书 line-check 认段落词（`pdflayout/browser.ts::CLS_TAGS`）
-    t.ident = { kind: "annotation" };
-    g.add(t);
-  }
-  // 曲中转调标签：新调首音上方，与和弦/注释同一槽；同在时它占这一槽、那两样叠到上一行（`place/vertical.ts::noteTextTop`）。
-  // 左缘对齐数字左缘、往右写——居中的话行首那个会伸出左边距
-  if (note.keyLabel) {
-    const font = new Font(m.style.font.text.family, m.style.size.chord);
-    const y = baseline + c.chordLane;
-    const t = text(note.keyLabel, x - m.ink.noteHeight * 0.35, y, font, c.ink); // 数字宽约墨迹高的 0.7
-    t.classes.add("key-change");
-    g.add(t);
-  }
+  // 和弦、注释、转调标签（定位端已按墨迹堆好，place/band.ts）
+  paintBand(c, g, note, NOTE_TEXT);
 
   // 倚音：主音左/右侧的小号数字（默认八分，故带一条减时线）
   paintGrace(c, g, note, "before", x, baseline);
@@ -116,7 +113,7 @@ export function paintNote(c: OriginalCtx,
 
   // `&xx` 记号
   const before = g.children.length;
-  paintOrnaments(c, g, note.ornaments, x, baseline, stackTop(note, c.metrics), undefined, noteTextTop(note, m, c.chordLane) ?? undefined, it.arcTop);
+  paintOrnaments(c, g, note, x, baseline);
   for (const it of g.children.slice(before)) it.ident = { kind: "deco" };
 
   root.add(g);
@@ -177,32 +174,10 @@ function paintGrace(c: OriginalCtx,
   }
 }
 
-export function paintOrnaments(c: OriginalCtx,
-  g: Group,
-  ornaments: readonly { name: string; level: number }[],
-  x: number,
-  baseline: number,
-  /** 音符上方堆叠顶（相对基线，含高八度点，见 layout.ts::stackTop）；小节线/增时线上的记号不传 */
-  noteTop?: number,
-  /** 挂在小节线上时，那条线的墨迹右缘与线顶（页坐标）：`Fine` / `D.S.` 照它右对齐、让开线头 */
-  bar?: { right: number; top: number },
-  /** 音符头顶和弦/注释那行字的墨迹顶（相对基线）：有的话力度、术语摞到它之上，不压在和弦底下 */
-  textTop?: number,
-  /** 压在音上的弧那一截的墨迹顶（相对基线，`PlacedItem.arcTop`）：延长记号、力度摞到它之上 */
-  arcTop?: number,
-): void {
-  const top = noteTop ?? -c.metrics.ink.noteHeight / 2;
-  if (ornaments.length === 0) return;
+/** 挂在音符/小节线上的 `&xx` 记号：伴奏括弧、换气贴着音符画；奏法记号、力度、术语、跳转字照上方带的位置画（place/band.ts）。 */
+export function paintOrnaments(c: OriginalCtx, g: Group, el: NoteElement | BarlineElement, x: number, baseline: number): void {
   const m = c.metrics;
-  /** 记号带上类名：乐谱字形的奏法记号 `artic`，力度、术语、跳转字 `direction`（成书 line-check 认，`pdflayout/browser.ts::CLS_TAGS`） */
-  const add = (it: PageItem, cls: "artic" | "direction"): void => {
-    it.classes.add(cls);
-    g.add(it);
-  };
-  let slot = 0;
-  for (const orn of ornaments) {
-    const y = baseline + m.note.ornamentY - orn.level * m.note.levelStep - slot * 11;
-
+  for (const orn of el.ornaments) {
     if (ACCOMP_BRACKET.has(orn.name)) {
       // 伴奏括弧：音符外侧的一个大圆括号
       const isLeft = orn.name === "zkh";
@@ -212,71 +187,12 @@ export function paintOrnaments(c: OriginalCtx,
       const bend = isLeft ? -4.5 : 4.5;
       p.moveTo(bx, baseline - h / 2);
       p.cubicTo(bx + bend, baseline - h / 4, bx + bend, baseline + h / 4, bx, baseline + h / 2);
-      add(p, "artic");
-      continue;
-    }
-
-    if (orn.name === "hx") {
+      p.classes.add("artic");
+      g.add(p);
+    } else if (orn.name === "hx") {
       // 换气：细笔画的 V 挂在音符右上角（形状与落点走公共那一份，engrave/breath.ts）
-      add(breathPath(x, baseline, m.ink.noteHeight, 1.1, c.ink), "artic");
-      continue;
-    }
-
-    const glyph = ORNAMENTS[orn.name];
-    if (glyph) {
-      const font = new Font("Bravura", c.digitFont.size * glyph.scale);
-      const w = font.measureText(glyph.glyph);
-      if (orn.name === "yc" || orn.name === "ycy") {
-        // 延长记号按**墨迹**贴着音符堆叠顶（含高八度点）放，净距与减时线、八度点同一个值
-        // （metrics.ts::alignNoteMarks）；走 laneOrnament 固定槽位离音符太远（用户口径）。
-        const ab = font.charBound(glyph.glyph);
-        const under = arcTop !== undefined ? Math.min(top, arcTop) : top;
-        add(text(glyph.glyph, x - w / 2, baseline + under - noteMarkGap(m) - ab.bottom, font, c.ink), "artic");
-      } else {
-        add(text(glyph.glyph, x - w / 2, y, font, c.ink), "artic");
-      }
-      slot += 1;
-      continue;
-    }
-
-    const dyn = DYNAMICS[orn.name];
-    if (dyn) {
-      const font = new Font("Bravura", c.digitFont.size * DYNAMIC_SIZE);
-      const w = font.measureText(dyn);
-      // 按**墨迹**贴着音符那一摞（含高八度点）往上一道空（同延长记号）——固定槽位 `ornamentY` 不随字号走，
-      // 数字一大力度就压到数字顶上；小节线、增时线上的（不传 top）照旧走槽位
-      const ab = font.charBound(dyn);
-      const under = arcTop !== undefined ? Math.min(top, arcTop) : top;
-      const dy = textTop !== undefined ? baseline + Math.min(textTop, under) - noteMarkGap(m) - slot * m.ink.noteHeight - ab.bottom
-        : noteTop !== undefined && slot === 0 ? baseline + under - noteMarkGap(m) - ab.bottom : y;
-      add(text(dyn, x - w / 2, dy, font, c.ink), "direction");
-      slot += 1;
-      continue;
-    }
-
-    const term = TERMS[orn.name];
-    if (term) {
-      const font = new Font(m.style.font.text.family, m.style.size.chord);
-      const ty = textTop !== undefined ? baseline + textTop - noteMarkGap(m) - slot * m.ink.noteHeight : y;
-      add(text(term, x - font.measureText(term) / 2, ty, font, c.ink), "direction");
-      slot += 1;
-      continue;
-    }
-
-    const mark = BARLINE_MARKS[orn.name];
-    if (mark?.text) {
-      const font = new Font(m.style.font.text.family, m.style.size.chord);
-      const w = font.measureText(mark.text);
-      // **与小节线右对齐**（同简谱引擎 `layout.ts::addDirections`）：居中在线上的话一半压着线，
-      // 线头又比数字高，正好戳进字里。基线也不许低于线顶一道空
-      if (bar) add(text(mark.text, bar.right - w, Math.min(y, bar.top - noteMarkGap(m)), font, c.ink), "direction");
-      else add(text(mark.text, x - w / 2, y, font, c.ink), "direction");
-      slot += 1;
-    } else if (mark?.glyph) {
-      const font = new Font("Bravura", c.digitFont.size * 0.95);
-      const w = font.measureText(mark.glyph);
-      add(text(mark.glyph, x - w / 2, y, font, c.ink), "direction");
-      slot += 1;
+      g.add(breathPath(x, baseline, m.ink.noteHeight, 1.1, c.ink)); // 类名 `breath`，不进上方带（同简谱引擎）
     }
   }
+  paintBand(c, g, el, NOTE_MARKS);
 }

@@ -1,11 +1,11 @@
 // 跨若干符号的记号（弧线 / 多连音 / 跳房子 / 渐强渐弱）换算成行内坐标，弧按嵌套定层。
 import type { Mark, ScoreLine } from "../../../pu/ast";
-import { jianpuSlurRise, noteMarkGap, type JianpuGrid } from "../metrics";
+import { jianpuSlurRise, type JianpuGrid } from "../metrics";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, jpArcY } from "../../../engrave/arc";
 import type { PlacedItem, PlacedMark } from "./model";
-import { annotationTop, chordLane, noteTextTop, stackTop, voltaLineTop } from "./vertical";
+import { stackTop } from "./vertical";
 
-/** 把记号的元素下标区间换算成行内 x 区间。 */
+/** 把记号的元素下标区间换算成行内 x 区间；弧线、多连音的 y 也在这里定（跳房子、松叶的 y 见 band.ts）。 */
 export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid): PlacedMark[] {
   if (items.length === 0) return [];
   const first = items[0]!;
@@ -71,7 +71,7 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid)
       // 简谱弧（engrave/arc.ts，三条简谱路同一条；多连音的两段弧也是弧）：只看起止两个音——两摞的墨迹顶
       // （终点算上临时记号）取高者，再往上一道叠层的空；源码里的 `+` 抬高级别照旧按 level 上移
       placed.y = jpArcY(stackTop(a.element, m, false), stackTop(b.element, m), m.ink.stack.gap)
-        - (level - 1) * m.note.slurLevelStep;
+        - (level - 1) * m.note.levelStep;
     }
     // 只有**两端都**落在并排块的下行里，这个记号才跟着下移；跨过并排块的（比如
     // 从块前一直画到块后的跳房子）另行处理，见下面的「抬到上行之上」
@@ -89,43 +89,7 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid)
       .map((q) => ({ x: (q.x0 + q.x1) / 2, y: q.y! - rise - m.style.stroke.slur }));
     outer.y = outer.y! + arcClearShift(outer.x0, outer.y!, outer.x1, outer.y!, rise, true, inner, m.ink.stack.gap);
   }
-  // **跳房子**：横线让开房内的和弦/注释（vertical.ts::voltaLineTop），一行同高
-  const voltaTop = voltaLineTop(voice, m);
-  for (const p of out) if (p.mark.type === "volta") p.y = voltaTop;
-  // **渐强渐弱**：`y` 记松叶的**底边**。贴着跨度里音符那一摞（含延长记号、弧、三连音）之上一道空；
-  // 跨度里有和弦/注释才抬到那一槽之上（从前一律抬到固定的 `hairpinY`，没和弦的行松叶悬在上一组歌词底下）
-  const lane = chordLane(voice, m);
-  for (const p of out) {
-    if (p.mark.type !== "crescendo" && p.mark.type !== "decrescendo") continue;
-    let top = Infinity;
-    for (const it of items) {
-      // 小节线上的 Fine / D.S.（画在记号槽 `ornamentY` 那条基线上，居中在线上，compose/note.ts::paintOrnaments）：
-      // 线离末音一个步距上下，字往左伸，按步距算进来
-      if (it.element.kind === "barline") {
-        if (it.element.ornaments.length && it.x >= p.x0 && it.x <= p.x1 + m.note.noteStep)
-          top = Math.min(top, m.note.ornamentY - m.style.size.chord * 0.9);
-        continue;
-      }
-      if (it.x < p.x0 - m.ink.noteHeight || it.x > p.x1 + m.ink.noteHeight) continue;
-      const el = it.element;
-      top = Math.min(top, stackTop(el, m));
-      if (el.kind === "note" && el.ornaments.some((o) => o.name === "yc" || o.name === "ycy"))
-        top = Math.min(top, stackTop(el, m) - noteMarkGap(m) - m.ink.noteHeight * 0.6);
-      const text = el.kind === "note" ? noteTextTop(el, m, lane) : el.kind === "sustain" && el.chord ? annotationTop(m, lane) : null;
-      if (text !== null) top = Math.min(top, text);
-
-    }
-    for (const q of out) {
-      if (q === p || q.y === undefined || !isArcMark(q.mark) || q.x1 < p.x0 || q.x0 > p.x1) continue;
-      top = Math.min(top, q.y - rise - m.style.stroke.slur);
-    }
-    // 松叶与下面那一摞之间留得比弧宽：弧的那道空（`slurGap`）是让弧端贴着音符的，松叶照它放就压在数字顶上
-    const gap = Math.max(m.style.vertical.slurGap, m.ink.noteHeight * 0.3) + m.style.stroke.hairpin / 2;
-    // 最高只到原先的固定槽位（`hairpinY`）：两组之间的空是按那个槽位预留的（`groupHeadroom`），
-    // 再往上就顶进上一组的歌词——密排多声部里弧顶比槽位还高时，退回槽位（与改动前一样贴着弧）
-    const ceiling = m.note.hairpinY + m.note.hairpinOpening / 2 - (p.level - 1) * m.note.levelStep;
-    if (Number.isFinite(top)) p.y = Math.max(ceiling, top - gap - (p.level - 1) * m.note.levelStep);
-  }
+  // 跳房子、松叶的 y 按上方带堆叠的结果定（band.ts::placeBand）
   return out;
 }
 

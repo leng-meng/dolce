@@ -24,8 +24,6 @@ export interface PlacedItem {
   dy?: number;
   /** 小节线不画（分声部前的空声部，见 song.ts::hideEmptyBarlines）；占位照旧 */
   noBarline?: true;
-  /** 压在这个音上的弧那一截的墨迹顶（相对基线）：延长记号、力度摞到它之上（song.ts::marksOverArcs） */
-  arcTop?: number;
 }
 
 /** 一条跨若干符号的记号（弧线 / 多连音 / 跳房子 / 渐强渐弱），已换算成行内坐标。 */
@@ -35,7 +33,7 @@ export interface PlacedMark {
   mark: Mark;
   x0: number;
   x1: number;
-  /** 弧线/多连音的顶点 y（相对该声部的音符基线，负为上）。其余记号走固定槽位。 */
+  /** 纵向落点（相对该声部的音符基线，负为上）：弧线/多连音是弧端那条线（`placeMarks`），松叶是底边、房号是横线（`band.ts`） */
   y?: number;
   /** 嵌套层数或 `+` 抬高级别 */
   level: number;
@@ -59,6 +57,8 @@ export interface PlacedLayer {
   underlines: PlacedUnderline[];
   /** `{dsb}` 的并排块信息；`{bz}` 没有 */
   split?: PlacedSplit;
+  /** `{bz}` 小字号行的数字墨迹中线（相对主旋律基线，`band.ts::placeCue`） */
+  y?: number;
 }
 
 export interface PlacedSplit {
@@ -71,6 +71,8 @@ export interface PlacedSplit {
   braceRightX?: number;
   braceTop: number;
   braceBottom: number;
+  /** 上行自己的上方带（相对上行基线，`band.ts::placeBand`） */
+  band?: PlacedText[];
 }
 
 /** 一条减时线段：第 level 层，从 x0 到 x1。 */
@@ -91,10 +93,11 @@ export interface PlacedVoice {
   layers: PlacedLayer[];
   /** 各段歌词的基线 y，与 voice.lyrics 平行 */
   lyricY: number[];
-  /** 和弦/注释那一槽的基线（相对音符基线，见 chordLane） */
-  chordY: number;
-  /** 谱行上方那一带的字与记号（和弦、段落词、转调标签、力度/术语/跳转字、奏法记号），y 已定死（子计划 4 逐批接上） */
+  /** 谱行上方那一带的字与记号（和弦、注释、转调标签、力度/术语/跳转字、奏法记号），y 已定死（`band.ts`） */
   band: PlacedText[];
+  /** 头顶最高的墨迹（相对基线，负为上）与其中字的最高墨迹顶（组间让位用，`vertical.ts::groupHeadroom`） */
+  top: number;
+  textTop: number | null;
 }
 
 /** 上方带里的一件：和弦、段落词（音符注释）、转调标签、力度/术语/跳转字、奏法记号字形。 */
@@ -102,6 +105,9 @@ export interface PlacedText {
   kind: "chord" | "section-word" | "key-label" | "direction" | "artic";
   el: MusicElement;
   text: string;
+  /** 字体：乐谱字体（Bravura）或文字字体；字号 pt */
+  face: "music" | "text";
+  size: number;
   /** 落笔点：行坐标 x、相对声部基线的 y */
   x: number;
   y: number;
