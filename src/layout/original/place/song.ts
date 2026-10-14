@@ -4,7 +4,7 @@ import { contentWidth, type JianpuGrid } from "../metrics";
 import { paginate, type SystemBlock } from "../../../jianpu/vertical";
 import type { InkMeasurer, PlacedGroup, PlacedPage, PlacedScore, PlacedVoice } from "./model";
 import { placeColumns } from "./spacing";
-import { type BeatCtx, assignLyrics, computeUnderlines, layoutVoiceLine, lineEndsWithForwardRepeat } from "./voice";
+import { type BeatCtx, assignLyrics, computeUnderlines, layoutVoiceLine, lineEndMeter, lineEndsWithForwardRepeat } from "./voice";
 import { GROUP_CLEAR, braceReach, splitRise, wordsLead, groupHeadroom, lineInkBottom, voiceHeadroom } from "./vertical";
 import { placeMarks } from "./marks";
 import { placeLayers } from "./layers";
@@ -89,6 +89,8 @@ export function layoutSong(
   const blocks: Array<SystemBlock & { group: PlacedGroup }> = [];
   // 各声部上一行是否以反复起点收尾：本行行首补 `|:`（见 voice.ts::layoutVoiceLine）
   let leadRepeat: boolean[] = [];
+  // 各声部上一行行末转的拍号：本行行首再印一遍（见 voice.ts::layoutVoiceLine）
+  let leadMeter: Array<Meter | undefined> = [];
   for (const [pageIdx, srcPage] of song.pages.entries()) {
     for (const [groupIdx, group] of srcPage.groups.entries()) {
       let y = 0;
@@ -103,8 +105,11 @@ export function layoutSong(
       for (const el of group.voices[0]?.elements ?? []) {
         if (el.kind === "barline" && el.temporaryMeter) meterCursor = el.temporaryMeter;
       }
-      const laidOut = group.voices.map((voice, vi) => layoutVoiceLine(voice, m, { ...beatCtx, leadRepeat: leadRepeat[vi] === true }));
+      const laidOut = group.voices.map((voice, vi) => layoutVoiceLine(voice, m, {
+        ...beatCtx, leadRepeat: leadRepeat[vi] === true, ...(leadMeter[vi] ? { leadMeter: leadMeter[vi] } : {}),
+      }));
       leadRepeat = group.voices.map(lineEndsWithForwardRepeat);
+      leadMeter = group.voices.map(lineEndMeter);
       carryCursor = laidOut[0]?.tail ?? 0;
       // 音节先挂上（只按序号对到跟词的符号上），列宽要看字宽
       laidOut.forEach((l, vi) => {
@@ -139,7 +144,8 @@ export function layoutSong(
           const at = l.items.find((it) => it.x >= u.x0 - 0.01 && it.x <= u.x1 + 0.01);
           if (at?.dy !== undefined) u.dy = at.dy;
         }
-        const marks = placeMarks(voice, l.items, m);
+        const stops = layers.flatMap((lay) => (lay.split?.braceLeftX !== undefined ? [lay.split.braceLeftX] : []));
+        const marks = placeMarks(voice, l.items, m, stops);
         // 上方带：弧、连音、奏法记号、和弦、松叶、转调标签、力度/跳转字、临时伴奏行、房号按墨迹一次堆清（band.ts）
         const band = placeBand(l.items, marks, layers, m, ink, width);
         const pv: PlacedVoice = {
@@ -155,7 +161,8 @@ export function layoutSong(
       let textInkTop: number | null = null;
       if (texts.length > 0) {
         const lastInk = ink.text(texts[texts.length - 1]!.text, "words").ink;
-        textRel = (voices[0]?.top ?? -m.ink.noteHeight / 2) - m.style.vertical.slurGap - lastInk.bottom - (texts.length - 1) * wordsLead(m);
+        // 与下面那行谱留 0.8 个说明字号（只留叠层那道空，字就贴在音符、和弦顶上；旧固定槽位约 0.9）
+        textRel = (voices[0]?.top ?? -m.ink.noteHeight / 2) - Math.max(m.style.vertical.slurGap, m.style.size.words * 0.8) - lastInk.bottom - (texts.length - 1) * wordsLead(m);
         textInkTop = textRel + ink.text(texts[0]!.text, "words").ink.top;
       }
       // 记号往上画，先给这一组留够头顶空间：上一组末行（歌词基线或音符基线）到本组基线是 `system-gap`，
@@ -210,6 +217,11 @@ export function layoutSong(
         hideEmptyBarlines(voices, sbf);
       }
       // 源里的 `[fenye]`：新的一页从这组起（长图里也分开，由 layoutDocument 接成一张时多留一段白）
+      // 只有 `W:` 没有曲行的组（纯文字页）：占位要算到末行文字的墨迹底，再加组间距——否则下一组的谱直接压在文字上
+      if (voices.length === 0 && texts.length > 0) {
+        const lastInk = ink.text(texts[texts.length - 1]!.text, "words").ink;
+        y = Math.max(y, textY + (texts.length - 1) * wordsLead(m) + lastInk.bottom + m.style.vertical.systemGap);
+      }
       blocks.push({ group: placedGroup, top: 0, bottom: y, breakBefore: groupIdx === 0 && pageIdx > 0 });
     }
   }

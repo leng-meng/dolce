@@ -77,6 +77,20 @@ export function layoutVoiceLine(
       srcMap.set(flat[0]!, -1);
     }
   }
+  // 上一行行末转了拍号（`‖ 3/4` 在行尾）：本行行首再印一遍（行首有线就挂在那条线上，没有就补一条不画的线挂着）
+  if (ctx.leadMeter) {
+    const head = flat[0];
+    if (head?.kind === "barline") {
+      if (!head.temporaryMeter) {
+        const withMeter: BarlineElement = { ...head, temporaryMeter: ctx.leadMeter };
+        srcMap.set(withMeter, srcMap.get(head) ?? voice.elements.indexOf(head));
+        flat[0] = withMeter;
+      }
+    } else {
+      flat.unshift({ kind: "barline", type: "invisible", ornaments: [], temporaryMeter: ctx.leadMeter, code: "", source: { line: 0, column: 0, offset: 0, length: 0 } });
+      srcMap.set(flat[0]!, -1);
+    }
+  }
   const ratios = tupletRatios(voice);
   // `{dsb}` 并排块的花括号要挤在前一个符号与并排段之间，得先给它让出位置；
   // 并排段**结束**那头还有一个右括号，同样要让
@@ -191,6 +205,8 @@ export interface BeatCtx {
   songEnd?: boolean;
   /** 上一行以反复起点收尾（`forwardRepeatAtEnd`）：本行行首补一条 `|:` */
   leadRepeat?: boolean;
+  /** 上一行行末转了拍号（`lineEndMeter`）：本行行首再印一遍 */
+  leadMeter?: Meter;
 }
 
 /** 这条小节线带不带「下一小节起反复」（`|:`、`:|:`，或 123 / MusicXML 记在下一小节左线上的那种） */
@@ -206,6 +222,16 @@ export function lineEndsWithForwardRepeat(voice: ScoreLine): boolean {
     if (el.kind === "barline") return forwardRepeatAtEnd(el);
   }
   return false;
+}
+
+/** 一行的末个占位符号是带转拍号的小节线：返回那个拍号 */
+export function lineEndMeter(voice: ScoreLine): Meter | undefined {
+  for (let i = voice.elements.length - 1; i >= 0; i--) {
+    const el = voice.elements[i]!;
+    if (el.kind === "note" || el.kind === "sustain") return undefined;
+    if (el.kind === "barline") return el.temporaryMeter;
+  }
+  return undefined;
 }
 
 /**

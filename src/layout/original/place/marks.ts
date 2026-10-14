@@ -4,9 +4,14 @@ import { jianpuSlurRise, type JianpuGrid } from "../metrics";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, jpArcY } from "../../../engrave/arc";
 import type { PlacedItem, PlacedMark } from "./model";
 import { stackTop } from "./vertical";
+import { barlineLines } from "./spacing";
 
 /** 把记号的元素下标区间换算成行内 x 区间；弧线、多连音的 y 也在这里定（跳房子、松叶的 y 见 band.ts）。 */
-export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid): PlacedMark[] {
+export function placeMarks(
+  voice: ScoreLine, items: PlacedItem[], m: JianpuGrid,
+  /** 并排块（`{dsb}`）的左花括号 x：房号收在它之前，不罩到并排块上行 */
+  stops: readonly number[] = [],
+): PlacedMark[] {
   if (items.length === 0) return [];
   const first = items[0]!;
   const last = items[items.length - 1]!;
@@ -45,17 +50,19 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid)
     const spread = isWedge ? m.ink.noteHeight * 0.55 : m.note.beamHalfSpan;
     const padLeft = isArc ? (chainedLeft ? dx : 0) : -spread;
     const padRight = isArc ? (chainedRight ? dx : 0) : -spread;
-    // 跳房子的横线**贴着两侧的小节线**（原版：起点 = 前一条小节线 +2、终点 = 后一条
-    // 小节线 -2，都按 1000 宽的版面量的），而不是贴房内首末音符。
+    // 跳房子的竖脚**对齐小节线的线位**（同简谱引擎 `Line.endingSpan`）：起点取房内首音之前那条线的最后一根、
+    // 终点取末音之后那条的第一根（`:‖` 与 `‖:` 两房相接时一个落细线、一个落粗线，天然分开）。不画的线按锚点
     let vx0: number | null = null;
     let vx1: number | null = null;
     if (mark.type === "volta") {
-      const gap = m.ink.noteHeight * 0.12;
       for (const it of items) {
         if (it.element.kind !== "barline") continue;
-        if (it.x <= a.x) vx0 = it.x + gap;
-        if (it.x >= b.x && vx1 === null) vx1 = it.x - gap;
+        const ln = barlineLines(it.element, m);
+        if (it.x <= a.x) vx0 = it.x + (ln?.last ?? 0);
+        if (it.x >= b.x && vx1 === null) vx1 = it.x + (ln?.first ?? 0);
       }
+      // 房后紧跟并排块、中间没有小节线（`[2 5 - - - {dsb …}`）：收在花括号之前（同一首歌）
+      for (const x of stops) if (x > a.x && (vx1 === null || x < vx1)) vx1 = x;
     }
     const placed: PlacedMark = {
       mark,

@@ -134,7 +134,7 @@ export function placeBand(
   }
 
   // ---- 层 0：奏法记号字形（延长记号等）。点状标记让弧，不是弧让它：`rank` 最大、层内最后定；不为连音括线让 ----
-  // ---- 层 1：转调标签、和弦、注释（同层异类按 `rank` 让：转调最先定、注释最后） ----
+  // ---- 层 1：和弦、注释（注释 `rank` 在后，压到和弦就让）；层 2：转调标签 ----
   for (const it of items) {
     const el = it.element;
     const dy = it.dy ?? 0;
@@ -181,8 +181,8 @@ export function placeBand(
         const x = it.x - nh * 0.35;
         const t: PlacedText = { kind: "key-label", el, text: el.keyLabel, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
         texts.push(t);
-        // 与和弦同在一个音上时转调占贴音那一行、和弦让到它之上（用户定：转调优先）：同在第 1 层、`rank` 排在和弦之前
-        boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 1, rank: -1, kind: "key", ...lower(it) });
+        // 第 2 层：与和弦同在时转调标记在外（上）、和弦在内贴音（用户定，2026-10-14：全局信息在外、局部信息在内）
+        boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 2, kind: "key", ...lower(it) });
       }
     } else if (el.kind === "sustain" && el.chord) {
       // 长音里换的和弦印在增时线上方：增时线比数字矮，基准取数字墨迹顶（同 `addHarmony` 的 min）
@@ -199,6 +199,8 @@ export function placeBand(
     // 被同一个下层对象压住的和弦整排取齐（`spread`）
     boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 1, rank: 0, kind: "chord", spread: "chord", ...(dy ? { skipKinds: LOWER_ROW } : {}) });
   }
+
+  spreadChords(items, texts, boxes, m, width);
 
   // ---- 层 1.5：松叶（用户定：松叶在和弦之上——起始落点贴音，跨度里有和弦、注释撞上才抬到它们之上） ----
   const hairpinGap = Math.max(gap, nh * 0.3) + m.style.stroke.hairpin / 2;
@@ -220,7 +222,29 @@ export function placeBand(
   }
 
   // ---- 堆叠，dy 回填 ----
-  const lift = stackUpperBand(boxes, gap);
+  // **同一行的和弦在同一条基线上**（用户定）：先都摆到最高的那个起始基线，堆叠里哪个被抬了，整行跟着抬到它那儿再排一遍，到不再变为止。
+  // 并排块下行（主旋律下移那一段）上的和弦不算在内
+  const boxOf = new Map(boxes.map((b) => [b.key, b]));
+  const laneChords = texts.filter((t) => t.kind === "chord" && !boxOf.get(t)?.skipKinds?.includes("split"));
+  let lift = new Map<object, number>();
+  if (laneChords.length > 0) {
+    let lane = Math.min(...laneChords.map((t) => t.y));
+    for (let iter = 0; iter < 6; iter++) {
+      for (const t of laneChords) {
+        const d = lane - t.y;
+        if (d === 0) continue;
+        t.y += d;
+        t.ink = t.ink.offset(0, d);
+        const b = boxOf.get(t)!;
+        b.top += d;
+        b.bottom += d;
+      }
+      lift = stackUpperBand(boxes, gap);
+      const next = Math.min(...laneChords.map((t) => t.y + (lift.get(t) ?? 0)));
+      if (next >= lane - 0.01) break;
+      lane = next;
+    }
+  } else lift = stackUpperBand(boxes, gap);
   const textKeys = new Set<object>(texts);
   const markKeys = new Set<object>(marks);
   for (const b of boxes) {
@@ -242,9 +266,9 @@ export function placeBand(
     }
   }
 
-  placeDirections(items, boxes, texts, m, ink, width);
+  const groups = placeDirections(items, boxes, texts, m, ink, width);
   placeCue(items, layers, boxes, m);
-  placeEndings(items, marks, boxes, m);
+  placeEndings(items, marks, boxes, groups, m);
   // 松叶、房号的 y 上面是按声部基线算的（已含下行的 dy）；compose 画记号时还要再加 `mk.dy`，这里扣回去
   for (const mk of marks) {
     if (mk.y !== undefined && mk.dy !== undefined && mk.mark.type !== "slur" && mk.mark.type !== "tuplet") mk.y -= mk.dy;
@@ -280,7 +304,8 @@ export function placeBand(
  */
 function placeDirections(
   items: readonly PlacedItem[], boxes: BandItem[], texts: PlacedText[], m: JianpuGrid, ink: InkMeasurer, width: number,
-): void {
+): Map<object, PlacedText[]> {
+  const out = new Map<object, PlacedText[]>();
   const nh = m.ink.noteHeight;
   const gap = m.style.vertical.slurGap;
   const size = textSize(m);
@@ -349,9 +374,84 @@ function placeDirections(
       const barTop = barlineSpan(m).top + barRight.dy;
       if (gBottom() > barTop - gap) move(0, barTop - gap - gBottom());
     }
+    // 定完（含抬过线顶）再查一遍底下那一层：退路落点（本行没有和弦）和抬过线顶这两步都不看弧、松叶，
+    // 真压上了就抬到它们之上一道空（`Fine` 压在松叶上）
+    {
+      const x0 = gx(), x1 = x0 + gw;
+      let lowTop = Infinity;
+      for (const b of boxes) {
+        if (b.layer === 1 || b.layer === 2 || b.x1 <= x0 || b.x0 >= x1) continue;
+        const t = b.topAt ? b.topAt(x0, x1) : b.top;
+        if (t < gBottom() && b.bottom > gTop()) lowTop = Math.min(lowTop, t);
+      }
+      // 底下的音符那一摞（高音点、临时记号）：力度字形有下伸（`mp` 的 p），按基线摆会压到音上
+      for (const o of items) {
+        if (o.element.kind === "barline" || o.x + nh / 2 <= x0 || o.x - nh / 2 >= x1) continue;
+        const t = entryTop(o.element, m) + (o.dy ?? 0);
+        if (t - gap < gBottom()) lowTop = Math.min(lowTop, t);
+      }
+      if (Number.isFinite(lowTop)) move(0, lowTop - gap - gBottom());
+    }
     if (level > 0) move(0, -level * m.note.levelStep);
     texts.push(...group);
     boxes.push({ key: group[0]!, x0: gx(), x1: gx() + gw, top: gTop(), bottom: gBottom(), layer: 1, kind: "direction" });
+    out.set(group[0]!, group);
+  }
+  return out;
+}
+
+/**
+ * **和弦横向让位**（搬 `Line.spreadChordsHorizontally`，堆叠之前跑）：和弦按音符居中，宽的会压到前面那条小节线
+ * （线头比数字高，正好戳进字里）或顶到下一个和弦——沿 x 让，不往上摞（摞起来一高一低更难看）。
+ *   - 不压小节线：小节头一个音上的和弦左半截探过前一条线，整块挪到线的右边；
+ *   - 挨上前一个和弦就往右挪，挪动量封顶 1.2 个和弦字号（挪过头就成了下一个音的和弦）；
+ *   - 一个字都不许出版心：从右往左收回来，收到贴着前一个和弦为止；左缘同理。
+ */
+function spreadChords(items: readonly PlacedItem[], texts: PlacedText[], boxes: BandItem[], m: JianpuGrid, width: number): void {
+  const size = m.style.size.chord;
+  if (size <= 0) return;
+  const right = width || Infinity;
+  const gap = size * 0.28;
+  const limit = size * 1.2;
+  const chords = texts.filter((t) => t.kind === "chord");
+  if (chords.length === 0) return;
+  const boxOf = new Map(boxes.map((b) => [b.key, b]));
+  const shift = (t: PlacedText, dx: number): void => {
+    t.x += dx;
+    t.ink = t.ink.offset(dx, 0);
+    const b = boxOf.get(t);
+    if (b) {
+      b.x0 += dx;
+      b.x1 += dx;
+    }
+  };
+  const top = barlineSpan(m).top;
+  const bars = items.filter((it) => it.element.kind === "barline").map((it) => {
+    const b = barlineBox(it.element as BarlineElement, m);
+    return b ? { l: it.x - b.left, r: it.x + b.right, top: top + (it.dy ?? 0) } : null;
+  }).filter((b): b is { l: number; r: number; top: number } => b !== null);
+  for (const c of chords) {
+    const hit = bars.find((bar) => bar.r > c.ink.left - gap && bar.l < c.ink.right
+      && (bar.l + bar.r) / 2 < (c.ink.left + c.ink.right) / 2 && bar.top < c.ink.bottom);
+    if (hit) shift(c, hit.r + gap - c.ink.left);
+  }
+  chords.sort((a, b) => a.ink.left - b.ink.left);
+  // 左缘先收进版心（行首那个居中后探出左边），再逐个让——收在后面的话会把它推到下一个和弦身上（`Cm` 挤着 `E♭/G`）
+  if (chords[0]!.ink.left < 0) shift(chords[0]!, -chords[0]!.ink.left);
+  for (let i = 1; i < chords.length; i++) {
+    const prev = chords[i - 1]!, cur = chords[i]!;
+    const need = prev.ink.right + gap - cur.ink.left;
+    if (need <= 0) continue;
+    const dx = Math.min(need, limit, Math.max(0, right - cur.ink.right));
+    if (dx > 0) shift(cur, dx);
+  }
+  for (let i = chords.length - 1; i >= 0; i--) {
+    const cur = chords[i]!;
+    const prevX1 = i > 0 ? chords[i - 1]!.ink.right : 0;
+    let dx = 0;
+    if (cur.ink.right > right) dx = Math.max(right - cur.ink.right, prevX1 + gap - cur.ink.left);
+    if (cur.ink.left + dx < 0) dx = -cur.ink.left;
+    if (dx !== 0) shift(cur, dx);
   }
 }
 
@@ -437,7 +537,9 @@ function placeCue(items: readonly PlacedItem[], layers: PlacedLayer[], boxes: Ba
  * 竖脚与房号画在左端外侧）、区间内小节线顶，取最高，再往上「0.7 个房号字号 + 竖脚」（搬 `Line.addEnding`）。
  * 字号、竖脚仍照原样文档的画法（小节线高的一半，compose/marks.ts）；改走尺子是子计划 4.2。
  */
-function placeEndings(items: readonly PlacedItem[], marks: PlacedMark[], boxes: BandItem[], m: JianpuGrid): void {
+function placeEndings(
+  items: readonly PlacedItem[], marks: PlacedMark[], boxes: BandItem[], directions: ReadonlyMap<object, PlacedText[]>, m: JianpuGrid,
+): void {
   const voltas = marks.filter((mk) => mk.mark.type === "volta");
   if (voltas.length === 0) return;
   const H = m.style.vertical.barlineHeight;
@@ -454,7 +556,8 @@ function placeEndings(items: readonly PlacedItem[], marks: PlacedMark[], boxes: 
         above = Math.min(above, entryTop(it.element, m) + dy);
       }
     }
-    const t = bandTop(boxes, mk.x0 - labelSize, mk.x1);
+    // 力度/跳转字不算：房里的 `Fine`、`D.S.` 排到房号线之上（用户定），车道不为它们抬
+    const t = bandTop(boxes.filter((b) => b.kind !== "direction"), mk.x0 - labelSize, mk.x1);
     if (t !== null) above = Math.min(above, t);
   }
   if (!Number.isFinite(above)) above = -m.ink.noteHeight / 2;
@@ -464,6 +567,21 @@ function placeEndings(items: readonly PlacedItem[], marks: PlacedMark[], boxes: 
   for (const mk of voltas) {
     mk.y = top;
     boxes.push({ key: mk, x0: mk.x0, x1: mk.x1, top: top - lw / 2, bottom: top + drop, layer: 3, kind: "ending" });
+  }
+  // 房里（含竖脚、房号那一截）的力度/跳转字抬到房号线之上一道空
+  const gap = m.style.vertical.slurGap;
+  for (const b of boxes) {
+    if (b.kind !== "direction") continue;
+    const group = directions.get(b.key);
+    if (!group || !voltas.some((mk) => b.x1 > mk.x0 - labelSize && b.x0 < mk.x1)) continue;
+    const d = top - lw / 2 - gap - b.bottom;
+    if (d >= 0) continue;
+    for (const t of group) {
+      t.y += d;
+      t.ink = t.ink.offset(0, d);
+    }
+    b.top += d;
+    b.bottom += d;
   }
 }
 

@@ -64,6 +64,25 @@ export function barlineBox(el: BarlineElement, m: JianpuGrid): { left: number; r
   return { left: g.width / 2 - lo, right: hi - g.width / 2, first: bs.spec.repeatBackward ? 2 * r : span.bottom - span.top };
 }
 
+/** 小节线第一根、最后一根竖线的线心（相对锚点）：房号竖脚对齐线位（`band.ts` / `marks.ts`，同简谱引擎 `Line.endingSpan`）。隐藏线 null。 */
+export function barlineLines(el: BarlineElement, m: JianpuGrid): { first: number; last: number } | null {
+  const bs = puBarlineSpec(el);
+  if (!bs) return null;
+  const span = barlineSpan(m);
+  const g = new BarlineGlyph(bs.spec, bs.final, {
+    top: span.top,
+    bot: span.bottom,
+    light: m.style.stroke.barline,
+    heavy: m.style.stroke.finalBarline,
+    dotRadius: m.style.dot.repeat,
+    color: 0,
+  });
+  const first = g.lines[0];
+  const last = g.lines[g.lines.length - 1];
+  if (!first || !last) return null;
+  return { first: first.x - g.width / 2, last: last.x - g.width / 2 };
+}
+
 /** 行中转拍的拍号占位（含前后两格），与 compose/barline.ts 画的同一个宽。 */
 export function meterAdvance(meter: Meter, m: JianpuGrid): number {
   const pad = m.style.size.note * TIME_SIG_PAD_EM;
