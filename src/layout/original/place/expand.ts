@@ -199,6 +199,7 @@ function rowOf(
   pass: Pass, a: number, b: number, rows: readonly RowView[], lyricsOf: readonly (readonly LyricLine[])[],
   cursorOf: readonly (readonly number[])[], marks: readonly LogicalMark[], posOf: ReadonlyMap<string, number>,
   unrolled: boolean, idOf: Map<MusicElement, unknown>, owners: Map<LyricSyllable, unknown>,
+  bars: { plain: boolean; finalAt: number },
 ): RowView {
   const first = rows[pass.slots[a]!.row]!;
   const elements: MusicElement[] = [];
@@ -209,6 +210,15 @@ function rowOf(
     const orig = src.elements[s.idx]!;
     let el = bare(orig);
     if (unrolled && el.kind === "barline") el = plainBarline(el);
+    // 小节线的样式（同简谱引擎）：`.jpwabc` 不认样式、一律细线，只有整首最后一条画终止线；
+    // 其余格式照源，整首最后一条是细线的也补成终止线（`Barline` 的 `final`）
+    if (el.kind === "barline") {
+      const repeat = el.type.startsWith("repeat");
+      let type = el.type;
+      if (bars.plain && !repeat && type !== "invisible") type = "normal";
+      if (i === bars.finalAt && type === "normal") type = "end";
+      if (type !== el.type) el = { ...el, type };
+    }
     if (el !== orig) {
       const id = idOf.get(orig);
       if (id !== undefined) idOf.set(el, id);
@@ -460,10 +470,17 @@ export function expandSong(
   const pages: PageView[] = [];
   let system = 0;
   const passes = layout ? passesByDur(slices, rows, plan, layout.desc, layout.simple) : passesOf(slices, rows, plan, breaks);
+  // 整首最后一条小节线（末遍末个符号是小节线时）：画终止线
+  const lastPass = passes[passes.length - 1];
+  const bars = (pass: Pass): { plain: boolean; finalAt: number } => {
+    const end = pass.slots.length - 1;
+    const tail = pass === lastPass ? pass.slots[end] : undefined;
+    return { plain: exactBreaks, finalAt: tail && rows[tail.row]!.elements[tail.idx]!.kind === "barline" ? end : -1 };
+  };
   for (const pass of passes) {
     const posOf = new Map<string, number>();
     pass.slots.forEach((s, i) => posOf.set(`${s.row}:${s.idx}`, i));
-    const whole = rowOf(pass, 0, pass.slots.length, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners);
+    const whole = rowOf(pass, 0, pass.slots.length, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners, bars(pass));
     const lines = fillLines(whole, pass.breaks, m, ink, width, meter);
     // 一遍一页起头；遍内源里的换页另起一页
     let groups: SystemView[] = [];
@@ -477,7 +494,7 @@ export function expandSong(
         index: groups.length,
         texts: [],
         system: system++,
-        voices: [rowOf(pass, l.start, end, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners)],
+        voices: [rowOf(pass, l.start, end, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners, bars(pass))],
       });
     });
     if (groups.length > 0) pages.push({ index: pages.length, groups });
