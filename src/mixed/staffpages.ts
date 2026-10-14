@@ -10,7 +10,7 @@ import { Matrix33 } from "../common/geom";
 import { Font } from "../layout/font";
 import { Group, TextFrame } from "../layout/pageitem";
 import { harmonyBand, LCR, StaffLayout, Notation, ScoreCredit, Sys, type MeasureText, type TextBlock } from "./model";
-import { drawSystem } from "./render";
+import { drawSystem, endingPlace, harmonyWidthOf } from "./render";
 
 // -----------------------------------------------------------------------
 // formatMixedScore（formatScorePAO port, without per-song hacks）
@@ -36,6 +36,26 @@ function textInkHeight(t: TextBlock): number {
   }
   return h;
 }
+/** 文字块墨迹的横向范围（相对块左缘）：单行逐段累计前进宽、首尾段取字形墨迹；多行与乐谱字体段照前进宽 */
+function textInkSpan(t: TextBlock): [number, number] {
+  const w = t.width();
+  if (t.data.some((it) => it.text === "\n")) return [0, w];
+  let x = 0;
+  let l: number | null = null;
+  let r = 0;
+  for (const it of t.data) {
+    x += it.padBefore ?? 0;
+    const adv = it.font.measureText(it.text);
+    if (it.text.trim()) {
+      const b = it.music ? { left: 0, right: adv } : it.font.charBound(it.text);
+      if (l === null) l = x + b.left;
+      r = x + b.right;
+    }
+    x += adv;
+  }
+  return l === null ? [0, w] : [l, r];
+}
+
 /** 五线谱档：谱表内容上沿到和弦符号墨迹底的净空（tenths） */
 const HARMONY_STAFF_GAP = 6;
 
@@ -87,9 +107,30 @@ export function placeAboveStaff(score: StaffLayout, mixed: boolean): void {
       // 自动铺排的速度/文字记号：缺省高度只让开了五线谱。混排时简谱层（连同其上的弧、高音点）在它上面，抬过去；
       // 自动铺排时和弦行也在它下面，再抬过和弦。带 default-y 的原文不动（照 musicpp）。
       let floor = mixed ? -st.minY + eng.mixStaffDist + eng.mixStaffHeight + MIXED_TEXT_CLEAR : -st.minY + MIXED_TEXT_CLEAR;
-      if (st.hasHarmony) floor = Math.max(floor, st.harmonyY + 3 + harmTop + MIXED_TEXT_CLEAR / 2);
       // 横向撞上的（曲首的速度记号与 `mp` 落在同一拍上）往上摞：y 是谱表之上的高度，大的在上
       const placed: { x0: number; x1: number; y0: number; y1: number }[] = [];
+      if (st.hasHarmony) {
+        if (score.autoLayout) floor = Math.max(floor, st.harmonyY + 3 + harmTop + MIXED_TEXT_CLEAR / 2);
+        else {
+          // 带坐标的谱：文字与和弦同一基线（005「（副歌）」用户定 2026-10-14：贴近音符、约与和弦同高），
+          // 横向撞上和弦才往上摞
+          floor = Math.max(floor, st.harmonyY + 3);
+          for (const m of sys.measures) {
+            for (const h of p.measures[m.index]?.harmonies ?? []) {
+              const w = harmonyWidthOf(score, h);
+              const cx = m.xpos() + h.x + 6.5;
+              placed.push({ x0: cx - w / 2, x1: cx + w / 2, y0: h.y + harmBot, y1: h.y + harmTop });
+            }
+          }
+        }
+      }
+      // 房号线（连同房号）：文字摞到它上面（018 的 Fine、D.S. 原先压在一房二房的括线上）
+      for (const e of p.endings) {
+        if (!sys.overlap(e)) continue;
+        const { left, right, yPos } = endingPlace(e, sys, mixed);
+        const y = yPos ?? 0;
+        placed.push({ x0: left, x1: right, y0: 30 - y - 20, y1: 50 - y });
+      }
       // **速度记号最后排**（摞在最上面）：力度、文字记号贴着谱面，速度是整段的标题性记号，
       // 按出现先后摞的话曲首的 `♩=88` 会被同一拍上的 `mp` 压到下面去
       const isTempo = (t: MeasureText): boolean => !!t.src && [t.src, ...(t.src.more ?? [])].some((d) => d.type === "metronome");
@@ -99,10 +140,14 @@ export function placeAboveStaff(score: StaffLayout, mixed: boolean): void {
         // 原文带 default-y 的谱表上方文字（「（副歌）」）也只往上抬不往下压：混排时简谱层插在谱表与它之间，
         // 五线谱档和弦被抬离符干后原高度会压在和弦行上（006）
         if (t.staff !== 0 || (!t.autoY && !(t.y > 0))) continue;
-        if (t.y < floor) t.y = floor;
+        // 带坐标的谱：原文高过和弦行的文字也落回和弦那一层（005「（副歌）」用户定：与和弦大致同高），撞上再摞；速度记号不动
+        if (t.y < floor || (!score.autoLayout && st.hasHarmony && !isTempo(t))) t.y = floor;
         const w = t.width();
-        const x0 = m.xpos() + t.x - (t.justify === LCR.Center ? w / 2 : t.justify === LCR.Right ? w : 0);
-        const x1 = x0 + w;
+        const left = m.xpos() + t.x - (t.justify === LCR.Center ? w / 2 : t.justify === LCR.Right ? w : 0);
+        // 横向按墨迹量：全角括号「（」「）」前进宽里一半是空白，按前进宽量「（副歌）」就把旁边的和弦也算成撞上了（008）
+        const [inkL, inkR] = textInkSpan(t);
+        const x0 = left + inkL;
+        const x1 = left + inkR;
         const h = textInkHeight(t);
         for (let again = true; again; ) {
           again = false;

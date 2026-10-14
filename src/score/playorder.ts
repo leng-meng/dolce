@@ -176,7 +176,47 @@ export function playOrderOf(parts: readonly PlayPart[], jumps: PlayJumps): PlayO
   if (repeatByVerse && !hasVolta && !hasJump) rep.repeatByLyric();
   const out = hasJump ? perVerse(rep.result, rep.getPassCountByLrc(0, measures.length)) : expandVoltaByVerse(parts[0]!, rep.result) ?? rep.result;
   if (hasJump) labelPasses(parts, out);
+  if (!hasVolta && !hasJump) implicitVoltas(parts, out);
   return { measures: out, isSimple, hasRepeat: measures.some((m) => m.repeatBackward) };
+}
+
+/** 没画房号、按词看出来的一房二房（testdata《爱是不保留》）：`:|` 前末 k 小节只写了第 1 段（第 p 遍不唱），
+ *  `:|` 后紧接的 k 小节只写了第 p 段、没有第 1 段——第 p 遍唱到 `:|` 前 k 小节就跳过去唱后面那 k 小节（二房），
+ *  再往后才回到第 1 遍。曲尾 `:|` 后只写末段的结尾同理。原先第 p 遍照唱一房（没词）、二房按第 1 遍唱（也没词）。 */
+function implicitVoltas(parts: readonly PlayPart[], items: PlayItem[]): void {
+  const n = parts[0]!.measures.length;
+  const nums: Set<number>[] = [];
+  for (let i = 0; i < n; i++) {
+    const s = new Set<number>();
+    for (const p of parts) for (const v of verseNumbers(p, i, i + 1)) s.add(v);
+    nums.push(s);
+  }
+  for (let i = 0; i + 1 < items.length; i++) {
+    const a = items[i]!;
+    const b = items[i + 1]!;
+    const p = a.pass;
+    const e = a.end;
+    if (p < 2 || b.mid !== e || b.pass === p || a.limit !== -1 || b.skip > 0) continue;
+    let k = 0;
+    while (
+      k + 1 < a.end - a.mid && e + k < b.end &&
+      !nums[e - k - 1]!.has(p) && nums[e - k - 1]!.has(1) &&
+      nums[e + k]!.has(p) && !nums[e + k]!.has(1)
+    ) k++;
+    if (k === 0) continue;
+    a.end = e - k;
+    const v = new PlayItem();
+    v.mid = e;
+    v.end = e + k;
+    v.pass = p;
+    if (b.mid + k >= b.end) {
+      v.endOfPass = b.endOfPass;
+      items.splice(i + 1, 1, v);
+    } else {
+      b.mid += k;
+      items.splice(i + 1, 0, v);
+    }
+  }
 }
 
 /** `D.C. al Fine` / `D.S. al Fine` 碰上多段词（用户定 2026-10-14：每段一遍、各自回到 Fine）。

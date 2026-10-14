@@ -385,7 +385,8 @@ function pageByRows(lines: Array<{ start: number; page: boolean }>, refrainAt: (
     let a = s;
     while (e - a > MAX_ROWS) {
       let b = -1;
-      for (let k = Math.min(a + MAX_ROWS, e - 1); k >= a + 2; k--) if (refrainAt(k)) { b = k; break; }
+      // 副歌前换页：前后两页都至少 2 行（爱是不保留 5 行原先断成 4 + 1）
+      for (let k = Math.min(a + MAX_ROWS, e - 2); k >= a + 2; k--) if (refrainAt(k)) { b = k; break; }
       if (b < 0) {
         const pages = Math.ceil((e - a) / MAX_ROWS);
         b = a + Math.ceil((e - a) / pages);

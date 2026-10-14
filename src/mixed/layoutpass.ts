@@ -795,6 +795,13 @@ function updateDataXPos(score: StaffLayout): void {
       // `<harmony relative-x>`：和弦相对拍位的横向微调（歌本改谱脚本写进 XML 的那种）
       for (const h of md.harmonies) h.x = mif.getEntPos(h.offset) + (xmlPos(h.src)?.relativeX ?? 0);
       for (const t of md.textBlocks) {
+        // 右对齐的跳转字（Fine、D.S.、D.C.、To Coda）右缘贴本小节的右小节线（用户定 2026-10-14，018）：
+        // 原文的 default-x 是按原排版的小节宽给的，重排后小节宽变了，照它画就探出线外
+        if (t.data.length && t.justify === LCR.Right && JUMP_WORD.test(t.data.map((d) => d.text).join(""))) {
+          t.x = mif.width - t.width();
+          t.justify = LCR.Left;
+          continue;
+        }
         if (!t.data.length || !t.relative) continue;
         // **写在小节末尾的（`D.S.` / `Fine`）与小节线右对齐**（同简谱 `layout.ts::addDirections`）：
         // 小节末的拍位是最后一个音之后的数据区末端，照它左对齐就从线上探出去。只管自动铺排、
@@ -811,6 +818,9 @@ function updateDataXPos(score: StaffLayout): void {
     }
   }
 }
+
+/** 写在小节末的跳转字 */
+const JUMP_WORD = /^\s*(Fine|D\.\s*[CS]\..*|To\s*Coda.*)\s*$/i;
 
 // ---- 系统/分页/谱表间距：读 `<print>` 与 `<staff-details>` 的那三步 ----
 // 输入由 `layout.ts` 从 `ScoreDoc` 拼，判据原样。

@@ -41,6 +41,8 @@ import {
   slurEnds,
   tiedEnds,
   harmonyBand,
+  type HarmonyLayout,
+  type StaffLayout,
 } from "./model";
 import { Font } from "../layout/font";
 import { addEndingBracket } from "../engrave/ending";
@@ -529,7 +531,9 @@ function drawTuplet(eng: MixedOptions, container: Group, obj: Tuplet): void {
 /** 混排里房号竖脚底离简谱层原点的空（高音点 + 简谱连音弧）。 */
 const MIXED_ENDING_GAP = 16;
 
-function drawEnding(container: Group, obj: Ending, sys: Sys, mixed: boolean): void {
+/** 一个房在本系统里的横向范围与 `yPos`（`yPos − 30` 是房号基线、竖脚底，再往上 20 是括线；null = 缺省位置 0）。
+ *  谱表上方文字避让房号线也用这一份（`staffpages.ts::placeAboveStaff`）。 */
+export function endingPlace(obj: Ending, sys: Sys, mixed: boolean): { left: number; right: number; yPos: number | null; startsHere: boolean; endsHere: boolean } {
   // 房跨系统：起点在前面的系统里，这一段从本系统首小节画起、不画左脚不印房号；终点在后面的系统里，画到本系统末小节、不封口
   const startsHere = sys.contains(obj.startTick);
   const endsHere = sys.contains(obj.endTick);
@@ -546,12 +550,13 @@ function drawEnding(container: Group, obj: Ending, sys: Sys, mixed: boolean): vo
 
   // yPos − 30 是房号数字的基线、再往上 20 是括线
   let yPos: number | null = null;
-  if ((mixed || scr.autoLayout) && sys.staves.length > 0) {
+  // 带坐标的五线谱档也定：和弦行按谱面内容抬高之后（`placeAboveStaff`），缺省位置的房号线会压在和弦上（018）
+  if (sys.staves.length > 0) {
     const eng = scr.options;
     const st = sys.staves[0];
     if (st.hasHarmony) {
-      // 自动铺排的和弦按真实字高（约 18 tenths）：数字基线放到和弦顶上方 4；带坐标的谱照 musicpp
-      yPos = scr.autoLayout ? -(st.harmonyY + 3 + harmonyBand(scr)[0]) + 26 : -st.harmonyY + 12;
+      // 和弦按真实字高（约 18 tenths）：数字基线放到和弦顶上方 4；带坐标的混排照 musicpp
+      yPos = mixed && !scr.autoLayout ? -st.harmonyY + 12 : -(st.harmonyY + 3 + harmonyBand(scr)[0]) + 26;
     } else if (mixed) {
       // 简谱层的原点是 `st.minY − mixStaffDist − mixStaffHeight`（同 `jianpuoverlay.ts::drawJianpuOverlay`）。
       // 原先这里把 `minY` 的符号写反了：谱表越往上伸（minY 越负）房号反而越往下掉，压进简谱层。
@@ -563,6 +568,12 @@ function drawEnding(container: Group, obj: Ending, sys: Sys, mixed: boolean): vo
     }
   }
 
+  return { left, right, yPos, startsHere, endsHere };
+}
+
+function drawEnding(container: Group, obj: Ending, sys: Sys, mixed: boolean): void {
+  const { left, right, yPos, startsHere, endsHere } = endingPlace(obj, sys, mixed);
+  const scr = sys.score;
   const eng = scr.options;
   const y0 = -30.0;
   const vlen = 20.0;
@@ -736,6 +747,14 @@ export function drawLrc(
 
 // -----------------------------------------------------------------------
 // drawHarmony（render.cpp::drawHarmony, simplified: plain text）
+
+/** 一个和弦符号画出来的宽（同 `drawHarmony` 的字体与分段），谱表上方文字避让用 */
+export function harmonyWidthOf(score: StaffLayout, h: HarmonyLayout): number {
+  const eng = score.options;
+  const fontsz = eng.harmonySize / (score.scaling > 0 ? score.scaling : 0.45);
+  const segs = eng.chordPlain ? chordTextSegs(h.asPlainText(eng.accidentalSide), true, eng.accidentalSide) : h.asText(eng.accidentalSide);
+  return harmonyWidth(segs, new Font(eng.wordFont, fontsz), new Font("Bravura Text", fontsz));
+}
 
 export function drawHarmony(
   eng: MixedOptions,
