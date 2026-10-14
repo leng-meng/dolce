@@ -11,7 +11,7 @@ import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
 import { tupletDigits } from "../../../engrave/tuplet";
 import { accidentalRise, type AccidentalKind } from "../../../engrave/accidental";
 import { stackBottom, stackTop as stackTopOf } from "../../../engrave/stack";
-import { barlineSpan, jianpuSlurStyle, type JianpuGrid } from "../metrics";
+import { barlineSpan, bracketLineWidth, jianpuSlurStyle, type JianpuGrid } from "../metrics";
 import type { InkMeasurer, PlacedItem, PlacedLayer, PlacedMark, PlacedText } from "./model";
 import { graceTop, noteBeams, stackTop } from "./vertical";
 import { barlineBox } from "./spacing";
@@ -118,7 +118,7 @@ export function placeBand(
     let numCy: number;
     if (m.style.look.tupletStyle === "bracket") {
       const foot = m.style.vertical.bracketFoot > 0 ? m.style.vertical.bracketFoot * 0.55 : m.style.size.note * 0.25;
-      const lw = m.style.stroke.bracket > 0 ? m.style.stroke.bracket : 1;
+      const lw = bracketLineWidth(m);
       const ly = mk.y + dy - foot;
       lineTop = ly - lw / 2;
       numCy = ly;
@@ -167,22 +167,36 @@ export function placeBand(
       // 和弦/注释/转调标签的起始基线：本音那一摞（含临时记号、倚音、奏法记号）的墨迹顶之上 `chordGap`（`NoteEntry.addHarmony`）
       const base = top - m.style.vertical.chordGap + dy;
       if (el.chord) pushChord(el, it.x, base, el.chord, dy);
-      else if (el.annotation) {
-        // 注释：子计划 4.3 改按段落词排；这里先与和弦同一行，压到和弦就让到它之上（同层异类，`rank` 在和弦之后）
-        const r = ink.text(el.annotation, "term");
-        const x = it.x - r.advance / 2;
-        const t: PlacedText = { kind: "section-word", el, text: el.annotation, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
-        texts.push(t);
-        boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 1, rank: 1, kind: "section-word", ...lower(it) });
-      }
+      let key: PlacedText | null = null;
       if (el.keyLabel) {
         // 左缘对齐数字左缘、往右写——居中的话行首那个会伸出左边距
         const r = ink.text(el.keyLabel, "key-label");
         const x = it.x - nh * 0.35;
-        const t: PlacedText = { kind: "key-label", el, text: el.keyLabel, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
-        texts.push(t);
+        key = { kind: "key-label", el, text: el.keyLabel, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
+        texts.push(key);
         // 第 2 层：与和弦同在时转调标记在外（上）、和弦在内贴音（用户定，2026-10-14：全局信息在外、局部信息在内）
-        boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 2, kind: "key", ...lower(it) });
+        boxes.push({ key, x0: key.ink.left, x1: key.ink.right, top: key.ink.top, bottom: key.ink.bottom, layer: 2, kind: "key", ...lower(it) });
+      }
+      if (!el.chord && el.annotation) {
+        // 注释：子计划 4.3 改按段落词排；这里先与和弦同一行，压到和弦就让到它之上（同层异类，`rank` 在和弦之后）
+        const r = ink.text(el.annotation, "term");
+        let x = it.x - r.advance / 2;
+        let layer = 1;
+        let kind = "section-word";
+        if (key) {
+          // 同一个音上还有转调标记：排在它右边同一行（用户定：避开转调，要么在右、要么在上）；
+          // 本小节里放不下（越过下一条小节线或出版心）就摞到它之上
+          const bar = items.find((o) => o.element.kind === "barline" && o.x > it.x);
+          const at = key.ink.right + m.style.size.chord * 0.4 - r.ink.left;
+          if (at + r.ink.right <= Math.min(bar ? bar.x - nh * 0.3 : Infinity, width || Infinity)) {
+            x = at;
+            layer = 2;
+            kind = "key"; // 与转调标记同一行，同类不互避
+          } else layer = 2.2;
+        }
+        const t: PlacedText = { kind: "section-word", el, text: el.annotation, face: "text", size: m.style.size.chord, x, y: base, ink: r.ink.offset(x, base) };
+        texts.push(t);
+        boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer, rank: 1, kind, ...lower(it) });
       }
     } else if (el.kind === "sustain" && el.chord) {
       // 长音里换的和弦印在增时线上方：增时线比数字矮，基准取数字墨迹顶（同 `addHarmony` 的 min）
@@ -533,8 +547,12 @@ function placeCue(items: readonly PlacedItem[], layers: PlacedLayer[], boxes: Ba
 }
 
 /**
- * **房号**：全行同一条车道（一房二房的横线是一条）。高度 = 房区间内音符墨迹顶、带顶（区间左边多看一个房号字号：
- * 竖脚与房号画在左端外侧）、区间内小节线顶，取最高，再往上「0.7 个房号字号 + 竖脚」（搬 `Line.addEnding`）。
+ * **房号**：全行同一条车道（一房二房的横线是一条）。按房的各段分别让（简谱引擎 `Line.addEnding` 是整段一律让「房号 + 竖脚」，
+ * 并排块上行这类高东西一进区间整条就抬得老高——同一首歌二房）：
+ *   - 左端房号与左竖脚垂下的那一截（区间左边多看一个房号字号）：下面的墨迹顶之上「0.7 个房号字号 + 竖脚」；
+ *   - 其余横线底下：带顶、音符墨迹顶之上一道空；
+ *   - 竖脚落在小节线上：线顶之上「竖脚 + 一道空」，区间里的其它小节线同横线。
+ * 力度/跳转字不算（房里的 `Fine`、`D.S.` 反过来排到房号线之上，用户定）。
  * 字号、竖脚仍照原样文档的画法（小节线高的一半，compose/marks.ts）；改走尺子是子计划 4.2。
  */
 function placeEndings(
@@ -545,31 +563,42 @@ function placeEndings(
   const H = m.style.vertical.barlineHeight;
   const labelSize = H * 0.5;
   const drop = H * 0.5;
+  const gap = m.style.vertical.slurGap;
+  const lw = bracketLineWidth(m);
   const span = barlineSpan(m);
-  let above = Infinity;
-  for (const mk of voltas) {
+  const band = boxes.filter((b) => b.kind !== "direction");
+  /** [x0, x1] 里音符那一摞与带的最高墨迹 */
+  const inkTop = (x0: number, x1: number): number => {
+    let t = bandTop(band, x0, x1) ?? Infinity;
     for (const it of items) {
-      const dy = it.dy ?? 0;
-      if (it.element.kind === "barline") {
-        if (it.x >= mk.x0 - 0.5 && it.x <= mk.x1 + 0.5) above = Math.min(above, span.top + dy);
-      } else if (it.x >= mk.x0 && it.x <= mk.x1 && !(it.element.kind === "note" && it.element.hidden)) {
-        above = Math.min(above, entryTop(it.element, m) + dy);
-      }
+      if (it.element.kind === "barline" || it.x < x0 || it.x > x1 || (it.element.kind === "note" && it.element.hidden)) continue;
+      t = Math.min(t, entryTop(it.element, m) + (it.dy ?? 0));
     }
-    // 力度/跳转字不算：房里的 `Fine`、`D.S.` 排到房号线之上（用户定），车道不为它们抬
-    const t = bandTop(boxes.filter((b) => b.kind !== "direction"), mk.x0 - labelSize, mk.x1);
-    if (t !== null) above = Math.min(above, t);
+    return t;
+  };
+  let top = Infinity;
+  for (const mk of voltas) {
+    const leftFoot = !mk.openLeft;
+    const rightFoot = !mk.openRight && mk.mark.openEnd !== true;
+    if (leftFoot) {
+      const labelW = mk.mark.caption ? labelSize * (0.4 + 0.6 * mk.mark.caption.length) : 0;
+      top = Math.min(top, inkTop(mk.x0 - labelSize, mk.x0 + labelW + labelSize * 0.3) - labelSize * 0.7 - drop);
+    }
+    top = Math.min(top, inkTop(mk.x0, mk.x1) - gap - lw / 2);
+    for (const it of items) {
+      if (it.element.kind !== "barline" || it.x < mk.x0 - 2 || it.x > mk.x1 + 2) continue;
+      const barTop = span.top + (it.dy ?? 0);
+      const foot = (leftFoot && Math.abs(it.x - mk.x0) <= 2) || (rightFoot && Math.abs(it.x - mk.x1) <= 2);
+      top = Math.min(top, barTop - gap - (foot ? drop : lw / 2));
+    }
   }
-  if (!Number.isFinite(above)) above = -m.ink.noteHeight / 2;
-  const lw = m.style.stroke.barline;
-  const level = Math.max(...voltas.map((mk) => mk.level));
-  const top = above - labelSize * 0.7 - drop - (level - 1) * m.note.levelStep;
+  if (!Number.isFinite(top)) top = -m.ink.noteHeight / 2 - labelSize * 0.7 - drop;
+  top -= (Math.max(...voltas.map((mk) => mk.level)) - 1) * m.note.levelStep;
   for (const mk of voltas) {
     mk.y = top;
     boxes.push({ key: mk, x0: mk.x0, x1: mk.x1, top: top - lw / 2, bottom: top + drop, layer: 3, kind: "ending" });
   }
   // 房里（含竖脚、房号那一截）的力度/跳转字抬到房号线之上一道空
-  const gap = m.style.vertical.slurGap;
   for (const b of boxes) {
     if (b.kind !== "direction") continue;
     const group = directions.get(b.key);

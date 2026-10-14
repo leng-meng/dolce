@@ -84,8 +84,8 @@ const PRINT_JIANPU: Record<string, Length | boolean> = {
   "time-sig-rule": "0.025em",
   "slur-gap": "0.15em",
   "lyric-stack": "1.25em",
-  // 和弦基线离音符墨迹顶留一道空（0 = 贴着数字）
-  "chord-gap": "0.25em",
+  // 和弦基线离音符墨迹顶留一道空（0 = 贴着数字）。0.25em 时和弦贴得太近（用户定调大，2026-10-14）
+  "chord-gap": "0.4em",
   "chord-plain": true,
   // 末行歌词基线 → 下一组音符基线：歌词墨迹底到下一组数字墨迹顶只空一行字（诗歌本口径）；同组相邻声部之间
   "system-gap": "1.6em",

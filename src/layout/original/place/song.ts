@@ -144,8 +144,7 @@ export function layoutSong(
           const at = l.items.find((it) => it.x >= u.x0 - 0.01 && it.x <= u.x1 + 0.01);
           if (at?.dy !== undefined) u.dy = at.dy;
         }
-        const stops = layers.flatMap((lay) => (lay.split?.braceLeftX !== undefined ? [lay.split.braceLeftX] : []));
-        const marks = placeMarks(voice, l.items, m, stops);
+        const marks = placeMarks(voice, l.items, m);
         // 上方带：弧、连音、奏法记号、和弦、松叶、转调标签、力度/跳转字、临时伴奏行、房号按墨迹一次堆清（band.ts）
         const band = placeBand(l.items, marks, layers, m, ink, width);
         const pv: PlacedVoice = {

@@ -9,7 +9,7 @@ import { beamY, highDotY, lowDotY } from "../../../engrave/stack";
 import { hairpinPath } from "../../../engrave/hairpin";
 import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
 import { DYNAMICS } from "../../../pu/glyph";
-import { jianpuSlurStyle } from "../metrics";
+import { bracketLineWidth, jianpuSlurStyle } from "../metrics";
 import type { PlacedLayer, PlacedMark } from "../place/model";
 import { noteBeams } from "../place/vertical";
 import { type OriginalCtx, dot, rect, text } from "./ctx";
@@ -55,7 +55,7 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
         kind: bracket ? "bracket" : "arc",
         color: c.ink,
         music: new Font("Bravura", c.digitFont.size),
-        lineWidth: m.style.stroke.bracket > 0 ? m.style.stroke.bracket : 1,
+        lineWidth: bracketLineWidth(m),
         foot,
         arc: jianpuSlurStyle(m, c.ink),
       });
@@ -99,7 +99,7 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
       // 竖脚与房号字号都是谱高的一半（谱高取小节线高），房号在左脚右侧、横线下方按墨迹定位。
       const H = m.style.vertical.barlineHeight;
       const size = H * 0.5;
-      const lw = m.style.stroke.barline;
+      const lw = bracketLineWidth(m);
       const showLabel = !!mk.mark.caption && !mk.openLeft; // 跨行续过来的房子不再重复房号
       addEndingBracket(root, {
         x0, x1, top: y, drop: H * 0.5,

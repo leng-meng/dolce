@@ -142,6 +142,11 @@ export function barlineSpan(m: JianpuGrid): { top: number; bottom: number } {
   return { top: base - h * 0.75, bottom: base + h * 0.25 };
 }
 
+/** 括线（房号、连音括线）的线宽：尺子给了 `bracket` 就用它，否则同小节线（同简谱引擎 `Line.drawEnding`）。两者同一个值（用户定）。 */
+export function bracketLineWidth(m: JianpuGrid): number {
+  return m.style.stroke.bracket > 0 ? m.style.stroke.bracket : m.style.stroke.barline;
+}
+
 /** 音符堆叠与挂在它上面的记号（延长记号等）之间让的空：就是叠层那道空。 */
 export function noteMarkGap(m: JianpuGrid): number {
   return m.ink.stack.gap;
