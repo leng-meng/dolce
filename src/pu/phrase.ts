@@ -100,8 +100,11 @@ function indexAtTick(st: VoiceStream, tick: Fraction): number {
   return st.elements.length;
 }
 
-/** 量行长的尺子：量这份文档第 `song` 首各音的自然跨度（键是元素 id，按 id 对回断句输入）。 */
-export type FitMeasure = (doc: ScoreDoc, song: number) => { width: number; spans: ReadonlyMap<string | number, { x0: number; x1: number }> } | null;
+/** 量行长的尺子：量这份文档第 `song` 首各音的自然跨度（键是元素 id，按 id 对回断句输入）。
+ *  `noPairs`：只用来判「放不放得下」、不许两句并一行（原样档：要的是一句一行，见 `App._puPhraseMeasure`）。 */
+export type FitMeasure = (doc: ScoreDoc, song: number) => {
+  width: number; spans: ReadonlyMap<string | number, { x0: number; x1: number }>; noPairs?: boolean;
+} | null;
 
 /**
  * 算出这一首该怎么按乐句分行。
@@ -146,7 +149,7 @@ export function puPhraseLines(
   const breaks = computePhraseBreaks(part, { pageLines: PAGE_LINES });
   if (opt.measure) {
     const measured = opt.measure(sdoc, songIdx);
-    if (measured) chooseLineLayout(part, breaks, 0, { fit: fitForIds(measured, input.idOf) });
+    if (measured) chooseLineLayout(part, breaks, 0, { fit: fitForIds(measured, input.idOf), allowPairs: !measured.noPairs });
   }
 
   // 断点 → 主旋律元素流下标（「在此元素之前起新行」）。

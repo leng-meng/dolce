@@ -2208,19 +2208,22 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
   /**
    * 乐句重排的行长尺子：按当前档的纸、字号与样式量自然宽（`painter.ts::measureDocument`，与真正排版同一个引擎）。
+   * 各格式同一把（`.jpwabc`、文本谱也量）——不量的那份乐句行在原样档放不下，排版器整首按宽度重断，乐句全丢，
+   * 几种格式就排得不一样了（「脚步」）。
    *
-   * 文本谱、多声部的原样档不给尺子：没有尺子时 `phrase.ts` 按出厂的小节数目标断，也就是一句一行——印刷原版要的正是这个
-   * （拿尺子量会以为「两句并一行还宽绰」，73《我主耶稣是生命源》一行排了 8 小节）。
+   * 原样档的尺子**只判放不放得下**（`noPairs`）：要的是一句一行，印刷原版就这样；让它并两句的话
+   * 会以为「两句并一行还宽绰」，73《我主耶稣是生命源》一行排了 8 小节。多声部的原样档不给尺子（文本谱多声部不重断）。
    */
   private _puPhraseMeasure(): FitMeasure | null {
     const view = this.layoutMode;
     if (view === "original") {
       const doc = this.docFormat === "jpwabc" ? this._jpwDoc : this.currentScoreDoc();
-      if (this.docFormat === "pu" || !doc || !singleVoice(doc)) return null;
+      if (!doc || !singleVoice(doc)) return null;
     }
     const sheet = this.styleOf(view);
     const width = this.layoutPage.w;
-    return (doc, song) => measureDocument(doc, sheet, width, view === "expanded", song);
+    const noPairs = view === "original";
+    return (doc, song) => ({ ...measureDocument(doc, sheet, width, view === "expanded", song), noPairs });
   }
 
   /** 注册工具栏「简繁」按钮，供转换期间切换加载中状态。 */

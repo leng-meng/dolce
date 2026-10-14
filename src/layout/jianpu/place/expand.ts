@@ -520,6 +520,8 @@ export function expandSong(
   layout: { desc: string; simple: boolean } | null = null,
   /** 源里的换行断在行末那个符号之后（`.jpwabc`），否则断在那个小节末 */
   exactBreaks = false,
+  /** 源里一行就是谱面一行（文本谱的 `Q:` 行）：行在小节中间收尾也是写明的换行，原位断 */
+  rowIsLine = false,
 ): SongView {
   // 只排一个声部：带歌词的那个（同 `playsong.ts::songMeasures` 的 forExpanded），没有就第一个
   const voices = voiceNumbers(song);
@@ -554,13 +556,13 @@ export function expandSong(
       if (inline || atMeasure) pageEndRows.add(r);
     });
   }
-  // 行在小节中间收尾的：`.jpwabc` 一律原位断；其余格式只在源文写明了小节中间换行（行末那个和弦带 `lineBreakAfter`，
-  // 123/ABC 小节中间的 `$`、按乐句重排写回的断点）时原位断——文本谱一行排不下自己在小节中间折的不算，照旧顺延到小节末
+  // 行在小节中间收尾的：`.jpwabc` 与文本谱（一行 `Q:` 就是谱面一行）一律原位断；其余格式只在源文写明了小节中间换行
+  //（行末那个和弦带 `lineBreakAfter`，123/ABC 小节中间的 `$`、按乐句重排写回的断点）时原位断，否则顺延到小节末
   const inlineEnd = (r: number): boolean => {
     const chord = [...rows[r]!.refs].reverse().find((ref) => ref.chord)?.chord;
     return !!chord && (chord.lineBreakAfter !== undefined || (chord.sustains ?? []).some((su) => su.lineBreakAfter !== undefined));
   };
-  const breaks = sourceBreaks(slices, rows, pageEndRows, (r) => exactBreaks || inlineEnd(r));
+  const breaks = sourceBreaks(slices, rows, pageEndRows, (r) => exactBreaks || rowIsLine || inlineEnd(r));
   const marks = logicalMarks(rows);
   const seen = new Set<number>();
   let unrolled = false;
@@ -654,5 +656,5 @@ export function expandView(
   if (!song || !pd) return { ...view, songs: view.songs.slice(0, 1) };
   const layout = breakDesc ? { desc: breakDesc, simple: pd.isSimpple } : null;
   const owners = view.syllableOwner as Map<LyricSyllable, unknown>;
-  return { ...view, songs: [expandSong(song, pd.measures, m, ink, idOf, owners, layout, view.doc.sourceFormat === "jpwabc")] };
+  return { ...view, songs: [expandSong(song, pd.measures, m, ink, idOf, owners, layout, view.doc.sourceFormat === "jpwabc", view.doc.sourceFormat === "pu")] };
 }
