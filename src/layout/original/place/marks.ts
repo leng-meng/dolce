@@ -4,7 +4,7 @@ import { jianpuSlurRise, type JianpuGrid } from "../metrics";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, jpArcY } from "../../../engrave/arc";
 import type { InkMeasurer, PlacedItem, PlacedMark } from "./model";
 import { articStack, stackTop } from "./vertical";
-import { barlineBox, barlineLines } from "./spacing";
+import { barlineLines } from "./spacing";
 import { JP_HAIRPIN } from "../../../engrave/hairpin";
 import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
 import { DYNAMICS } from "../../../pu/glyph";
@@ -149,31 +149,6 @@ function wedgeSpan(
     if (before > x0 + nh) x1 = before;
   }
   return { x0, x1 };
-}
-
-/**
- * **弧下截小节线**（搬 `Line.clipBarlinesUnderSlurs`）：小节线顶在基线上 3/4 个小节线高，比不带高音点的弧端还高，
- * 跨小节线的弧（上小节末音连到下小节，最常见）会被线从上面戳穿。弧（含延音线、多连音的两段弧）罩住的小节线，
- * 上端截到弧底之下半道叠层的空。弧底按弧端那条线（加半个弧端线宽）取，不解贝塞尔：保守、绝不相交。
- * 要在上方带堆叠之后调（弧可能被抬）；并排块里只截同一行（`dy` 相同）的线。
- */
-export function clipBarlinesUnderSlurs(items: readonly PlacedItem[], marks: readonly PlacedMark[], m: JianpuGrid): void {
-  const arcs = marks.filter((mk) => mk.y !== undefined && isArcMark(mk.mark)
-    && !(mk.mark.type === "tuplet" && m.style.look.tupletStyle === "bracket"));
-  if (arcs.length === 0) return;
-  const pad = m.style.stroke.slurOutline / 2 + m.ink.stack.gap / 2;
-  for (const it of items) {
-    if (it.element.kind !== "barline") continue;
-    const box = barlineBox(it.element, m);
-    if (!box) continue;
-    const x0 = it.x - box.left, x1 = it.x + box.right;
-    let top = -Infinity;
-    for (const mk of arcs) {
-      if ((mk.dy ?? 0) !== (it.dy ?? 0) || mk.x1 < x0 || mk.x0 > x1) continue;
-      top = Math.max(top, mk.y! + pad);
-    }
-    if (Number.isFinite(top)) it.clipTop = top;
-  }
 }
 
 export function isArcMark(mk: Mark): boolean {

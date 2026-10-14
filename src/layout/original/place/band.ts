@@ -16,7 +16,6 @@ import { barlineSpan, bracketLineWidth, jianpuSlurStyle, type JianpuGrid } from 
 import type { InkMeasurer, PlacedItem, PlacedLayer, PlacedMark, PlacedText } from "./model";
 import { articStack, entryTop, noteBeams, stackTop } from "./vertical";
 import { type ChordSpan, sectionWordOf, sectionWordSlot } from "./sectionword";
-import { clipBarlinesUnderSlurs } from "./marks";
 import { barlineBox } from "./spacing";
 
 /** 一个声部（或并排块上行）的上方带排完的结果。 */
@@ -297,8 +296,6 @@ export function placeBand(
   for (const mk of marks) {
     if (mk.y !== undefined && mk.dy !== undefined && mk.mark.type !== "slur" && mk.mark.type !== "tuplet") mk.y -= mk.dy;
   }
-  // 弧定死（堆叠可能抬过）之后，罩住的小节线上端截到弧底之下
-  clipBarlinesUnderSlurs(items, marks, m);
 
   // ---- 头顶：音符那一摞、换气、伴奏括弧、带里一切 ----
   let top = -nh / 2;

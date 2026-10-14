@@ -24,8 +24,6 @@ export interface PlacedItem {
   dy?: number;
   /** 小节线不画（分声部前的空声部，见 song.ts::hideEmptyBarlines）；占位照旧 */
   noBarline?: true;
-  /** 小节线上端截到这里（相对基线，只往下截）：弧罩住它时停在弧底之下（`marks.ts::clipBarlinesUnderSlurs`） */
-  clipTop?: number;
 }
 
 /** 一条跨若干符号的记号（弧线 / 多连音 / 跳房子 / 渐强渐弱），已换算成行内坐标。 */
