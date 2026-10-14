@@ -593,7 +593,7 @@ export function jpwToScoreDoc(f: JpwFile): ScoreDoc {
   if (rows?.length) {
     const play = convertRepeat(rows, song.parts[0]);
     if (play.length) song.playOrder = play;
-  }
+  } else inferEndings(song.parts[0]!);
   doc.songs.push(song);
   return doc;
 }
@@ -606,4 +606,37 @@ function substringAfter(s: string, delim: string): string {
 function substringBefore(s: string, delim: string): string {
   const i = s.indexOf(delim);
   return i < 0 ? s : s.substring(0, i);
+}
+
+/**
+ * JP-Word 不写房号：`:|` 那一小节与紧跟着的一小节**节奏逐音相同**时，前者是一房、后者是二房
+ * （009《荣耀归与至高神》`3-- 0 :|1-- 0`、020《向主歌唱》`6,. 0 3,_ :|6,. 0 3_`；`.Layout` 的时值总长按「第二遍跳过一房」记）。
+ * 只看节奏相同、第一个音的第 1 段词也相同的一小节（等长但节奏不同的是照常往下唱）。有 `.Repeat` 的照它，不推。
+ */
+function inferEndings(part: Part): void {
+  const ms = part.measures;
+  const firstWord = (m: Measure): string => {
+    const c = m.elements.find((e): e is Chord => e.kind === "chord" && !e.grace && !e.rest);
+    const l = c?.lyrics?.find((x) => x.number === 1) ?? c?.lyrics?.[0];
+    return (l?.text ?? "").replace(/[\p{P}\s]/gu, "");
+  };
+  const rhythm = (m: Measure): string =>
+    m.elements.filter((e): e is Chord => e.kind === "chord" && !e.grace).map((c) => `${c.rest ? "r" : "n"}${c.duration.divisions}`).join(" ");
+  for (let i = 0; i + 1 < ms.length; i++) {
+    const m = ms[i]!;
+    const back = (m.barlines ?? []).find((b) => b.location === "right" && b.repeat === "backward");
+    if (!back || back.alsoForward || (m.barlines ?? []).some((b) => b.ending)) continue;
+    const next = ms[i + 1]!;
+    if ((next.barlines ?? []).some((b) => b.repeat || b.ending)) continue;
+    const r = rhythm(m);
+    if (!r || r !== rhythm(next)) continue;
+    // 两小节第一个音的第 1 段词（去标点）也得相同：`1-- :|1--` 底下是「阿/们」的是结尾的「阿们」，不是房（447《我灵之光》）
+    if (firstWord(m) !== firstWord(next)) continue;
+    m.barlines!.push({ location: "left", ending: { numbers: [1], text: "1.", type: "start" } });
+    back.ending = { numbers: [1], text: "1.", type: "stop" };
+    (next.barlines ??= []).push({ location: "left", ending: { numbers: [2], text: "2.", type: "start" } });
+    const right = next.barlines.find((b) => b.location === "right");
+    if (right) right.ending = { numbers: [2], text: "2.", type: "discontinue" };
+    else next.barlines.push({ location: "right", ending: { numbers: [2], text: "2.", type: "discontinue" } });
+  }
 }

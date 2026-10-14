@@ -33,7 +33,7 @@ import { paintPage, systemLeft } from "./page";
 import { footerSpan, layoutFooters } from "./footer";
 import { headerMeasurer, paintSlideLines } from "./header";
 import { placeHeader, placeSlideFooter, placeTitlePage } from "../place/header";
-import { expandView, jpwOriginalView } from "../place/expand";
+import { expandView } from "../place/expand";
 import { playDataOfSong } from "../../../model/playsong";
 import type { PlayItem } from "../../../score/playorder";
 
@@ -179,7 +179,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   // **源里的行放不下就整首重新断行**（用户定：原样档按排得下的位置断、中间不要短行）：断点写进文档克隆的换行位、
   // 整份重排一遍。元素 id 不变，编辑器的点选、高亮照旧对得上。多声部文本谱（各声部小节对不齐）`applyBreaks` 不重断
   // 展开档：按演唱顺序逐遍切出、逐行装满（已按版心宽断好，不再走窄纸重断）
-  const doc = plays ? expandView(input, plays, m, ink, cfg.breakDesc ?? null) : source.sourceFormat === "jpwabc" ? jpwOriginalView(input) : input;
+  const doc = plays ? expandView(input, plays, m, ink, cfg.breakDesc ?? null) : input;
   c.doc = doc;
   // 成书：只折放不下的那几行，折点原位记（小节中间折的是一行里一条小节线都没有的长行）
   if (!cfg.noReflow && !cfg.measure && !plans) {

@@ -10,7 +10,7 @@
 //   - 跳转记号换算同 `applyJumps`；推不出来（抛错）才退回整曲按段数逐遍
 // 另有两条只归 `.jpwabc` 的：
 //   - 文档自带演唱顺序（`Song.playOrder`，`.Repeat` 段）→ 照它排，不推
-//   - `.jpwabc` 没有 `.Repeat` → 不推，整曲按段数逐遍（JP-Word 本来就这么唱）
+//   - `.jpwabc` 没有 `.Repeat`、也没有反复记号 → 不推，整曲按段数逐遍（JP-Word 本来就这么唱）；有 `|: :|` 照它推
 
 import type { Chord, ElementId, Part, PlayPass, ScoreDoc, Song } from "./doc";
 import { writtenOctaveOf } from "./jianpu";
@@ -207,7 +207,9 @@ function playDataOf(doc: ScoreDoc, songIdx: number, { song, voices, parts, jumps
   for (const line of linesOfVoice(song, voices[0]!)) {
     for (const l of line.lyrics) passes = Math.max(passes, l.verseTo);
   }
-  if (doc.sourceFormat === "jpwabc") {
+  // `.jpwabc` 没有 `.Repeat`：谱里没有反复记号就整曲按段数逐遍（JP-Word 本来就这么唱）；
+  // 有 `|: :|` 的照反复记号推（用户定，2026-10-14：020《向主歌唱》的 `.Layout` 时值总长对得上「走反复」）
+  if (doc.sourceFormat === "jpwabc" && !main.some((m) => m.repeatBackward)) {
     pd.measures = playOrderByVerses(main.length, passes);
     pd.isSimpple = true;
     return pd;
@@ -217,7 +219,8 @@ function playDataOf(doc: ScoreDoc, songIdx: number, { song, voices, parts, jumps
   try {
     const order = playOrderOf(parts.map((measures) => ({ measures })), pd);
     pd.isSimpple = order.isSimple;
-    pd.hasRepeat = order.hasRepeat;
+    // `.jpwabc` 读进来按反复记号推的顺序，重读时照样推得出来：不算「有反复」，写出端就不另补 `.Repeat`（往返定点）
+    pd.hasRepeat = order.hasRepeat && doc.sourceFormat !== "jpwabc";
     pd.measures = order.measures;
     if (pd.measures.length > 0) return pd;
   } catch (e) {
