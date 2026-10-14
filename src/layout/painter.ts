@@ -1,21 +1,17 @@
-// 唯一的排版器 `ScorePainter`：按请求排版（简谱原样 / 展开、原样文档、五线谱 / 混排），持有提交后的结果、
-// 页面渲染（DOM 映射）、点选与播放高亮索引。排页算法在各自模块（`jianpupages.ts`、`original/compose/`、
+// 唯一的排版器 `ScorePainter`：按请求排版（简谱原样 / 展开、五线谱 / 混排），持有提交后的结果、
+// 页面渲染（DOM 映射）、点选与播放高亮索引。排页算法在各自模块（`original/compose/`、
 // `mixed/staffpages.ts`），SVG 出口在 `render.ts`，这里只管请求版本、结果提交与交互状态。
 // 设计与迁移记录见 docs/实现/PuPainter退役.md。
 //
 // 点选 / 高亮部分移植自 mp/layout/draw.kt。
 
 import type { PlayItem } from "../score/playorder";
-import { Rect } from "../common/geom";
 import { Group, PageItem } from "./pageitem";
-import { Layout } from "./layout";
-import { emptyScore, type JScore } from "./input";
 import type { ElementId, ScoreDoc } from "../model/doc";
 import { headerPartsOf, mixedVisitor, renderPageSvg, type HeaderPart } from "./render";
-import { layoutExpandedPages, layoutOriginalPages } from "./jianpupages";
-import { fromPt, pageGeometry, type LayoutHit, type LayoutPage, type LayoutResult, type PaintTarget } from "./result";
+import { pageGeometry, type LayoutResult } from "./result";
 import { MetaData } from "../smufl/smufl";
-import { jianpuFlagsOf, jianpuFontSize, jianpuStyleOf } from "../style/jianpu";
+import { jianpuStyleOf } from "../style/jianpu";
 import type { StyleSheet } from "../style/sheet";
 import { applyStaffStyle } from "../style/staff";
 import { computeStyleForPaper, LONG_IMAGE_WIDTH, THEMES } from "../style/themes";
@@ -29,35 +25,11 @@ import { layoutOriginalDocument, type OriginalDocumentLayout } from "./original/
 import { clearSongBreaks } from "../model/breaks";
 import type { PlacedPage } from "./original/place";
 import type { JianpuGrid } from "./original/metrics";
-import { cellOf, ScoreIndex, type Hit } from "./scoreindex";
+import { ScoreIndex, type Hit } from "./scoreindex";
 import { Playhead, spanIn, svgBox } from "./playhead";
 import type { IdentityKind } from "./identity";
 
 // ---------------------------------------------------------------- 请求与资源
-
-/** 简谱引擎的排版设置（原样 / 展开 / 成书 / 帮助示例 / 量宽共用）。 */
-export interface JianpuConfig {
-  /** 已计算样式表，折成尺子 `JianpuStyle` 灌进 `LayoutOptions`（`style/jianpu.ts::jianpuStyleOf`）；null = 引擎缺省（帮助示例）。 */
-  readonly style: StyleSheet | null;
-  /** `style` 为 null 时的字号。 */
-  readonly fontSize?: number;
-  /** 覆盖墨色（帮助示例画在压暗的纸上）。 */
-  readonly ink?: number;
-  /** 覆盖多段歌词叠排行距（自然量宽要 > 0：不展开反复，一遍就够量）。 */
-  readonly lyricStack?: number;
-}
-
-/** 简谱引擎这一路的请求。原样 / 展开的输入由调用方投影好（文档级原样投影见退役计划 P3）。 */
-export interface JianpuPaintRequest extends JianpuConfig {
-  readonly view: "original" | "expanded";
-  readonly score: JScore;
-  /** `.jpwabc` 的 `.Layout` 分页描述（其他格式没有）。 */
-  readonly breakDesc: string | null;
-  /** 原样档的纸（排版单位 = pt）。展开档取 `style.page`。 */
-  readonly page?: { w: number; h: number };
-  /** 只排版面、不加标题页也不叠标题块（帮助示例的谱行片段）。 */
-  readonly snippet?: boolean;
-}
 
 /** 五线谱 / 混排的请求（`doc` 须是 MusicXML 形状，见 `mixed/layout.ts`）。 */
 export interface StaffPaintRequest {
@@ -77,7 +49,7 @@ export interface StaffPaintRequest {
 export interface DocumentPaintRequest {
   readonly view: "original" | "expanded";
   readonly doc: ScoreDoc;
-  /** computed 样式表（原样档那份，与简谱引擎同一份）。null = print 主题出厂。 */
+  /** computed 样式表（原样档那份，与旧简谱引擎同一份）。null = print 主题出厂。 */
   readonly style: StyleSheet | null;
   /** 照文档里的换行排，不按窄纸重新断行（断点已由调用方写进文档时用）。 */
   readonly noReflow?: boolean;
@@ -91,9 +63,9 @@ export interface DocumentPaintRequest {
   readonly ink?: number;
 }
 
-export type PaintRequest = JianpuPaintRequest | DocumentPaintRequest | StaffPaintRequest;
+export type PaintRequest = DocumentPaintRequest | StaffPaintRequest;
 /** 同步入口收的请求（排版不等资源的两路）。 */
-export type SyncPaintRequest = JianpuPaintRequest | DocumentPaintRequest;
+export type SyncPaintRequest = DocumentPaintRequest;
 export type LoadOutcome = "committed" | "superseded";
 
 export interface PreparedResources {
@@ -136,28 +108,6 @@ export class PaintResources {
   }
 }
 
-/** 按设置新造一份简谱引擎（选项是单向覆写的，每次排版都要一份干净的）。 */
-export function jianpuLayoutOf(cfg: JianpuConfig, res: PreparedResources): Layout {
-  const layout = new Layout(cfg.style ? jianpuFontSize(cfg.style) : cfg.fontSize ?? 28);
-  const opt = layout.options;
-  if (res.smuflMeta) opt.smuflMeta = res.smuflMeta;
-  if (cfg.style) opt.applyStyle(jianpuStyleOf(cfg.style), jianpuFlagsOf(cfg.style));
-  if (cfg.ink !== undefined) opt.color = cfg.ink;
-  if (cfg.lyricStack !== undefined) opt.lyricStack = cfg.lyricStack;
-  return layout;
-}
-
-/** 自然量宽：整首排成一条（分行之前）量每个和弦的横向区间，不分页、不产 DOM。
- *  直接复用 `Layout.measureNatural`，`spans` 的键就是输入的 `JChord`。 */
-export function measureJianpu(
-  score: JScore,
-  width: number,
-  cfg: JianpuConfig,
-  res: PreparedResources,
-): ReturnType<Layout["measureNatural"]> {
-  return jianpuLayoutOf(cfg, res).measureNatural(score, width);
-}
-
 /** 自然量宽（原样文档引擎，乐句重排用）：清掉换行、整首不折，量第 `song` 首旋律声部每个音（键为元素 id）的自然横向区间与版心宽。
  *  `slide`：按展开档的画法量（数字共基线、增时线「-」字）。不改 `doc`。 */
 export function measureDocument(
@@ -192,7 +142,6 @@ interface StaffState {
 }
 
 const isStaffRequest = (r: PaintRequest): r is StaffPaintRequest => r.view === "staff" || r.view === "mixed";
-const isDocumentRequest = (r: PaintRequest): r is DocumentPaintRequest => (r.view === "original" || r.view === "expanded") && "doc" in r;
 
 /** 可视化编辑选中挂在音符上的子项的角色（就是身份标签的 kind，见 `identity.ts`）。 */
 export type VisualPartRole = "aug-dot" | "harmony" | "deco" | "annotation";
@@ -207,10 +156,6 @@ export function staffOptionsOf(meta: MetaData, style?: StyleSheet): MixedOptions
 }
 
 export class ScorePainter {
-  /** 最近一次提交的简谱引擎（成书、PPTX、脚本读它的页面树与选项）。五线谱结果提交时保留不动。 */
-  layout: Layout = new Layout(28);
-  /** 最近一次提交的简谱引擎输入（标题、导出 PPTX 用）。五线谱结果提交时保留不动。 */
-  score: JScore = emptyScore();
   /** 最近一次提交的简谱档；还没排过简谱为 null。 */
   jianpuView: "original" | "expanded" | null = null;
   pageWidth = 0;
@@ -233,31 +178,24 @@ export class ScorePainter {
   private leafMap = new WeakMap<PageItem, SVGGraphicsElement>();
   /** 画出来的叶子元素 → 它的身份（点选按事件目标认）。 */
   private staffLeafOf = new WeakMap<Element, StaffLeafData>();
-  /** 逐页高度。空 = 各页同高（`pageHeight`）；连续长纸那一档按内容逐页给。 */
-  private pageHeights: number[] = [];
   private staff: StaffState | null = null;
-  /** 原样文档这一路提交的结果（页面、定位结构与 note / syllable 身份索引）。与 staff 互斥。 */
+  /** 简谱这一路提交的结果（页面、定位结构与 note / syllable 身份索引）。与 staff 互斥。 */
   private original: OriginalDocumentLayout | null = null;
   private version = 0;
 
   constructor(readonly resources: PaintResources = PaintResources.shared()) {}
 
-  /** 当前结果是原样文档引擎排的（`layout` / `score` 那份简谱引擎结果此时是旧的）。 */
-  get fromDocument(): boolean {
-    return this.original !== null;
-  }
-
-  /** 原样文档引擎排的展开档：各首实际走的演唱顺序（`page-check` 的 P5 按它数遍数）；别的结果为 null */
+  /** 简谱展开档：各首实际走的演唱顺序（`page-check` 的 P5 按它数遍数）；别的结果为 null */
   get expandPlans(): ReadonlyArray<readonly PlayItem[] | null> | null {
     return this.original?.plans ?? null;
   }
 
-  /** 导出 PPTX 用的页面（`editor/pptx.ts::buildPptx`）：原样文档引擎排的就取它那一份，否则取简谱引擎的。 */
+  /** 导出 PPTX 用的页面（`editor/pptx.ts::buildPptx`）：简谱排的那一份；还没排过简谱时为空。 */
   get pptxSource(): { pages: readonly Group[]; stackGap: number; pageWidth: number; pageHeight: number } {
-    if (this.original) {
-      return { pages: this.original.pages, stackGap: this.original.metrics.style.vertical.stackGap, pageWidth: this.pageWidth, pageHeight: this.pageHeight };
-    }
-    return { pages: this.layout.pages, stackGap: this.layout.options.stackGap, pageWidth: this.pageWidth, pageHeight: this.pageHeight };
+    return {
+      pages: this.original?.pages ?? [], stackGap: this.original?.metrics.style.vertical.stackGap ?? 0,
+      pageWidth: this.pageWidth, pageHeight: this.pageHeight,
+    };
   }
 
   /** 当前结果是哪一路画的。 */
@@ -278,7 +216,7 @@ export class ScorePainter {
         if (v !== this.version) return "superseded";
         commit = this._staffCommit(request, meta);
       } else {
-        commit = this._syncCommit(request, res);
+        commit = this._jianpuCommit(request);
       }
     } catch (e) {
       if (v !== this.version) return "superseded";
@@ -291,14 +229,9 @@ export class ScorePainter {
 
   /** 资源已就绪时同步排版并提交（编辑器预览的简谱路与原样文档、成书、帮助、量断行）。也作废在途的异步请求。 */
   loadSync(request: SyncPaintRequest): void {
-    const res = this.resources.ready();
-    if (!res) throw new Error("排版资源还没准备好");
+    if (!this.resources.ready()) throw new Error("排版资源还没准备好");
     ++this.version;
-    this._syncCommit(request, res)();
-  }
-
-  private _syncCommit(request: SyncPaintRequest, res: PreparedResources): () => void {
-    return isDocumentRequest(request) ? this._documentCommit(request) : this._jianpuCommit(request, res);
+    this._jianpuCommit(request)();
   }
 
   /** 让未完成的请求作废，放掉持有的 DOM 引用。 */
@@ -309,66 +242,15 @@ export class ScorePainter {
     this.original = null;
   }
 
-  /** 简谱引擎这一路：在局部变量里排完，返回提交动作。 */
-  private _jianpuCommit(req: JianpuPaintRequest, res: PreparedResources): () => void {
-    const layout = jianpuLayoutOf(req, res);
-    let w: number;
-    let h: number;
-    let pageHeights: number[] = [];
-    if (req.view === "expanded") {
-      w = req.style?.page.size?.[0] ?? 960;
-      h = req.style?.page.size?.[1] ?? 540;
-      layoutExpandedPages(layout, req.score, w, h, req.breakDesc);
-    } else {
-      w = req.page?.w ?? 0;
-      h = req.page?.h ?? 0;
-      if (req.snippet) {
-        layout.fromScore(req.score, req.breakDesc, w, h);
-        layout.pages[0]?.update();
-      } else {
-        pageHeights = layoutOriginalPages(layout, req.score, w, h, req.breakDesc);
-      }
-    }
-    const pages: LayoutPage[] = layout.pages.map((root, i) => ({
-      root,
-      geometry: pageGeometry(w, pageHeights[i] ?? h, 1),
-      renderer: "jianpu",
-      songIndexes: [0],
-    }));
-    const result: LayoutResult = {
-      title: req.score.title,
-      pages,
-      hits: [],
-      diagnostics: [],
-      staffPlacements: [],
-      jianpuLineStarts: [...layout.lineStarts],
-    };
-    return () => {
-      this.layout = layout;
-      this.score = req.score;
-      this.jianpuView = req.view;
-      this.pageWidth = w;
-      this.pageHeight = h;
-      this.pageHeights = pageHeights;
-      this.staff = null;
-      this.original = null;
-      this.result = result;
-      this.nodeMap = new WeakMap();
-      this.playhead.reset();
-      this.index = ScoreIndex.build(layout.pages, { cellLyrics: true });
-    };
-  }
-
-  /** 原样文档这一路：整份文档排好（不等资源，`Font` 同步量字），返回提交动作。
-   *  简谱引擎的 `layout` / `score` 保留不动（标题等取用）；`jianpuView` 记成原样档，PPTX 因此不会拿旧引擎页复用。 */
-  private _documentCommit(req: DocumentPaintRequest): () => void {
+  /** 简谱这一路（原样 / 展开档）：整份文档排好（不等资源，`Font` 同步量字），返回提交动作。 */
+  private _jianpuCommit(req: DocumentPaintRequest): () => void {
     const sheet = req.style ?? computeStyleForPaper([THEMES.print], { mode: "original", engine: "jianpu" });
     const paper = resolvePaper(sheet.page);
-    // 展开档：投影片纸（展开档样式的 `page.size`，同 `_jianpuCommit`）
+    // 展开档：投影片纸（展开档样式的 `page.size`）
     const slide = req.view === "expanded" ? { width: sheet.page.size?.[0] ?? 960, height: sheet.page.size?.[1] ?? 540, continuous: false } : null;
     const r = layoutOriginalDocument(req.doc, {
       style: jianpuStyleOf(sheet),
-      // 长图：宽与简谱引擎的长图同一张（500 首那张纸的宽），高由内容定
+      // 长图：宽与旧简谱引擎的长图同一张（500 首那张纸的宽），高由内容定
       page: slide ?? (req.page
         ? { width: req.page.w, height: req.snippet ? req.page.w : req.page.h, continuous: !!req.snippet }
         : paper ? { width: paper.w, height: paper.h, continuous: false } : { width: LONG_IMAGE_WIDTH, height: LONG_IMAGE_WIDTH, continuous: true }),
@@ -388,7 +270,6 @@ export class ScorePainter {
         renderer: "jianpu",
         songIndexes: [r.placed.pages[i]?.song ?? 0],
       })),
-      hits: [],
       diagnostics: [],
       staffPlacements: [],
       jianpuLineStarts: r.lineStarts,
@@ -399,11 +280,10 @@ export class ScorePainter {
       this.jianpuView = req.view;
       this.pageWidth = r.width;
       this.pageHeight = r.height;
-      this.pageHeights = [];
       this.result = result;
       this.nodeMap = new WeakMap();
       this.playhead.reset();
-      this.index = ScoreIndex.build(r.pages, { cellLyrics: false });
+      this.index = ScoreIndex.build(r.pages);
     };
   }
 
@@ -420,7 +300,6 @@ export class ScorePainter {
     const result: LayoutResult = {
       title: score.title,
       pages: pages.map((root) => ({ root, geometry: pageGeometry(wT, hT, score.scaling), renderer: "staff", songIndexes: [0] })),
-      hits: [],
       diagnostics: [],
       staffPlacements: [{ songIndex: 0, score, systems: placed }],
       jianpuLineStarts: null,
@@ -463,12 +342,7 @@ export class ScorePainter {
 
   /** 当前结果的曲名（导出文件名取首行）。 */
   get title(): string {
-    return this.result?.title ?? this.score.title;
-  }
-
-  /** 当前结果是不是原样文档这一路排的（按源行排，没有几何拾取；面板按它摆原样档的设置）。 */
-  get isDocumentLayout(): boolean {
-    return this.original !== null;
+    return this.result?.title ?? "";
   }
 
   /** 原样文档这一路音符数字的字号（pt），面板「基础字号」显示它；别的路为 null。 */
@@ -629,16 +503,9 @@ export class ScorePainter {
     return this.elsOf(this.index.sustainCells(id, pass).map((h) => h.item));
   }
 
-  /** 元素 `id` 第 `verse` 段（行内 0 起）歌词的那个字的 `<g>`；`verseNo` 是源段号（缺省 = verse + 1）。
-   *  原样文档一段一个音节；简谱引擎的音符格把各段歌词收在同一个 `<g>` 里，按段号取这一段自己的那个字，
-   *  取不到（格里没有歌词图元）就退回整个音符格。 */
-  lyricEl(id: ElementId, verse = 0, verseNo?: number): SVGGElement | null {
-    return this.elOf(this.index.syllable(id, verse, verseNo));
-  }
-
-  /** 收在元素 `id` 音符格里的各段歌词 `<g>`（只亮音符时要把它们摘出来）。原样文档的歌词不在格里，为空。 */
-  cellLyricEls(id: ElementId): SVGGElement[] {
-    return this.elsOf(this.index.cellSyllables(id, 0).map((l) => l.hit.item));
+  /** 元素 `id` 第 `verse` 段（行内 0 起）歌词的那个字的 `<g>`（一段一个音节）。 */
+  lyricEl(id: ElementId, verse = 0): SVGGElement | null {
+    return this.elOf(this.index.syllable(id, verse));
   }
 
   /** 元素 `id` 音符格里某角色子项的 `<g>`，按页面树顺序（可视化编辑选中附点与挂在音符上的记号）。 */
@@ -693,16 +560,6 @@ export class ScorePainter {
     return renderPageSvg(page.root, w, h, this.nodeMap);
   }
 
-  /** Walk up from a picked item to its enclosing "entry" group (else the item). */
-  entryGroupOf(item: PageItem): PageItem {
-    let cur: PageItem | null = item;
-    while (cur) {
-      if (cur.classes.has("entry")) return cur;
-      cur = cur.parent;
-    }
-    return item;
-  }
-
   get pageCount(): number {
     return this.result?.pages.length ?? 0;
   }
@@ -711,92 +568,6 @@ export class ScorePainter {
   pageSize(index: number): { w: number; h: number } {
     const g = this.result?.pages[index]?.geometry ?? this.result?.pages[0]?.geometry;
     if (g) return { ...g.sizePt };
-    return { w: this.pageWidth, h: this.pageHeights[index] ?? this.pageHeight };
+    return { w: this.pageWidth, h: this.pageHeight };
   }
-
-  // ---------------- picking (Phase 3) ----------------
-
-  private calcDist(x: number, y: number, inn: Rect): number {
-    let dx = 0;
-    if (x < inn.left) dx = inn.left - x;
-    else if (x > inn.right) dx = x - inn.right;
-    let dy = 0;
-    if (y < inn.top) dy = inn.top - y;
-    else if (y > inn.bottom) dy = y - inn.bottom;
-    return dx + dy;
-  }
-
-  pick(root: PageItem, x: number, y: number): [PageItem | null, number] {
-    let bnd = root.bound;
-    bnd = bnd.offset(root.x, root.y);
-    const edge = 5;
-    const dist = this.calcDist(x, y, bnd);
-    if (root.children.length === 0) {
-      let outer = new Rect(bnd.left, bnd.top, bnd.right, bnd.bottom);
-      const dx = Math.min(bnd.width - edge * 2, 0) / 2;
-      const dy = Math.min(bnd.height - edge * 2, 0) / 2;
-      outer = outer.inset(dx, dy);
-      return outer.contains(x, y) ? [root, dist] : [null, dist];
-    }
-    let outer = new Rect(bnd.left, bnd.top, bnd.right, bnd.bottom);
-    outer = outer.inset(-edge, -edge);
-    if (outer.contains(x, y)) {
-      const xx = x - bnd.left;
-      const yy = y - bnd.top;
-      const items: PageItem[] = [];
-      let minDist = Number.MAX_VALUE;
-      let best: PageItem | null = null;
-      let small: PageItem | null = null;
-      for (const ch of root.children) {
-        const [p, pd] = this.pick(ch, xx, yy);
-        if (p !== null) {
-          if (pd < minDist) {
-            best = p;
-            minDist = pd;
-            items.length = 0;
-            items.push(p);
-          }
-          if (pd === minDist) items.push(p);
-          if (ch.bound.width < edge || ch.bound.height < edge) small = ch;
-        }
-      }
-      if (small !== null) return [small, 0];
-      let area = Number.MAX_VALUE;
-      for (const it of items) {
-        const a = it.bound.width * it.bound.height;
-        if (a < area) {
-          best = it;
-          area = a;
-        }
-      }
-      return [best, minDist];
-    }
-    return [null, Number.MAX_VALUE];
-  }
-
-  /** 页面 pt 坐标处的图元（简谱两条路；五线谱没有几何拾取，靠事件冒泡找和弦组）。
-   *  `target` 是它所在音符格 / 增时线格的元素（按身份标签认），页眉、小节线等为 null。 */
-  pickPage(page: number, pointPt: { x: number; y: number }): LayoutHit | null {
-    const lp = this.result?.pages[page];
-    if (!lp || lp.renderer !== "jianpu") return null;
-    const pos = fromPt(lp.geometry, pointPt.x, pointPt.y);
-    const [item] = this.pick(lp.root, pos.x, pos.y);
-    if (!item) return null;
-    const cell = cellOf(item)?.ident;
-    const target: PaintTarget | null = cell?.id !== undefined
-      ? { kind: "element", songIndex: 0, id: cell.id, occurrence: cell.pass ?? 0 }
-      : null;
-    return { target, pageIndex: page, item, boundsPt: absBounds(item, lp.geometry.ptPerUnit), layer: "jianpu" };
-  }
-}
-
-/** 图元在页上的包围盒（pt）：沿父链累加各级 x/y 偏移（简谱这一路的页面树不带旋转缩放）。 */
-function absBounds(item: PageItem, ptPerUnit: number): { x: number; y: number; w: number; h: number } {
-  let x = item.bound.left;
-  let y = item.bound.top;
-  for (let cur: PageItem | null = item; cur; cur = cur.parent) {
-    x += cur.x;
-    y += cur.y;
-  }
-  return { x: x * ptPerUnit, y: y * ptPerUnit, w: item.bound.width * ptPerUnit, h: item.bound.height * ptPerUnit };
 }

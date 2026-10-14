@@ -157,7 +157,7 @@ export interface PlacedScore {
   contentRight: number;
 }
 
-/** 一个音节画出来的那串（字 + 尾随标点，标点挤压后）的横向度量，口径同简谱引擎的 `Lyric`（`pageitem.ts`）。
+/** 一个音节画出来的那串（字 + 尾随标点，标点挤压后）的横向度量，口径同旧简谱引擎的 `Lyric`（`pageitem.ts`）。
  *  音节按**主体**居中于锚点、前后标点挂出去（同 compose/lyric.ts::paintSyllables）。 */
 export interface LyricRun {
   text: string;
@@ -186,7 +186,7 @@ export interface InkMeasurer {
   text(str: string, role: InkTextRole): { advance: number; ink: Rect };
   /** 段落词（歌词字、段落词字号，标点挤压同 `sectionWordRun`）：量宽、逐字笔位与墨迹盒（相对落笔原点、基线 y = 0） */
   sectionWord(str: string): { advance: number; xs: number[] | null; ink: Rect };
-  /** 数字 / 歌词字体的字体盒上下缘（相对基线，上为负）：展开档照简谱引擎谱行包围盒码页用（`song.ts::slideBlock`） */
+  /** 数字 / 歌词字体的字体盒上下缘（相对基线，上为负）：展开档照旧简谱引擎谱行包围盒码页用（`song.ts::slideBlock`） */
   fontBox(face: "note" | "lyric"): { top: number; bottom: number };
   /** SMuFL 字形的墨迹盒（相对落笔原点、基线 y = 0）：按字形量，不用 4 em 的字体盒 */
   smufl(glyph: string, size: number): Rect;

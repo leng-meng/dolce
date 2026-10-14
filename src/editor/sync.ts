@@ -39,7 +39,7 @@
 // ## 歌词音节怎么配到音符
 //
 // 走排版行视图（`pu/slots.ts::docView`）：音节配给哪个音符在视图里已经定好（`syllableOwner`），
-// 与排版器、简谱引擎输入用的是**同一份**，不在这里另算。
+// 与排版器、简谱输入模型用的是**同一份**，不在这里另算。
 
 import type { AttachedSource, Chord, ElementId, Measure, Part, ScoreDoc, SourceSpan } from "../model/doc";
 import { breakAfter } from "../model/helpers";
@@ -62,7 +62,7 @@ export interface SyncEntry {
   verseNo?: number;
   /** 增时线自己的 id */
   own?: ElementId;
-  /** 增时线是宿主音符的第几条（0 基）：简谱引擎那一路的增时线不带 id，按序号在音符格后面数 */
+  /** 增时线是宿主音符的第几条（0 基）：旧简谱引擎那一路的增时线不带 id，按序号在音符格后面数 */
   ord?: number;
   /** `barline`：这条线画在 `id` 那个音符**之前**还是**之后**（对应模型的 `location`）。
    *  小节线没有自己的 id，两个排版器都按「相邻音符 id + edge」索引它的 `<g>` */

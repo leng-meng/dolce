@@ -53,7 +53,7 @@ export function layoutVoiceLine(
   // 换了样子的小节线（反复起点挪行）不在 voice.elements 里，记号坐标仍按原来那条算
   const srcMap = new Map<MusicElement, number>();
   const srcOf = (el: MusicElement): number => srcMap.get(el) ?? voice.elements.indexOf(el);
-  // 反复起点不留在行末（同简谱引擎在 `‖:` 前断行）：行末的 `|:` 画成普通线、`:|:` 画成 `:|`，
+  // 反复起点不留在行末（同旧简谱引擎在 `‖:` 前断行）：行末的 `|:` 画成普通线、`:|:` 画成 `:|`，
   // `|:` 挪到下一行行首（`ctx.leadRepeat`，由 layoutSong 按上一行带过来）
   const tailAt = flat.length - 1;
   const tail0 = flat[tailAt];
@@ -159,7 +159,7 @@ export function layoutVoiceLine(
       pad[i]! += m.ink.noteHeight * 1.5;
     }
     // 变音记号写在数字前，得给它让出位置
-    // 让出的宽 = 升降号墨迹宽 + 它与数字的空 + 与前一个音之间的空（engrave/accidental.ts，与画法、简谱引擎同一份比例）
+    // 让出的宽 = 升降号墨迹宽 + 它与数字的空 + 与前一个音之间的空（engrave/accidental.ts，与画法、旧简谱引擎同一份比例）
     if (next?.kind === "note" && next.accidental !== undefined) {
       advance += accidentalLead(next.accidental as AccidentalKind, m.ink.noteHeight, m.style.look.accidentalScale) + m.ink.noteHeight * ACCIDENTAL_CLEARANCE;
     }

@@ -1,4 +1,4 @@
-// 和弦符号的富文本分段与绘制——简谱引擎、原样文档、五线谱/混排共用。
+// 和弦符号的富文本分段与绘制——旧简谱引擎、原样文档、五线谱/混排共用。
 //
 // 两种风格：SMuFL 和弦（缺省，下面这套分段）与**简单文本**（`chordTextSegs(text, true)`：整串原文一段，
 // 原书就是一行普通文字）。三路都由样式键 `chord-plain` 选（`style/keys.ts`）。
@@ -59,7 +59,7 @@ export function harmonyInk(segs: readonly HarmonySeg[], wordFont: Font, musicFon
 
 /**
  * 把分段排成一个 Group（原点在左侧基线）。上标缩到 75% 并上移 1/4 字号。
- * 简谱引擎、原样文档、五线谱/混排三路共用。
+ * 旧简谱引擎、原样文档、五线谱/混排三路共用。
  */
 export function layoutHarmonySegs(
   segs: readonly HarmonySeg[],

@@ -8,5 +8,5 @@ export const EQ_PAD_EM = 0.2;
 export type AccidentalSide = "before" | "after";
 
 /** 临时记号的样子：`csym`（缺省，照混排：和弦那套小号字形、按数字墨迹盒定位）、
- *  `classic`（原先简谱引擎的样子：五线谱升降号字形 0.8 倍、挂在数字左上，成书照原书用它）。样式键 `accidental-style`。 */
+ *  `classic`（原先旧简谱引擎的样子：五线谱升降号字形 0.8 倍、挂在数字左上，成书照原书用它）。样式键 `accidental-style`。 */
 export type AccidentalStyleKind = "csym" | "classic";

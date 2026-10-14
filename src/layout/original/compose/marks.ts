@@ -42,7 +42,7 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
     }
     case "tuplet": {
       // 多连音：括线或两段弧（样式键 `tuplet-style`，出厂括线同 500 首；番茄、诗歌本风格是弧），在正中**被连音数字断开**。
-      // 画法走公共那一份（engrave/tuplet.ts，与简谱引擎同一套）：弧与同页 slur 同一条月牙挖掉数字那一截；
+      // 画法走公共那一份（engrave/tuplet.ts，与旧简谱引擎同一套）：弧与同页 slur 同一条月牙挖掉数字那一截；
       // 括线的脚落在弧端那条线上（`mk.y`），横线在它之上一个脚长。数字是 SMuFL 的 tuplet 字形、按墨迹坐在线上。
       const y = baseline + (mk.y ?? -m.ink.noteHeight / 2);
       // 连音数取模型里的实际数（`caption` = tupletActual），没有才按跨了几个符号数
@@ -64,24 +64,24 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
     case "crescendo":
     case "decrescendo": {
       // 横向范围（含让开起止音上的力度字）与 `mk.y`（松叶墨迹底边）都在定位端定好（place/marks.ts::wedgeSpan、place/band.ts）；
-      // 开口与线宽同简谱引擎（engrave/hairpin.ts::JP_HAIRPIN），跨行那两截各张到几成见 `jpHairpinHalves`
+      // 开口与线宽同旧简谱引擎（engrave/hairpin.ts::JP_HAIRPIN），跨行那两截各张到几成见 `jpHairpinHalves`
       const nh = m.ink.noteHeight;
       const lw = jpHairpinLineWidth(m.style.stroke.hairpin, nh);
       const y = baseline + (mk.y ?? -nh / 2) - lw / 2 - nh * JP_HAIRPIN.half;
       const [half0, half1] = jpHairpinHalves(mk.mark.type === "crescendo" ? "crescendo" : "diminuendo", nh, mk.openLeft, mk.openRight);
       // 画法走公共那一份（engrave/hairpin.ts，与五线谱同一笔）
       const hp = hairpinPath({ x0, x1, y, half0, half1, lineWidth: lw, color: c.ink });
-      hp.classes.add("hairpin"); // 同简谱引擎（`Line.addWedges`）；叶子的类名不进 SVG，只给页面树上的检查脚本认
+      hp.classes.add("hairpin"); // 同旧简谱引擎（`Line.addWedges`）；叶子的类名不进 SVG，只给页面树上的检查脚本认
       root.add(hp);
       break;
     }
     case "volta": {
       const y = baseline + (mk.y ?? -m.ink.noteHeight / 2);
-      // 画法走公共那一份（engrave/ending.ts，与简谱引擎、混排同一套）；字号、竖脚、房号离左脚的距离同简谱引擎（尺子的 `size.ending`、`bracketFoot`）
+      // 画法走公共那一份（engrave/ending.ts，与旧简谱引擎、混排同一套）；字号、竖脚、房号离左脚的距离同旧简谱引擎（尺子的 `size.ending`、`bracketFoot`）
       const size = m.style.size.ending;
       const foot = m.style.vertical.bracketFoot;
       const lw = bracketLineWidth(m);
-      // 房号照原文印（`1,2` 就是 `1,2`，用户定：原样档不规整；简谱引擎才按 `normEndingText` 统一成 `1.2`）。跨行续过来的房子不再重复房号
+      // 房号照原文印（`1,2` 就是 `1,2`，用户定：原样档不规整；旧简谱引擎才按 `normEndingText` 统一成 `1.2`）。跨行续过来的房子不再重复房号
       const showLabel = !!mk.mark.caption && !mk.openLeft;
       addEndingBracket(root, {
         x0, x1, top: y, drop: endingDrop(foot, size),

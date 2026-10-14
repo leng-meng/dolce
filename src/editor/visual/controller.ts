@@ -991,7 +991,7 @@ export class VisualEditController {
       if (!digit) continue;
       const r = digit.getBoundingClientRect();
       if (r.height <= 0) continue;
-      // 减时线紧贴数字下缘：简谱引擎画在外框下缘**略上方**（字形墨迹之下、外框之内），
+      // 减时线紧贴数字下缘：旧简谱引擎画在外框下缘**略上方**（字形墨迹之下、外框之内），
       // 原样文档画在下缘之下。带子按字高取比例罩住这两处，**不能再往下伸**——
       // 歌词行紧接着就从下缘起头（实测第一个字的顶就在下缘 ±0），伸过去就把歌词的点击抢了
       if (cx < r.left - 3 || cx > r.right + 3) continue;

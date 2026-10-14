@@ -14,7 +14,7 @@
 //   那些**不是**上游语法，这里一律**不写**（曾经照语料样本抄过 `%END`，是错的）。
 //   判断依据永远是上游 README，而不是某份语料样本。
 //
-// **输入形状**：只经简谱引擎的输入接口（`layout/input.ts` 的 `JScore`），由 `model/jianpuinput.ts`
+// **输入形状**：只经旧简谱引擎的输入接口（`layout/input.ts` 的 `JScore`），由 `model/jianpuinput.ts`
 // 从 `ScoreDoc` 投影出来——与 `tojpw.ts` 同一条原则：写出端不认 `ScoreDoc` 的类，口径与谱面一致。
 //
 // **单向导出**：不承诺能把 jianpu-ly 文本再读回编辑器（回读要另加方言与高亮，见 `docs/模块/导出.md`）。

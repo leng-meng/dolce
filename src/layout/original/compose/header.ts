@@ -30,7 +30,7 @@ export function headerRoleFont(m: JianpuGrid, role: HeaderTextRole, scale = 1): 
   }
 }
 
-/** 展开档标题页的字：设置里给了族 / 粗体就用，否则歌词字、不加粗（同简谱引擎 `headerRoleFont(…, lrcFont)`） */
+/** 展开档标题页的字：设置里给了族 / 粗体就用，否则歌词字、不加粗（同旧简谱引擎 `headerRoleFont(…, lrcFont)`） */
 function slideFont(m: JianpuGrid, face: { family?: string; bold?: boolean }, size: number): Font {
   return new Font(face.family ?? m.style.font.lyric.family, size, face.bold ?? false);
 }
@@ -65,7 +65,7 @@ export function headerMeasurer(m: JianpuGrid): HeaderMeasurer {
 export function paintSlideLines(c: OriginalCtx, root: Group, lines: readonly PlacedHeaderLine[], tag: boolean): void {
   const anchor = { left: 0, center: c.pageWidth / 2, right: c.pageWidth };
   for (const l of lines) {
-    // 不带逐字笔位（同简谱引擎的标题页、页脚）：PPTX 见到逐字笔位会拆成逐字文本框，页码「1/4」就散成三个框
+    // 不带逐字笔位（同旧简谱引擎的标题页、页脚）：PPTX 见到逐字笔位会拆成逐字文本框，页码「1/4」就散成三个框
     const t = textItem(l.text, headerRoleFont(c.metrics, l.role), c.ink, anchor[l.anchor] + l.dx, l.baseline, false);
     if (tag) t.classes.add("hdr");
     root.add(t);

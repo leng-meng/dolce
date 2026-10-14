@@ -5,7 +5,7 @@
 // | 模型 | 现在 | 终局 |
 // |---|---|---|
 // | **`ScoreDoc`**（本文件） | 123 的原生模型 | **唯一语义模型**，其余向它汇聚 |
-// | ~~`Score`~~ | 原先是简谱排版的输入树 | **已删**：简谱引擎读 `layout/input.ts` 的只读输入，由 `model/jianpuinput.ts` 从这里投影 |
+// | ~~`Score`~~ | 原先是简谱排版的输入树 | **已删**：旧简谱引擎读 `layout/input.ts` 的只读输入，由 `model/jianpuinput.ts` 从这里投影 |
 // | ~~`MixedScore`~~ | 原先五线谱**语义 + 排版**混在一起 | **已删**：五线谱引擎只留版面态 `StaffLayout`（`mixed/model.ts`），语义一律从这里取 |
 // | ~~`PuDoc`~~（`pu/ast.ts`） | 原先是文本谱的解析产物 | **已退役**：只剩 `pu/parse.ts::parsePuAst` → `model/frompu.ts` 之间的中间结果；`parsePu` 直出 `ScoreDoc`，乐句重排读原文区间（`Print.source` / `LyricLineInfo.sources`） |
 //
@@ -770,7 +770,7 @@ export interface Mark {
   /** 跨行时后续各行那一段的 level（文本谱续行会重新编号，见过 3 → 1） */
   continuationLevels?: number[];
   /** 文本谱记号起点写在小节线/`~`/夹层上（`[|](5`）：原起点在 `start` 那个符号之前第几个位置。
-   *  **不能归并到最近的音符**——简谱引擎只在音符上认端点，落在小节线上的端点等于没收口，弧会接到下一行 */
+   *  **不能归并到最近的音符**——旧简谱引擎只在音符上认端点，落在小节线上的端点等于没收口，弧会接到下一行 */
   startLead?: number;
   /** 同上，终点写在 `end` 那个符号之后第几个位置（`(5_ [|]`） */
   endTrail?: number;

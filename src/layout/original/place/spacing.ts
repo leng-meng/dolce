@@ -1,10 +1,10 @@
 // 横向排列：同一拍位的符号归成一列，列宽按内容定，再做歌词避让与两端对齐，解出每个符号的最终 x。
 //
-// 单声部、多声部同一份代码。判据整段搬自简谱引擎（`layout.ts::Line.calcXPos` 的紧排与歌词避让、
+// 单声部、多声部同一份代码。判据整段搬自旧简谱引擎（`layout.ts::Line.calcXPos` 的紧排与歌词避让、
 // `Line.adjust` 的水位法两端对齐、`adjustLastBarline`），那边的阈值与注释里的曲例都是对过原书的；
 // 这里只是把「一个条目」换成「一列」：列的左右占位取各声部里最大的那个，歌词按声部各自避让。
 //
-// 锚点 x 是数字**墨迹中心**（compose 按墨迹居中落笔）；占位按数字**字面宽**算（同简谱引擎 `entryWidth`），
+// 锚点 x 是数字**墨迹中心**（compose 按墨迹居中落笔）；占位按数字**字面宽**算（同旧简谱引擎 `entryWidth`），
 // 所以列的左占位 = 锚点到落笔原点（墨迹中心偏移），右占位 = 字面宽 − 它（+ 附点占位）。
 import type { BarlineElement, Meter, NoteElement } from "../../../pu/ast";
 import { barlineSpan, jianpuGraceMetrics, jianpuGraceNotes, type JianpuGrid } from "../metrics";
@@ -27,21 +27,21 @@ interface Column {
   /** 锚点到占位左缘 / 右缘 */
   left: number;
   right: number;
-  /** 占位之前硬让出的地方：前倚音（简谱引擎 `Entry.leadSpace`）、小节线前那一小格 */
+  /** 占位之前硬让出的地方：前倚音（旧简谱引擎 `Entry.leadSpace`）、小节线前那一小格 */
   lead: number;
-  /** 临时记号伸到数字左边那一截再加一道空：紧排时硬让（与前倚音 `lead` 取大者）；简谱引擎那边是软让位（`Entry.leadWant`） */
+  /** 临时记号伸到数字左边那一截再加一道空：紧排时硬让（与前倚音 `lead` 取大者）；旧简谱引擎那边是软让位（`Entry.leadWant`） */
   want: number;
-  /** 临时记号伸出落笔原点左边多少（行首那一列要整个让出来：简谱引擎行首贴的是条目最左的内容） */
+  /** 临时记号伸出落笔原点左边多少（行首那一列要整个让出来：旧简谱引擎行首贴的是条目最左的内容） */
   over: number;
   /** 占位之后硬让出的地方（`&sbf` 连谱号、`{dsb}` 花括号，见 `voice.ts::layoutVoiceLine`） */
   pad: number;
 }
 
-/** 行中转拍：拍号前后各留的那一格 ÷ 音符字号（同简谱引擎 `TimeSig`：「拍号前后要有间距」）。 */
+/** 行中转拍：拍号前后各留的那一格 ÷ 音符字号（同旧简谱引擎 `TimeSig`：「拍号前后要有间距」）。 */
 export const TIME_SIG_PAD_EM = 1 / 4;
 
 /**
- * 小节线的占位（相对锚点的左右），口径同简谱引擎：那边小节线条目的占位是组的包围盒——竖线的盒从线心起、宽一个线宽，
+ * 小节线的占位（相对锚点的左右），口径同旧简谱引擎：那边小节线条目的占位是组的包围盒——竖线的盒从线心起、宽一个线宽，
  * 反复点按墨迹。compose/barline.ts 把 `BarlineGlyph` 居中于锚点画（原点 = 锚点 − 宽/2）。
  * 另给出线前那一小格要按的「组里第一个图元的高」（普通线是线高，`:‖` 先画点，是点径）。隐藏线 null。
  */
@@ -66,7 +66,7 @@ export function barlineBox(el: BarlineElement, m: JianpuGrid): { left: number; r
   return { left: g.width / 2 - lo, right: hi - g.width / 2, first: bs.spec.repeatBackward ? 2 * r : span.bottom - span.top };
 }
 
-/** 小节线第一根、最后一根竖线的线心（相对锚点）：房号竖脚对齐线位（`band.ts` / `marks.ts`，同简谱引擎 `Line.endingSpan`）。隐藏线 null。 */
+/** 小节线第一根、最后一根竖线的线心（相对锚点）：房号竖脚对齐线位（`band.ts` / `marks.ts`，同旧简谱引擎 `Line.endingSpan`）。隐藏线 null。 */
 export function barlineLines(el: BarlineElement, m: JianpuGrid): { first: number; last: number } | null {
   const bs = puBarlineSpec(el);
   if (!bs) return null;
@@ -98,8 +98,8 @@ function itemBox(it: PlacedItem, m: JianpuGrid, ink: InkMeasurer): { left: numbe
     const meter = el.temporaryMeter ? meterAdvance(el.temporaryMeter, m) : 0;
     const b = barlineBox(el, m);
     if (!b) return { left: 0, right: meter, lead: 0, want: 0, over: 0 };
-    // 小节线前空一小格：简谱引擎是「条目项高度的 1/5」，条目项是组里第一个图元。照搬，两边才对得上。
-    // 简谱引擎的拍号是小节线后的单独一个条目，那条线前面不空这一格
+    // 小节线前空一小格：旧简谱引擎是「条目项高度的 1/5」，条目项是组里第一个图元。照搬，两边才对得上。
+    // 旧简谱引擎的拍号是小节线后的单独一个条目，那条线前面不空这一格
     return { left: b.left, right: b.right + meter, lead: el.temporaryMeter ? 0 : b.first / 5, want: 0, over: 0 };
   }
   const ch = el.kind === "sustain" ? "-" : (el as NoteElement).sound === "rhythm" ? "X" : String((el as NoteElement).pitch);
@@ -110,7 +110,7 @@ function itemBox(it: PlacedItem, m: JianpuGrid, ink: InkMeasurer): { left: numbe
   let want = 0;
   let over = 0;
   if (el.kind === "note") {
-    // 附点是画上去的圆，占位照旧按 `·` 的字面宽留（同简谱引擎 `JpNumber.augDotAdvance`）
+    // 附点是画上去的圆，占位照旧按 `·` 的字面宽留（同旧简谱引擎 `JpNumber.augDotAdvance`）
     if (el.dots > 0) right += ink.digit("·").advance * el.dots;
     if (el.graceBefore.length > 0) lead = graceAdvance(jianpuGraceNotes(el.graceBefore), jianpuGraceMetrics(m));
     if (el.graceAfter.length > 0) right += graceAdvance(jianpuGraceNotes(el.graceAfter), jianpuGraceMetrics(m));
@@ -166,7 +166,7 @@ function packColumns(cols: readonly Column[], voices: number, m: JianpuGrid, ink
   const N: number[] = [];
   let cur = 0;
   // 临时记号**硬**让位（伸出 + 一道空，`want`）：软让位只在两端对齐有余量时才填，行一挤满升降号就压到前面的音与小节线上
-  //（原样分页《同一首歌》）。简谱引擎那边仍是软的（硬让会把 .jpwabc 定死的行挤折）；这边放不下由重断行收
+  //（原样分页《同一首歌》）。旧简谱引擎那边仍是软的（硬让会把 .jpwabc 定死的行挤折）；这边放不下由重断行收
   cols.forEach((c, i) => {
     cur += i === 0 ? Math.max(c.lead, c.over) : Math.max(c.lead, c.want);
     N.push(cur + c.left);
@@ -259,7 +259,7 @@ function justify(cols: readonly Column[], X: number[], extra: number): void {
  * 一组（system）各声部的横向排列：归列 → 紧排 → 歌词避让 → 两端对齐，写回每个符号的 `x` 与 `advance`。
  *
  * `width` 是这一行能用的宽（占位右缘最多到这里）。每行都两端对齐，末行也一样；往空档里加的总量最多是
- * 自然宽的 `maxHorizontalScale` 倍（同简谱引擎，短行因此不会被扯得满行都是）。放不下不压缩（紧排已是最紧），
+ * 自然宽的 `maxHorizontalScale` 倍（同旧简谱引擎，短行因此不会被扯得满行都是）。放不下不压缩（紧排已是最紧），
  * 由窄纸重断行（`reflow.ts`）保证放得下。
  * 返回自然宽（占位右缘，含歌词）。
  */
@@ -324,7 +324,7 @@ export function placeColumns(
  *     放不下就把本小节撑开——锚点之后、下一条小节线之前的各列按份右移，小节线及其后整体右移，按判据二分求最小撑开量；
  *     撑完整行出版心就不撑，维持抬到和弦之上。
  *   - 行首那一条（justify 后）：差的那点从锚点之后的各列里线性衰减地匀出来（行末不动，行长不变）。
- * 和弦按各自锚点居中、没做横向让位（`spreadChords` 在带里才跑），同简谱引擎的预演。
+ * 和弦按各自锚点居中、没做横向让位（`spreadChords` 在带里才跑），同旧简谱引擎的预演。
  */
 class SectionWordRoom {
   private readonly colOf = new Map<PlacedItem, number>();
@@ -401,7 +401,7 @@ class SectionWordRoom {
   }
 }
 
-/** 撑开预演用的和弦墨迹范围：按各自锚点居中、没做横向让位（`band.ts::spreadChords` 在带里才跑），同简谱引擎的预演。 */
+/** 撑开预演用的和弦墨迹范围：按各自锚点居中、没做横向让位（`band.ts::spreadChords` 在带里才跑），同旧简谱引擎的预演。 */
 function previewChords(items: readonly PlacedItem[], xOf: (it: PlacedItem) => number, ink: InkMeasurer): ChordSpan[] {
   const chords: ChordSpan[] = [];
   for (const it of items) {
@@ -503,7 +503,7 @@ export function naturalColumns(
   const cols = columnsOf(lines, m, ink);
   const { X, lyricRight, lyricLeft } = packColumns(cols, lines.length, m, ink);
   const xOf = new Map<PlacedItem, number>();
-  // 各列占到的最左 / 最右处（占位与歌词字取并集，同简谱引擎条目的 `entryBounds`）：展开档逐行装满按它判放不放得下（place/expand.ts::fillLines）
+  // 各列占到的最左 / 最右处（占位与歌词字取并集，同旧简谱引擎条目的 `entryBounds`）：展开档逐行装满按它判放不放得下（place/expand.ts::fillLines）
   const leftOf = new Map<PlacedItem, number>();
   const rightOf = new Map<PlacedItem, number>();
   let width = 0;

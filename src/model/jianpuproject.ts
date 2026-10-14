@@ -15,7 +15,7 @@
 // 却没有 `attrs.divisions`，也不带 `beams`/`sustains`。不投的话全曲一律画成四分音符（减时线、增时线全丢），
 // 所以同走这一层（`isDurationShaped`）；音上的延音线顺带配成 `tied` 记号。
 //
-// 判据对照：简谱引擎输入的 MusicXML 形状分支（`jianpuinput.ts::xmlDuration`）读时值的口径，
+// 判据对照：简谱输入模型的 MusicXML 形状分支（`jianpuinput.ts::xmlDuration`）读时值的口径，
 // 回归 `scripts/jianpu-shape-check.mjs` 逐音比对。
 
 import { SIMPLE_DIVISIONS, type Chord, type Element, type ElementId, type Harmony, type Measure, type Song } from "./doc";

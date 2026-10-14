@@ -2,7 +2,7 @@
 // → 演唱顺序、试听输入、`.jpwabc` 写出端输入。
 //
 // 与 `playdoc.ts`（MusicXML 形状）分工同断句那一对（`pu/phrasesong.ts` / `phrasedoc.ts`），
-// 小节序列与断句共用 `pu/phrasesong.ts::buildMeasures`，行视图取 `pu/slots.ts::docView`。**口径同简谱引擎输入 `jianpuinput.ts::jianpuInputOfDoc`**：
+// 小节序列与断句共用 `pu/phrasesong.ts::buildMeasures`，行视图取 `pu/slots.ts::docView`。**口径同简谱输入模型 `jianpuinput.ts::jianpuInputOfDoc`**：
 //   - 每个有曲行的声部都算一份（歌词段数取各声部最大值），反复与跳转只看第一份；
 //     `forExpanded` 时带歌词的声部排第一、同号歌词顺延（同 `ToScoreOptions.forExpanded`）。
 //     试听输入（`playSourceOfSong`）推完演唱顺序后把声部排回模型顺序、主旋律记进 `PlaySource.lead`；

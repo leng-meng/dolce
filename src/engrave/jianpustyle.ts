@@ -1,8 +1,7 @@
-// 简谱的尺子：一份**样式值**（全是 pt，已折算好），两个排版引擎都从它取。
+// 简谱的尺子：一份**样式值**（全是 pt，已折算好），旧简谱引擎从它取。
 //
 // 折算只在一处：`style/jianpu.ts::jianpuStyleOf`（样式表 → 这份）；成书走 `style/book.ts::bookJianpuStyle`。
-// 引擎自己不再存样式常量——简谱引擎的 `LayoutOptions` 由它派生（`LayoutOptions.applyStyle`），
-// 原样文档引擎的栅格（`layout/original/metrics.ts::JianpuGrid`）挂着它（`grid.style`）。
+// 引擎自己不存样式常量——栅格（`layout/original/metrics.ts::JianpuGrid`）挂着它（`grid.style`）。
 //
 // 值为 0 的几项是「按引擎缺省 / 按字形量」（各字段注释里写明），不是「没有」。
 import type { CompressMode } from "../common/cjkpunct";
@@ -15,7 +14,7 @@ export interface FaceSpec {
   italic: boolean;
 }
 
-/** 页眉一项：族、粗体不给 = 沿用正文字（简谱引擎取歌词字，原样文档取 `font.text`）。 */
+/** 页眉一项：族、粗体不给 = 沿用正文字（旧简谱引擎取歌词字，原样文档取 `font.text`）。 */
 export interface HeaderFace {
   family?: string;
   bold?: boolean;
@@ -35,7 +34,7 @@ export interface JianpuStyle {
   size: {
     note: number;
     lyric: number;
-    /** 0 = 不排和弦（简谱引擎：编辑器与 OMR 那两条路的输入里没有 harmony） */
+    /** 0 = 不排和弦（旧简谱引擎：编辑器与 OMR 那两条路的输入里没有 harmony） */
     chord: number;
     keyMeter: number;
     verseNum: number;
@@ -83,9 +82,9 @@ export interface JianpuStyle {
     lyricStack: number;
     /** 末行歌词 → 下一组音符基线（原样文档） */
     systemGap: number;
-    /** 页内谱行均分的上限（简谱引擎 `maxLineDist`） */
+    /** 页内谱行均分的上限（旧简谱引擎 `maxLineDist`） */
     systemSpread: number;
-    /** 谱行之间另加的空（简谱引擎 `staffDist`） */
+    /** 谱行之间另加的空（旧简谱引擎 `staffDist`） */
     staffDist: number;
     voiceGap: number;
     /** 和弦基线离音符墨迹顶 */

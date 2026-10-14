@@ -1,6 +1,6 @@
 // 原样文档引擎（文本谱、MusicXML、多声部 123/ABC 的原样档）的栅格与谱面自带的版面指令。
 //
-// 样式值只有一把尺子 `JianpuStyle`（`style/jianpu.ts::jianpuStyleOf` 折算，与简谱引擎同一份）；
+// 样式值只有一把尺子 `JianpuStyle`（`style/jianpu.ts::jianpuStyleOf` 折算，与旧简谱引擎同一份）；
 // 这里只剩原版（番茄）量来的那套栅格，按音符字号等比缩放：
 //   横向步进（实测在未拉伸的行上逐点吻合，数字字号 25 时）：
 //     同一拍内、前后都带减时线      → 25
@@ -92,7 +92,7 @@ export interface GridPage {
 
 /**
  * 尺子 + 纸 → 定稿栅格。栅格按 `style.size.note / GRID_NOTE_SIZE` 等比缩放；
- * 点半径为 0 的按数字字体里 `.` 的墨迹高折半（附点、反复点为 0 = 同八度点，与简谱引擎同一口径）；
+ * 点半径为 0 的按数字字体里 `.` 的墨迹高折半（附点、反复点为 0 = 同八度点，与旧简谱引擎同一口径）；
  * 数字按墨迹竖直居中于基线画（墨迹顶 −noteHeight/2、底 +noteHeight/2），八度点与减时线的落点
  * 走公共那一份（engrave/stack.ts：墨迹到墨迹等距，空 = `vertical.stackGap` × 墨迹高）。
  */
@@ -131,20 +131,20 @@ export function gridOf(src: JianpuStyle, page: GridPage): JianpuGrid {
   };
 }
 
-/** 小节线上下缘（相对数字墨迹中线，即本引擎的 baseline）：与简谱引擎同一口径——上缘在数字**基线**上 3/4 小节线高、
- *  下缘在下 1/4（缺省 4/3 字号即 −1 em / +1/3 em，见 `LayoutOptions.jpStaffTop`）。行内拍号竖向居中于它。 */
+/** 小节线上下缘（相对数字墨迹中线，即本引擎的 baseline）：与旧简谱引擎同一口径——上缘在数字**基线**上 3/4 小节线高、
+ *  下缘在下 1/4（缺省 4/3 字号即 −1 em / +1/3 em）。行内拍号竖向居中于它。 */
 export function barlineSpan(m: JianpuGrid): { top: number; bottom: number } {
   const base = m.ink.noteHeight / 2;
   const h = m.style.vertical.barlineHeight;
   return { top: base - h * 0.75, bottom: base + h * 0.25 };
 }
 
-/** 转调标签（「转1=D」）的字号：同和弦；不排和弦的档（展开档 `chord` = 0）取歌词字号的 0.6（同简谱引擎 `KeySig`）。 */
+/** 转调标签（「转1=D」）的字号：同和弦；不排和弦的档（展开档 `chord` = 0）取歌词字号的 0.6（同旧简谱引擎 `KeySig`）。 */
 export function keyLabelSize(m: JianpuGrid): number {
   return m.style.size.chord > 0 ? m.style.size.chord : m.style.size.lyric * 0.6;
 }
 
-/** 括线（房号、连音括线）的线宽：尺子给了 `bracket` 就用它，否则同小节线（同简谱引擎 `Line.drawEnding`）。两者同一个值（用户定）。 */
+/** 括线（房号、连音括线）的线宽：尺子给了 `bracket` 就用它，否则同小节线（同旧简谱引擎 `Line.drawEnding`）。两者同一个值（用户定）。 */
 export function bracketLineWidth(m: JianpuGrid): number {
   return m.style.stroke.bracket > 0 ? m.style.stroke.bracket : m.style.stroke.barline;
 }
@@ -241,7 +241,7 @@ export function applyDocOptions(
 }
 
 /**
- * 原样文档布局的弧线样式：与简谱引擎同一口径（`layout.ts::slurStyleOf`）。绘制与纵向预留**共用这一个来源**。
+ * 原样文档布局的弧线样式：与旧简谱引擎同一口径（`layout.ts::slurStyleOf`）。绘制与纵向预留**共用这一个来源**。
  */
 export function jianpuSlurStyle(m: JianpuGrid, color: number): SlurStyle {
   const st = m.style;

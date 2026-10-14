@@ -31,7 +31,7 @@ const KIND_SUFFIX: Record<string, string> = {
 const alterSign = (v: number): string => (v > 0 ? "♯".repeat(v) : v < 0 ? "♭".repeat(-v) : "");
 
 /** `ScoreDoc` 的结构化和弦（`model/doc.ts::Harmony`）→ 文本。口径同 `harmonyElemToText`。
- *  升降号缺省写 ASCII（`#`/`b`）——123/ABC 的和弦串认的是它；简谱引擎的谱面印 `♯♭`（`"unicode"`）。有原文 `text` 时直接用原文。 */
+ *  升降号缺省写 ASCII（`#`/`b`）——123/ABC 的和弦串认的是它；旧简谱引擎的谱面印 `♯♭`（`"unicode"`）。有原文 `text` 时直接用原文。 */
 export function harmonyToText(h: {
   root: { step: string; alter: number; alterLeft?: boolean };
   kind: string;

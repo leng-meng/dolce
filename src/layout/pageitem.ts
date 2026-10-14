@@ -295,7 +295,7 @@ export class GraphicLine extends PageItem {
   }
 }
 
-/** SMuFL 文字要的两样：字（Bravura 那支）与字形元数据（量紧包围盒）。简谱引擎的 `LayoutOptions` 就满足它。 */
+/** SMuFL 文字要的两样：字（Bravura 那支）与字形元数据（量紧包围盒）。 */
 export interface SmuflSource {
   smuflMeta: MetaData;
   smuflFont: Font;
@@ -435,7 +435,7 @@ export class BeamLine extends GraphicLine {
 
 export class Lyric extends TextFrame {
   _widths = [0, 0, 0];
-  /** 标点挤压的档（`LayoutOptions.punctCompress`）。 */
+  /** 标点挤压的档（`JianpuStyle.look.punctCompress`）。 */
   compress: CompressMode = "halfwidth";
   /** 段号（`JLyric.number`）。可视化编辑按它认出点中的是哪一段（叠排时各段同在一个音符格里） */
   verse = 0;

@@ -23,7 +23,7 @@ export interface KeyDef {
   mixed?: string;
   /** 成书 `BookStyle` 上的路径（`metrics.systemGapEm`、`layout.verseNumbers`…）；缺 = 成书不读。
    *  字段名以 `Em` 结尾的，样式表里**必须**写 `em` 单位（基准是字号，不是墨迹高），数值原样存进字段（不乘字号，浮点逐位不变）；
-   *  其余长度写裸数（pt）。成书这一路由 `style/bookss.ts` 读，不经 `LayoutOptions` 的覆写。 */
+   *  其余长度写裸数（pt）。成书这一路由 `style/bookss.ts` 读。 */
   book?: string;
   /** 解析出的长度再乘这个数才落进 `jianpu` 那一列（样式表与尺子口径不同的：弧高写弧顶、尺子存控制点；反复点写直径、尺子存半径）。 */
   jianpuScale?: number;
@@ -49,7 +49,7 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "stack-gap": { kind: "num", jianpu: "vertical.stackGap", mixed: "stackGap", book: "metrics.stackGap" },
   "slur-gap": { kind: "len", jianpu: "vertical.slurGap", book: "metrics.stackGapEm", note: "弧离叠层顶的空，混排与原样文档各按自己的弧算" },
   // 谱行之间：`system-gap` 是末行歌词基线到下一组音符基线（原样文档）；`system-spread` 是页内均分各行时行距的上限
-  //（简谱引擎；成书拿原书量到的行间净距当它）
+  //（旧简谱引擎；成书拿原书量到的行间净距当它）
   "system-gap": { kind: "len", jianpu: "vertical.systemGap" },
   "system-spread": { kind: "len", jianpu: "vertical.systemSpread", book: "metrics.systemGapEm" },
   "note-step": { kind: "len", book: "metrics.noteStepEm", note: "音符步距只有成书断句用" },
@@ -63,7 +63,7 @@ export const JIANPU_KEYS: Record<string, KeyDef> = {
   "chord-plain": { kind: "bool", jianpu: "look.chordPlain", mixed: "chordPlain", book: "metrics.chordPlain" },
   // 调号、转调、和弦根音/低音的升降号写在字母前（before）还是后（after）；不写 = 各自原来的写法
   "accidental-side": { kind: "word", jianpu: "look.accidentalSide", mixed: "accidentalSide", book: "metrics.accidentalSide" },
-  // 临时记号的样子：csym（照混排）/ classic（原先简谱引擎的，成书缺省）
+  // 临时记号的样子：csym（照混排）/ classic（原先旧简谱引擎的，成书缺省）
   "accidental-style": { kind: "word", jianpu: "look.accidentalStyle", mixed: "accidentalStyle", book: "metrics.accidentalStyle" },
   // csym 临时记号的大小倍数（1 = 照混排）
   "accidental-scale": { kind: "num", jianpu: "look.accidentalScale", mixed: "accidentalScale", note: "成书照原书用 classic，不读这个" },

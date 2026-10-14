@@ -1,4 +1,4 @@
-// 小节线（含反复点）的画法：简谱引擎、原样文档、混排共用。
+// 小节线（含反复点）的画法：旧简谱引擎、原样文档、混排共用。
 //
 // 原语是**纯函数**：只认坐标与 style，不认 Entry / ChordLayout / PlacedItem 那些模型类型，
 // 各路的坐标换算留在自己的调用点（musicpp 的 `sc = staffHeight/40` 之类别漏进来）。
@@ -17,7 +17,7 @@ export interface BarlineSpec {
   repeatForward?: boolean;
 }
 
-/** 小节线的画法参数。上下缘各路自己给（简谱引擎是 jpStaffTop/Bottom、原样文档是 barlineHeight
+/** 小节线的画法参数。上下缘各路自己给（旧简谱引擎是 jpStaffTop/Bottom、原样文档是 barlineHeight
  *  居中于基线、混排是简谱层/谱表的上下缘），**粗细组合、线距与反复点的排布一律照这一份**。 */
 export interface BarlineStyle {
   /** 上下缘，相对基线（y 向下为正，所以 top 通常是负的）。 */
@@ -62,7 +62,7 @@ export function barlineWidths(spec: BarlineSpec, final: boolean, light: number, 
  * 一条小节线（几条竖线 + 反复点），图元相对自身原点、x 从 0 起。
  *
  * 反复点在**细线那一侧**（`:‖` 左、`‖:` 右），先占位再画线，x 顺序才对。
- * `lines` 是那几条竖线的引用——简谱引擎的 `clipBarlinesUnderSlurs` 要按它们缩短上缘。
+ * `lines` 是那几条竖线的引用——旧简谱引擎的 `clipBarlinesUnderSlurs` 要按它们缩短上缘。
  */
 export class BarlineGlyph {
   readonly items: PageItem[] = [];

@@ -33,7 +33,7 @@ export function mainRow(eng: MixedOptions): JpRow {
 
 /**
  * 倚音这一行：整体按 `jpGraceScale` 缩小（点、线、空一起缩），**整块**（数字、减时线、低音点；钩子不算，
- * 它本来就垂到主音身旁）的墨迹底离它所倚的主音那一摞的顶一道空——与简谱引擎、原样文档同一条规则。
+ * 它本来就垂到主音身旁）的墨迹底离它所倚的主音那一摞的顶一道空——与旧简谱引擎、原样文档同一条规则。
  * 同一串倚音取最深的那颗定块高，几颗的数字才在一条线上。
  */
 export function graceRow(eng: MixedOptions, md: PartMeasureLayout, ch: ChordLayout): JpRow {

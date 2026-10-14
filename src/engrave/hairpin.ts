@@ -28,7 +28,7 @@ export function hairpinPath(h: HairpinSpec): GraphicPath {
 }
 
 /**
- * 简谱松叶的几何（简谱引擎 `Line.addWedges` 与原样文档 `place/marks.ts` 同一份），尺寸都按数字墨迹高 H：
+ * 简谱松叶的几何（旧简谱引擎 `Line.addWedges` 与原样文档 `place/marks.ts` 同一份），尺寸都按数字墨迹高 H：
  * 起止落在音符墨迹中心外 0.3 H，全开口 0.7 H，线宽缺省 0.07 H；跨行的照弧的口径——起头那行画到行末、开口只张到六成，
  * 收尾那行从行首第一个音左 0.9 H 接着张到全开。
  */

@@ -1,5 +1,5 @@
-// 简谱临时记号（数字左边的 ♭ ♯ ♮）：简谱引擎、原样文档、混排简谱层共用。
-// 两种样子（样式键 `accidental-style`）：`csym`（缺省，下述）与 `classic`（原先简谱引擎那样，成书照原书用它）。
+// 简谱临时记号（数字左边的 ♭ ♯ ♮）：旧简谱引擎、原样文档、混排简谱层共用。
+// 两种样子（样式键 `accidental-style`）：`csym`（缺省，下述）与 `classic`（原先旧简谱引擎那样，成书照原书用它）。
 //
 // `csym` 观感照混排（render.cpp 的简谱分支）：字形是 SMuFL 的 **csym** 小号升降号（和弦里那一套，
 // 不是五线谱的 accidentalFlat），贴在数字左边。混排原先按 tenths 写死（Bravura 40 × 0.75、
@@ -60,7 +60,7 @@ const CLASSIC_GLYPH: Record<AccidentalKind, string> = {
   "double-sharp": GlyphCodes.accidentalDoubleSharp,
   "double-flat": GlyphCodes.accidentalDoubleFlat,
 };
-/** `classic` 按数字字形微调的横向字距（÷ 字号），原先简谱引擎的那张表。 */
+/** `classic` 按数字字形微调的横向字距（÷ 字号），原先旧简谱引擎的那张表。 */
 const CLASSIC_KERN: Record<string, number> = { "4": 0.1, "2": -0.07, "1": -0.07 };
 
 /** 一个临时记号，摆在 `digit` 左边。 */
@@ -74,7 +74,7 @@ export class AccidentalGlyph {
     let t: TextFrame;
     let ink: Rect;
     if (style.kind === "classic") {
-      // 原先简谱引擎的样子（成书照原书用它）：五线谱升降号 0.8 倍，笔位在数字笔位左 0.2 字号（按数字微调），
+      // 原先旧简谱引擎的样子（成书照原书用它）：五线谱升降号 0.8 倍，笔位在数字笔位左 0.2 字号（按数字微调），
       // 基线落在「1」的墨迹顶，降号再低 0.1 字号
       const S = digit.font.size;
       const font = style.music.makeWithSize(S * 0.8 * sc);

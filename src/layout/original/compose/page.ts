@@ -246,9 +246,9 @@ export function paintVoice(c: OriginalCtx,
       continue;
     }
     if (it.element.kind === "sustain") {
-      // 增时线：数字字体的「-」（engrave/dash.ts，与混排、简谱引擎同一个字形）。
+      // 增时线：数字字体的「-」（engrave/dash.ts，与混排、旧简谱引擎同一个字形）。
       // 数字是按墨迹居中于 baseline 画的，增时线的墨心也落在同一条中线上
-      // 展开档画成数字字体的「-」字（同简谱引擎 `JpNumber("-")`；PPTX 里换目标字体的「-」）
+      // 展开档画成数字字体的「-」字（同旧简谱引擎 `JpNumber("-")`；PPTX 里换目标字体的「-」）
       const line = c.slide ? dashDigit(c, x, base) : sustainDash(x, base, { font: c.digitFont, color: c.ink });
       root.add(line);
       // 增时线有自己的 id（`Chord.sustains[]` 各带一个），可视化编辑按它点选这一条

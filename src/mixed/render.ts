@@ -1,7 +1,7 @@
 // 混排渲染器。从 musicpp model/render.cpp 移植。
 // 输入：StaffLayout（已排版）；输出：Group（含 GraphicLine/TextFrame）。
 // 单位：tenths（与 StaffLayout 一致）。
-// SMuFL 字形用 TextFrame + font.family="Bravura"（等价 SmuflText，无需 LayoutOptions）。
+// SMuFL 字形用 TextFrame + font.family="Bravura"（等价 SmuflText）。
 
 import { Fraction } from "../common/fraction";
 import { punctClass } from "../common/cjkpunct";
@@ -509,7 +509,7 @@ function drawTuplet(eng: MixedOptions, container: Group, obj: Tuplet): void {
     [ply, pry] = obj.staffEnds();
   }
 
-  // 画法走公共那一份（engrave/tuplet.ts）：括号（横线 + 竖脚，数字坐在断口里）与简谱引擎同一套，
+  // 画法走公共那一份（engrave/tuplet.ts）：括号（横线 + 竖脚，数字坐在断口里）与旧简谱引擎同一套，
   // 数字是 SMuFL 的 tuplet 字形、按墨迹居中。
   const tg = new TupletGlyph(new Point(plx, ply), new Point(prx, pry), obj.timeModification.denominator, {
     kind: bracket ? "bracket" : "number",

@@ -9,7 +9,6 @@ import type { ElementId, ScoreDoc } from "../model/doc";
 import { applyBreaks } from "../model/breaks";
 import { JpwFile, LayoutSection } from "../jpword/jpwfile";
 import { measureDocument, PaintResources, ScorePainter, type SyncPaintRequest } from "../layout/painter";
-import { toPt } from "../layout/result";
 import { computeStyle, sanitizeLayer, upsertRule, type StyleRule } from "../style/cascade";
 import type { Length } from "../style/units";
 import { isPrintStyle, NOTE_FONTS, PRINT_STYLE_DEFAULT, printStyleLayer, type PrintStyle } from "../style/styles";
@@ -22,7 +21,6 @@ import type { PageDecl } from "../style/sheet";
 import { jianpuSizes } from "../style/jianpu";
 import type { DeepPartial, StyleSheet } from "../style/sheet";
 import { LONG_IMAGE_WIDTH, PAGE_RATIOS, STAFF_LONG_IMAGE_WIDTH, STAFF_PAPER_DEFAULT, THEMES, computeStyleForPaper, isPaper, themeOfMode } from "../style/themes";
-import { JpNumber, Lyric as LayoutLyric, TextFrame, type PageItem } from "../layout/pageitem";
 import { colorToCss } from "../common/geom";
 import { MetaData } from "../smufl/smufl";
 import type { FitMeasure } from "../pu/phrase";
@@ -526,7 +524,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   readonly meta: MetaData;
   private debounceTimer: ReturnType<typeof setTimeout> | undefined;
   private zoomSaveTimer: ReturnType<typeof setTimeout> | undefined;
-  private selectedEl: SVGGElement | null = null;
   statusEl: HTMLElement | null = null;
   /** 试听播放的那一摊（播放器、速度倍率、分声部音量）——见 editor/playback.ts。 */
   readonly playback: PlaybackController = new PlaybackController(this);
@@ -904,7 +901,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
 
   /** `scoredoc` 那一路（文本谱、123、ABC、jcx、jianpu-ly、MusicXML）的重排：解析 → 闸门 → 排版 → 报诊断。
-   *  各格式的差异在适配器的 `reloadSpec`（`formats.ts`），排版都交给同一个简谱引擎。 */
+   *  各格式的差异在适配器的 `reloadSpec`（`formats.ts`），排版都交给同一个旧简谱引擎。 */
   private _reloadScoreDoc(adapter: ScoreDocAdapter, text: string): boolean {
     const spec = adapter.reloadSpec;
     const what = spec.what();
@@ -952,7 +949,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return withMelodyFirst(lyr, this.melodyPart);
   }
 
-  /** 经 `ScoreDoc` 排版并铺页（文本谱、123、ABC、jcx、jianpu-ly、MusicXML 共用，同一个简谱引擎）。 */
+  /** 经 `ScoreDoc` 排版并铺页（文本谱、123、ABC、jcx、jianpu-ly、MusicXML 共用，同一个旧简谱引擎）。 */
   private _layoutScoreDoc(doc: ScoreDoc, what: string): boolean {
     try {
       if (this.layoutMode === "expanded") {
@@ -1082,7 +1079,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return this.mixed._srcToMixed.get(id) ?? [];
   }
 
-  /** 谱面是哪一路画的：简谱（简谱引擎 / 原样文档）还是五线谱 / 混排。几何命中（减时线、附点）只有简谱那一路有。 */
+  /** 谱面是哪一路画的：简谱（旧简谱引擎 / 原样文档）还是五线谱 / 混排。几何命中（减时线、附点）只有简谱那一路有。 */
   surfaceKind(): "jianpu" | "staff" | "recognize" {
     return this.mode === "mixed" ? "staff" : this.mode === "recognize" ? "recognize" : "jianpu";
   }
@@ -1174,7 +1171,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
       const part = this._markPartEl(entry);
       if (part) return part;
     }
-    if (entry.kind === "lyric") return this.painter.lyricEl(entry.id, entry.verse ?? 0, entry.verseNo);
+    if (entry.kind === "lyric") return this.painter.lyricEl(entry.id, entry.verse ?? 0);
     if (entry.kind === "barline") return this.barlineEl(entry) ?? this.painter.entryEl(entry.id, 0);
     if (entry.kind === "sustain") return this.sustainEl(entry) ?? this.painter.entryEl(entry.id, 0);
     return this.painter.entryEl(entry.id, entry.verse ?? 0);
@@ -1308,18 +1305,10 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return el ? [el] : [];
   }
 
-  /** 点亮一个条目。音符只亮音乐那部分：展开档的音符格里收着各段歌词，整格点亮会把每段的字都染上色，
-   *  所以格里的歌词另标 `cursor-off`（CSS 不给它上光标色）；那段歌词自己也被选中时再摘掉。 */
-  private _syncMark(entry: SyncEntry, el: Element): void {
+  /** 点亮一个条目。 */
+  private _syncMark(el: Element): void {
     el.classList.add("cursor-at");
-    el.classList.remove("cursor-off");
     this._syncMarked.push(el);
-    if (entry.kind !== "note") return;
-    for (const l of this.painter.cellLyricEls(entry.id)) {
-      if (l.classList.contains("cursor-at")) continue;
-      l.classList.add("cursor-off");
-      this._syncMarked.push(l);
-    }
   }
 
   /** 挂在音符上的记号自己的 `<g>`（和弦名、装饰、注记）：按类名在音符格里找，
@@ -1337,7 +1326,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
    *  **走 CSS 类、不重渲染**（沿用编辑器既有判据）。 */
   private _syncCursorToScore(): void {
     if (this._syncing) return;
-    for (const el of this._syncMarked) el.classList.remove("cursor-at", "cursor-off");
+    for (const el of this._syncMarked) el.classList.remove("cursor-at");
     this._syncMarked = [];
     // 五线谱 / 混排（文本格式）与简谱档同一条路：条目 → `_bindStaffEls` 绑好的元素。`.musicxml` 没有代码区，不走
     if (this.mode === "mixed" ? !this._visualSource() : this.mode !== "jp") return;
@@ -1357,7 +1346,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     if (entries.length === 0) return;
     // 选中音符只亮音符，选中歌词只亮那一段的那个字（不连带别的段）
     for (const entry of entries) {
-      for (const el of this._syncHeaderEls.get(entry) ?? [this._syncElOf.get(entry)]) if (el) this._syncMark(entry, el);
+      for (const el of this._syncHeaderEls.get(entry) ?? [this._syncElOf.get(entry)]) if (el) this._syncMark(el);
     }
     this._scrollSyncIntoView(this._syncMarked[0], entries[0]!);
   }
@@ -1383,9 +1372,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
   /** 只点亮这一个条目（谱面点选时用；文本那侧已经跳好了，不必再反推）。 */
   private _syncMarkOnly(entry: SyncEntry): void {
-    for (const el of this._syncMarked) el.classList.remove("cursor-at", "cursor-off");
+    for (const el of this._syncMarked) el.classList.remove("cursor-at");
     this._syncMarked = [];
-    for (const el of this._syncHeaderEls.get(entry) ?? [this._syncElOf.get(entry)]) if (el) this._syncMark(entry, el);
+    for (const el of this._syncHeaderEls.get(entry) ?? [this._syncElOf.get(entry)]) if (el) this._syncMark(el);
   }
 
   /** 需要的话翻页并滚动到可视区（复用播放高亮那一套做法）。 */
@@ -1569,7 +1558,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
   private renderPages(): void {
     this.playback.stop(); // relayout invalidates chord objects / highlight
-    this.selectedEl = null;
     this._renderPagesWith(this.painter.pageCount, (i) => this.painter.renderPage(i), {
       // 连续长纸的宽高比逐页不同（CSS 里写死的 960/540 只对 PPT 那张纸成立）
       aspectRatio: (i) => {
@@ -1577,65 +1565,24 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
         return `${w} / ${h}`;
       },
       // 原样文档没有几何拾取，双向定位靠事件冒泡找 `<g>`
-      onPage: this.painter.isDocumentLayout
+      onPage: this.painter.renderer === "jianpu"
         ? (svg) => {
           svg.addEventListener("click", (ev) => this._onSyncClick(ev));
           svg.addEventListener("dblclick", (ev) => this._onSyncDblClick(ev));
         }
-        : (svg, _wrap, i) => {
-          svg.addEventListener("click", (e) => this.onPageClick(i, svg, e));
+        : (svg) => {
+          svg.addEventListener("click", (e) => this.onPageClick(e));
           svg.addEventListener("dblclick", (e) => this._onSyncDblClick(e));
         },
     });
   }
 
   // ---------------- picking / selection ----------------
-  private onPageClick(pageIndex: number, svg: SVGSVGElement, ev: MouseEvent): void {
-    // 播放 / 暂停中点音符 = 跳到那儿接着播，不进可视化编辑的选中（否则点击被它接走、时间不动）
-    if (this.playback.active && this._seekByPick(pageIndex, svg, ev)) return;
-    // 双向定位先走一遍：它按 `<g>` 认（事件冒泡即可），**不依赖几何拾取**——
-    // 两个档因此共用同一条路径，也不受 pickPage 拾取不到时的早退影响。
-    // 可视化编辑接走了（点换行符、点空白落插入光标、Shift+点扩选）就到此为止。
-    if (this._onSyncClick(ev)) {
-      this.deselect(); // 旧的点选高亮也清掉，谱面上只留一处选中
-      return;
-    }
-    const ctm = svg.getScreenCTM();
-    if (!ctm) return;
-    const pt = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse());
-    const geom = this.painter.result?.pages[pageIndex]?.geometry;
-    const picked = geom ? this.painter.pickPage(pageIndex, toPt(geom, pt.x, pt.y))?.item ?? null : null;
+  /** 五线谱档的谱面点击：双向定位按 `<g>` 认（事件冒泡）；可视化编辑没接走就清掉旧的选中。 */
+  private onPageClick(ev: MouseEvent): void {
+    this._onSyncClick(ev);
     this.deselect();
-    if (!picked) {
-      this.setStatus("");
-      return;
-    }
-    const target = picked.selectable ? picked : this.painter.entryGroupOf(picked);
-    const el = this.painter.nodeMap.get(target);
-    if (el) {
-      el.classList.add("selected");
-      this.selectedEl = el;
-    }
-    // 点中的是音符格本身（不是格里可单独选中的数字、点、歌词）就记下它（按身份标签认），起播从这儿开始
-    const cell = target.ident;
-    if ((cell?.kind === "note" || cell?.kind === "sustain") && cell.id !== undefined) {
-      this._selectedId = cell.id;
-      this._selectedVerse = cell.pass ?? 0;
-      this.playback.seekTo({ id: cell.id, pass: cell.pass ?? 0 }); // 播放中就跳过去
-    }
-    this.setStatus(describePick(picked));
-  }
-
-  /** 简谱引擎这一路：几何拾取到音符格就按它的遍次跳过去。没点中音符返回 false（照常走点选）。 */
-  private _seekByPick(pageIndex: number, svg: SVGSVGElement, ev: MouseEvent): boolean {
-    const ctm = svg.getScreenCTM();
-    const geom = this.painter.result?.pages[pageIndex]?.geometry;
-    if (!ctm || !geom) return false;
-    const pt = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(ctm.inverse());
-    const cell = this.painter.pickPage(pageIndex, toPt(geom, pt.x, pt.y))?.target;
-    if (!cell || cell.kind !== "element") return false;
-    this.playback.seekTo({ id: cell.id, pass: cell.occurrence ?? 0 });
-    return true;
+    this.setStatus("");
   }
 
   /** 谱面被点击 → 代码区光标跳到对应原文。找不到对应条目就什么都不做
@@ -1645,14 +1592,14 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     const entry = this._syncEntryAt(hitThroughOverlay(ev));
     const onNote = entry !== null && (entry.kind === "note" || entry.kind === "lyric" || entry.kind === "sustain");
     // 原样文档没有几何拾取：播放 / 暂停中点音符按同步条目跳过去，不进可视化编辑的选中
-    if (onNote && this.painter.isDocumentLayout && this.playback.active) {
+    if (onNote && this.painter.renderer === "jianpu" && this.playback.active) {
       this.playback.seekTo({ id: entry.id, pass: entry.verse !== null ? entry.verse + 1 : 1 });
       return true;
     }
     if (this.visual.handleClick(ev, entry)) return true;
     if (entry) this._syncScoreToCursor(entry);
     // 原样文档没有几何拾取（`onPageClick` 不走），起播点按命中的同步条目记：点歌词按段（第 n 段 = 第 n 遍）
-    if (entry && this.painter.isDocumentLayout && (entry.kind === "note" || entry.kind === "lyric" || entry.kind === "sustain")) {
+    if (entry && this.painter.renderer === "jianpu" && (entry.kind === "note" || entry.kind === "lyric" || entry.kind === "sustain")) {
       this._selectedId = entry.id;
       this._selectedVerse = entry.verse !== null ? entry.verse + 1 : 1;
       this.playback.seekTo({ id: entry.id, pass: this._selectedVerse });
@@ -1710,8 +1657,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   }
 
   private deselect(): void {
-    this.selectedEl?.classList.remove("selected");
-    this.selectedEl = null;
     this._selectedId = null;
     this._selectedVerse = 0;
   }
@@ -2416,7 +2361,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   clearPages(): void {
     this.scorePane.replaceChildren();
     this.pageEls = [];
-    this.selectedEl = null;
   }
 
   /** 铺页（供识别核对视图复用同一条骨架）。 */
@@ -2592,7 +2536,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     if (outcome === "superseded" || this.mode !== "mixed") return;
     const painter = this.painter;
     this.playback.stop(); // 重排作废了和弦组与播放线；进度条总长跟着新谱
-    this.selectedEl = null;
     this._renderPagesWith(painter.pageCount, (i) => painter.renderPage(i), {
       // Portrait paper sized from the MusicXML page dimensions.
       // **纸宽不在这里给**：简谱/五线谱/混排共用 `--score-page-max`（styles.css）。
@@ -2741,14 +2684,6 @@ function upsertLayoutLines(doc: string, value: string): string {
   if (lpIdx >= 0) lines[lpIdx] = `LinesPerPage = ${value}`;
   else lines.splice(layoutAt + 1, 0, `LinesPerPage = ${value}`);
   return lines.join("\n");
-}
-
-function describePick(item: PageItem): string {
-  if (item instanceof LayoutLyric) return t("pick.lyric", { text: item.text });
-  if (item instanceof JpNumber) return t("pick.note", { text: item.text });
-  if (item instanceof TextFrame) return t("pick.text", { text: item.text });
-  const cls = [...item.classes].filter((c) => c !== "entry");
-  return cls.length ? t("pick.classes", { list: cls.join(",") }) : t("pick.element");
 }
 
 /** 判断 MusicXML 是否多声部（≥2 part、单 part 多谱表、或 ≥2 voice）→ 默认混排。 */

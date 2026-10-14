@@ -115,7 +115,7 @@ export function graceGeometry(
   // 竖向：倚音数字、减时线、八度点按**倚音自己的**叠层排（engrave/stack.ts，墨迹到墨迹等距，
   // 空 = stackGap × 倚音墨迹高），与主音那一摞同一个口径，只是整体缩小。
   // **点半径照主音整体缩小**（倚音墨迹高是主音的 `scale` 倍，点也同比）。
-  // 墨迹高按**实际字号比** `m.scale` 算，不按常数：简谱引擎的倚音是 0.59，照 0.5 排的话数字墨迹底
+  // 墨迹高按**实际字号比** `m.scale` 算，不按常数：旧简谱引擎的倚音是 0.59，照 0.5 排的话数字墨迹底
   // 比算的低一截，正好吃掉数字与第一条减时线之间那道空（看着贴在一起）。
   const gInk = ink * m.scale;
   const st: StackStyle = { gap: m.stackGap * gInk, dotRadius: m.octaveDotRadius * m.scale, beamWidth: ink * GRACE_BEAM_H };
@@ -198,7 +198,7 @@ export function graceHook(mid: number, startY: number, gInk: number, toward: -1 
  *
  * **不算连接钩**：钩子是从这一摞垂到主音身旁的那一笔，本来就该比主音顶低。
  * 落位规则「整块倚音的底离主音那一摞的顶一道空」用它——按 `centerY = 0` 排一遍量出底缘，
- * 再回填真正的 `centerY`（三引擎同一条，见 `entry.ts::addGraceNotes`、`compose/note.ts::paintGrace`、混排 `graceRow`）。
+ * 再回填真正的 `centerY`（两个引擎同一条，见 `compose/note.ts::paintGrace`、混排 `graceRow`）。
  */
 export function graceBottom(g: GraceGeom, m: GraceMetrics): number {
   let low = (m.ink * m.scale) / 2; // 数字自己的墨迹底

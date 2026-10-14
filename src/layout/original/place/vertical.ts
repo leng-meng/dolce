@@ -10,7 +10,7 @@ import type { InkMeasurer, PlacedItem, PlacedVoice } from "./model";
 
 /**
  * 一组倚音画在哪（相对锚点 x、基线 baseline）。**画（compose/note.ts::paintGrace）与让位共用这一份**：
- * 整块倚音（不含钩）的墨迹底离主音那一摞的顶一道空，与简谱引擎、混排同一条规则。
+ * 整块倚音（不含钩）的墨迹底离主音那一摞的顶一道空，与旧简谱引擎、混排同一条规则。
  */
 export function graceLayout(note: NoteElement, side: "before" | "after", m: JianpuGrid, x: number, baseline: number): GraceGeom {
   const list = side === "before" ? note.graceBefore : note.graceAfter;
@@ -146,7 +146,7 @@ export function articStack(el: MusicElement, m: JianpuGrid, ink: InkMeasurer, ga
 
 /**
  * 一个音符**最低的墨迹**（相对基线）：数字墨迹底、减时线最下一层、低音点，取最低的那个。
- * 落点走公共那一份（engrave/stack.ts），与画点、简谱引擎的 entryBottom 同一套。
+ * 落点走公共那一份（engrave/stack.ts），与画点、旧简谱引擎的 entryBottom 同一套。
  */
 export function noteInkBottom(note: NoteElement, m: JianpuGrid): number {
   return stackBottom(m.ink.noteHeight / 2, noteBeams(note), Math.max(0, -note.octave), m.ink.stack);

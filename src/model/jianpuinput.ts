@@ -1,6 +1,5 @@
 // `ScoreDoc` → 简谱排版引擎的输入（`layout/input.ts`）。**只此一份投影**，按形状分支：
 //
-//   `jianpuInputOfXml(song)`        MusicXML 形状（成书重排）
 //   `jianpuInputOfDoc(doc, opts)`   简谱形状：文本谱 / 123 / ABC / `.musicxml` 的简谱档（经排版行视图 `pu/slots.ts::docView`）
 //   `jianpuInputOfJpw(doc)`         `.jpwabc`（按原文小节，行内 `$` 换行照原位）
 //
@@ -8,33 +7,21 @@
 // 分歧都写成分支里明写的一条，不悄悄统一——统一观感只动绘制层，不在输入这一层抹平。
 // 每个和弦带元素 id：点选、试听高亮、断句量宽都按它认。
 
-import { getMeta } from "./metakeys";
 import { Fraction } from "../common/fraction";
 import { BARLINE_MARKS, DYNAMICS, TERMS } from "../pu/glyph";
-import { dynamicGlyphs } from "../engrave/dynamics";
-import { GlyphCodes } from "../smufl/smufl";
-import { harmonyToText } from "../score/harmonyparse";
-import { SECTION_WORD_RE } from "../score/phraseinput";
 import { BarStyle, StartStopDiscontinue } from "../score/enums";
 import { MusicCommon } from "../score/jppitch";
 import { PlayData } from "../score/playorder";
 import type {
-  JBreak, JChord, JCredit, JDirection, JKey, JLyric, JMeasure, JNote, JScore, JTime,
+  JBreak, JChord, JCredit, JKey, JLyric, JMeasure, JNote, JScore, JTime,
 } from "../layout/input";
-import { measureDuration } from "../layout/input";
-import { AccidentalCarry, attrsAt, continuesMeasure, degreeFromPitch, quarterTempos } from "./jianpu";
-import type {
-  Barline, Chord as DocChord, Direction, DirectionPart, ElementId, Harmony, Measure as DocMeasure, MeasureAttrs,
-  Mark as DocMark, Note as DocNote, Part as DocPart, Pitch, ScoreDoc, Song,
-} from "./doc";
-import { playDataOfDoc, tempoOfDoc } from "./playdoc";
+import { quarterTempos } from "./jianpu";
+import type { ElementId, Measure as DocMeasure, Mark as DocMark, ScoreDoc, Song } from "./doc";
 import { docView, type SlotRef } from "../pu/slots";
 import { distinctVerses, jpAlterOf } from "../pu/phrasesong";
 import { playDataOfSong } from "./playsong";
 import { linesOfVoice, marksAt, nextSyllables, takesLyric, voiceNumbers } from "../pu/ast";
 import type { LyricLine, Mark, NoteElement, PuSong, ScoreLine } from "../pu/ast";
-import { decoKey } from "./deconames";
-import { xmlAlign, xmlFont } from "./xmlsurface";
 
 // ───────────────────────── 构造 ─────────────────────────
 
@@ -111,67 +98,7 @@ function chords(m: JMeasure): JChord[] {
   return m.entries.filter((e): e is JChord => e.kind === "chord");
 }
 
-// ───────────────────────── MusicXML 形状 ─────────────────────────
-//
-// 口径（一路照搬，不修）：
-//   - 只读第一声部；时值/拍位按**首小节**的 divisions 折算；`<forward>` 不认（游标取 `Chord.onset`）
-//   - 倚音一个 `<note>` 一个音，挂到它**后面第一个**非倚音和弦上（可跨小节）
-//   - `<harmony>` / `<direction>` 印在它后面那个音符上；落在倚音前时落到**前一个**和弦上
-//   - 小节末尾的记号挂到最后一个和弦上、记 `atBarEnd`
-//   - 歌词段号只看原文最后一个字符（`chorus` 记副歌）；和弦文字升降号印 `♯♭`
-//   - 小节线条目的位置是**没折算**的 divisions（原样照搬）
-
-/** 读谱期带着音高的音（唱名由音高推，和弦取最高音也按它） */
-interface XNote extends JNote {
-  pitch: number;
-  step: string;
-  alter: number;
-  octave: number;
-  rest: boolean;
-}
-
-interface XChord extends JChord {
-  voice: number;
-}
-
-const PITCH_MAP: Record<string, number> = { C: 0, D: 2, E: 4, F: 5, G: 7, A: 9, B: 11 };
-
-/** 语义层记号 → 单字符记号位 */
-const JP_ALTER: Readonly<Record<string, string>> = {
-  sharp: "#", "double-sharp": "#", flat: "b", "double-flat": "b", natural: "n",
-};
-
-/** MusicXML 形状的一首 → 引擎输入。 */
-export function jianpuInputOfXml(song: Song): JScore {
-  const credit: JCredit[] = [];
-  const title = xmlTitleOf(song);
-  for (const c of song.credits ?? []) {
-    const cw = (c.words ?? c.text.split("\n")).map((s) => s.trim()).filter((s) => s.length > 0).join("\n");
-    credit.push({ type: c.type ?? null, text: cw, page: (c.page || 1) - 1 });
-  }
-  for (const it of credit) if (it.type === null && it.text === title) it.type = "title";
-  // 题下经文：MusicXML 里是 `<miscellaneous-field name="scripture">`（或已经是一条 credit，那就不再加）
-  if (!credit.some((c) => c.type === "scripture")) {
-    for (const t of [...getMeta(song, "scripture"), ...getMeta(song, "scripture-ref")]) {
-      if (t.trim()) credit.push({ type: "scripture", text: t.trim(), page: 0 });
-    }
-  }
-
-  const src = song.parts[0];
-  if (!src) throw new Error("no part");
-  const measures = loadXmlPart(src, song);
-  let carry = new AccidentalCarry();
-  for (const m of measures) {
-    if (!continuesMeasure(src.measures[m.index - 1], src.measures[m.index]!)) carry = new AccidentalCarry();
-    initXmlMeasure(m, carry, attrsAt(src, 1, m.index).clef?.octaveChange ?? 0);
-  }
-  findRefrain(measures);
-  const playData = playDataOfDoc(song);
-  playData.tempo = tempoOfDoc(song);
-  return { parts: [{ measures }], title, credit, playData };
-}
-
-/** MusicXML 的曲名：`title` 类 credit 的首行，没有就 `work-title` / `movement-title`（成书取它，同 `jianpuInputOfXml` 的 `JScore.title`） */
+/** MusicXML 的曲名：`title` 类 credit 的首行，没有就 `work-title` / `movement-title`（成书取它） */
 export function xmlTitleOf(song: Song): string {
   for (const c of song.credits ?? []) {
     if (c.type?.trim() !== "title") continue;
@@ -180,410 +107,6 @@ export function xmlTitleOf(song: Song): string {
   }
   const wt = song.work.title !== song.work.movementTitle ? song.work.title?.trim() : undefined;
   return wt || song.work.movementTitle?.trim() || "";
-}
-
-interface NoteMarks {
-  /** 这个音上起几条弧 */
-  slurStarts: number;
-  slurStops: number;
-  tupletBegin: boolean;
-  tupletEnd: boolean;
-}
-
-/** 读谱期的配对池（弧、延音、连音、还没落到主音上的倚音）。 */
-interface XmlPool {
-  slurChords: JChord[];
-  tieNotes: XNote[];
-  tupletNotes: XNote[];
-  graceNotes: XNote[];
-}
-
-const absTick = (nt: JNote): Fraction => nt.chord.position.plus(nt.chord.measure.position);
-
-function loadXmlPart(src: DocPart, song: Song): JMeasure[] {
-  const div = src.measures[0]?.attrs?.divisions ?? 1;
-  let pos = new Fraction(0);
-  const pool: XmlPool = { slurChords: [], tieNotes: [], tupletNotes: [], graceNotes: [] };
-  const marksAt = marksByNote(song);
-  const out: JMeasure[] = [];
-  let prev: JMeasure | null = null;
-  src.measures.forEach((dm, mid) => {
-    const mea = newMeasure(mid);
-    mea.position = pos;
-    loadXmlMeasure(mea, dm, prev, div, pool, marksAt);
-    out.push(mea);
-    pool.tupletNotes.sort((a, b) => absTick(a).compareTo(absTick(b)));
-    pairTuplets(pool.tupletNotes);
-    pool.tupletNotes = [];
-    pos = pos.plus(measureDuration(mea));
-    prev = mea;
-  });
-  // 圆滑线：栈式（后开先闭），嵌套的两条弧各自连对端点
-  const stack: JChord[] = [];
-  for (const c of pool.slurChords) {
-    for (let k = 0; k < c.slurEnds; k++) {
-      const s = stack.pop();
-      if (s) s.slurEndChords.push(c);
-    }
-    // 同一个音起几条弧（外弧与内弧同起点）就压几次
-    const starts = c.id === null ? 0 : Math.max(0, ...[...(marksAt.get(c.id)?.values() ?? [])].map((m) => m.slurStarts));
-    for (let k = c.slurStart ? Math.max(1, starts) : 0; k > 0; k--) stack.push(c);
-  }
-  // 延音线：起止各按拍位排序后逐个配
-  const starts = pool.tieNotes.filter((n) => n.tieStart).sort((a, b) => absTick(a).compareTo(absTick(b)));
-  const ends = pool.tieNotes.filter((n) => n.tieEnd).sort((a, b) => absTick(a).compareTo(absTick(b)));
-  for (let i = 0; i < starts.length && i < ends.length; i++) {
-    starts[i]!.tieNext = ends[i]!;
-    ends[i]!.tiePrev = starts[i]!;
-  }
-  return out;
-}
-
-/** 和弦 id → 第几个音 → 这个音上的 slur / tuplet 起止 */
-function marksByNote(song: Song): Map<number, Map<number, NoteMarks>> {
-  const out = new Map<number, Map<number, NoteMarks>>();
-  const at = (id: number, k: number): NoteMarks => {
-    let byNote = out.get(id);
-    if (!byNote) out.set(id, (byNote = new Map()));
-    let m = byNote.get(k);
-    if (!m) byNote.set(k, (m = { slurStarts: 0, slurStops: 0, tupletBegin: false, tupletEnd: false }));
-    return m;
-  };
-  for (const mk of song.marks) {
-    if (mk.type === "slur") {
-      at(mk.start, mk.startNote ?? 0).slurStarts += 1;
-      at(mk.end, mk.endNote ?? 0).slurStops += 1;
-    } else if (mk.type === "tuplet") {
-      at(mk.start, mk.startNote ?? 0).tupletBegin = true;
-      at(mk.end, mk.endNote ?? 0).tupletEnd = true;
-    }
-  }
-  return out;
-}
-
-function loadXmlMeasure(
-  m: JMeasure,
-  dm: DocMeasure,
-  prev: JMeasure | null,
-  div: number,
-  pool: XmlPool,
-  marksAt: Map<number, Map<number, NoteMarks>>,
-): void {
-  if (prev) {
-    m.key = { fifths: prev.key.fifths };
-    m.time = { beats: prev.time.beats, beatType: prev.time.beatType };
-  }
-  if (dm.attrs) xmlAttributes(m, dm.attrs);
-
-  /** 最后一个非倚音和弦的终点（没折算的 divisions） */
-  let noteEnd = new Fraction(0);
-  let prevEnd = 0;
-  let pendingHarmony: string | null = null;
-  let pendingDirections: JDirection[] = [];
-  const count = dm.elements.length;
-  const barlinesAt = (i: number, where: "left" | "middle" | "right"): void => {
-    for (const b of dm.barlines ?? []) {
-      if (b.location !== where) continue;
-      if (where === "middle" && b.afterElements !== i) continue;
-      xmlBarline(m, b, noteEnd);
-    }
-  };
-  const directionsAt = (i: number): void => {
-    for (const d of dm.directions ?? []) {
-      if (d.type === "sound" || Math.min(d.afterElements ?? 0, count) !== i) continue;
-      pendingDirections.push(...directionMarks(d));
-    }
-    for (const la of dm.laterAttrs ?? []) if (Math.min(la.afterElements, count) === i) xmlAttributes(m, la.attrs);
-  };
-  /** 读完一个 `<note>` 之后：攒着的和弦符号与记号落到最后一个条目上 */
-  const flushPending = (): void => {
-    const last = m.entries[m.entries.length - 1];
-    if (pendingHarmony && last?.kind === "chord" && !last.harmony) {
-      last.harmony = pendingHarmony;
-      pendingHarmony = null;
-    }
-    if (pendingDirections.length && last?.kind === "chord") {
-      last.directions.push(...pendingDirections);
-      pendingDirections = [];
-    }
-  };
-
-  /** 落在 `at`（没折算的 divisions）的和弦挂到那一拍的增时线上；不在某条增时线的拍头上就返回 false */
-  const onSustain = (h: Harmony, at: number): boolean => {
-    const text = xmlHarmonyText(h);
-    const host = chords(m).filter((c) => c.position.toFloat() * div <= at + 1e-6).pop();
-    if (!text || !host) return false;
-    const rel = at / div - host.position.toFloat();
-    const k = Math.round(rel);
-    if (Math.abs(rel - k) > 1e-6 || k < 1 || k >= host.beats) return false;
-    const list = (host.sustainHarmonies ??= Array.from({ length: Math.ceil(host.beats) - 1 }, () => null));
-    if (list[k - 1]) return false;
-    list[k - 1] = text;
-    return true;
-  };
-
-  barlinesAt(0, "left");
-  dm.elements.forEach((el, i) => {
-    barlinesAt(i, "middle");
-    directionsAt(i);
-    if (el.kind !== "chord") {
-      // 小节末的 `y`（`fromxml.ts` 收音符后面欠着的 `<harmony>`）：offset 为负时往回数、落在前面长音的增时线上
-      if (el.harmony && (el.harmony.offset ?? 0) < 0 && onSustain(el.harmony, noteEnd.toFloat() + el.harmony.offset!)) return;
-      if (el.harmony) pendingHarmony = xmlHarmonyText(el.harmony) ?? pendingHarmony;
-      return;
-    }
-    if (el.harmony) pendingHarmony = xmlHarmonyText(el.harmony) ?? pendingHarmony;
-    // 长音中途换的和弦（`offset` 从本音起算）要等本音排进去才找得到增时线，见 `notes.forEach` 之后。
-    // 以前与本音的和弦共用 `pendingHarmony`，后面的顶掉前面的——音符上印的成了中途那个和弦
-    const later = el.laterHarmonies ?? [];
-    const onset = el.onset ?? prevEnd;
-    prevEnd = onset + el.duration.divisions;
-    const notes: (DocNote | null)[] = el.notes.length ? el.notes : [null];
-    if (el.grace) {
-      notes.forEach((dn, k) => {
-        const g = xmlNote(null, el, dn, k, marksAt);
-        pool.graceNotes.push(g);
-        flushPending();
-      });
-      return;
-    }
-    notes.forEach((dn, k) => {
-      const newCh = m.entries.length === 0 || k === 0;
-      if (newCh) m.entries.push(newChord(m, el.id));
-      const last = m.entries[m.entries.length - 1] as XChord;
-      if (pool.graceNotes.length && newCh) {
-        for (const g of pool.graceNotes) g.chord = last;
-        last.graceNotes.push(...pool.graceNotes);
-        pool.graceNotes = [];
-      }
-      const nt = xmlNote(last, el, dn, k, marksAt);
-      if (newCh) pool.slurChords.push(last);
-      if (nt.tieStart || nt.tieEnd) pool.tieNotes.push(nt);
-      if (nt.tupletBegin || nt.tupletEnd) pool.tupletNotes.push(nt);
-      last.notes.push(nt);
-      if (newCh) {
-        xmlDuration(last, el);
-        last.position = new Fraction(onset).divInt(div);
-        last.duration = new Fraction(el.duration.divisions).divInt(div);
-        last.voice = el.voice;
-        last.rest = nt.rest;
-        noteEnd = new Fraction(onset + el.duration.divisions);
-      }
-      flushPending();
-    });
-    const host = m.entries[m.entries.length - 1] as XChord;
-    for (const h of later) {
-      if (onSustain(h, onset + (h.offset ?? 0))) continue;
-      // 落不到增时线上、音符本身又没有和弦的：退一步挂在音符上（同 `jianpuproject.ts::placeLaterHarmonies`）
-      if (!host.harmony) host.harmony = xmlHarmonyText(h);
-    }
-  });
-  directionsAt(count);
-  barlinesAt(count, "middle");
-  barlinesAt(count, "right");
-  // 记号写在小节最后一个音符**之后**：挂到本小节最后一个和弦上、贴着小节线右对齐
-  if (pendingDirections.length) {
-    const cs = chords(m);
-    const last = cs[cs.length - 1];
-    if (last) {
-      for (const d of pendingDirections) d.atBarEnd = true;
-      last.directions.push(...pendingDirections);
-    }
-  }
-}
-
-function xmlHarmonyText(h: Harmony): string | null {
-  return h.root.step ? harmonyToText(h, "unicode") : null;
-}
-
-function xmlNote(
-  chord: JChord | null,
-  el: DocChord,
-  dn: DocNote | null,
-  k: number,
-  marksAt: Map<number, Map<number, NoteMarks>>,
-): XNote {
-  const nt: XNote = { ...newNote(chord as JChord), pitch: 0, step: " ", alter: 0, octave: 0, rest: false };
-  const p = dn?.pitch;
-  if (p) {
-    nt.octave = p.octave;
-    nt.step = p.step[0] ?? " ";
-    nt.alter = Math.trunc(p.alter);
-    nt.pitch = (nt.octave + 1) * 12 + (PITCH_MAP[nt.step] ?? 0) + nt.alter;
-  }
-  if (el.rest) nt.rest = true;
-  if (k === 0) {
-    for (const l of el.lyrics ?? []) {
-      if (l.text.length === 0) continue;
-      const number = l.numberText ?? String(l.number);
-      if (number === "chorus") nt.lyrics.push(lyric(l.text, 1, true));
-      else nt.lyrics.push(lyric(l.text, number.charCodeAt(number.length - 1) - "0".charCodeAt(0)));
-    }
-  }
-  if (dn?.tie?.start) nt.tieStart = true;
-  if (dn?.tie?.stop) nt.tieEnd = true;
-  const mk = marksAt.get(el.id)?.get(k);
-  if (mk?.tupletBegin) nt.tupletBegin = true;
-  if (mk?.tupletEnd) nt.tupletEnd = true;
-  if (chord) {
-    if (k === 0 && el.notations?.fermata) chord.fermata = true;
-    if (k === 0) for (const a of el.notations?.articulations ?? []) if (decoKey(a) === "zy") chord.articulations.push("accent");
-    if (mk?.slurStarts) chord.slurStart = true;
-    if (mk && mk.slurStops > chord.slurEnds) chord.slurEnds = mk.slurStops;
-  }
-  return nt;
-}
-
-function xmlDuration(ch: JChord, el: DocChord): void {
-  if (el.duration.dots > 0) ch.dot = 1;
-  switch (el.duration.type) {
-    case "whole": ch.beats = 4; ch.beams = 0; break;
-    case "half": ch.beats = 2; ch.beams = 0; break;
-    case "quarter": ch.beats = 1; ch.beams = 0; break;
-    case "eighth": ch.beats = 1; ch.beams = 1; break;
-    case "16th": ch.beats = 1; ch.beams = 2; break;
-    case "32nd": ch.beats = 1; ch.beams = 3; break;
-    case "64th": ch.beats = 1; ch.beams = 4; break;
-    case undefined:
-      if (el.rest) { ch.beats = 4; ch.beams = 0; return; }
-      break;
-    default: throw new Error("bad note type " + el.duration.type);
-  }
-  if (ch.dot === 1 && ch.beats > 1) ch.beats = (ch.beats * 3) / 2;
-}
-
-function xmlAttributes(m: JMeasure, a: MeasureAttrs): void {
-  if (a.key) {
-    m.key = { fifths: a.key.fifths };
-    m.keyChange = true;
-  }
-  if (a.time) {
-    m.time = { beats: a.time.beats, beatType: a.time.beatType };
-    m.timeChange = true;
-  }
-}
-
-function xmlBarline(m: JMeasure, b: Barline, noteEnd: Fraction): void {
-  if (b.style) {
-    const style = b.style as BarStyle;
-    if (b.location === "left") m.leftBarline = style;
-    else m.barline = style;
-    m.entries.push({ kind: "bar", position: noteEnd });
-  }
-  if (b.repeat) {
-    if (b.repeat === "backward") m.repeatBackward = true;
-    else m.repeatForward = true;
-  }
-  const ending = b.ending;
-  if (ending) {
-    if (b.location === "left") {
-      const text = ending.text ?? "";
-      m.endingText = text || null;
-      const digits = text.match(/\d+/g);
-      m.endingNum = endingNums(digits ? digits.join(",") : ending.numbers.join(","));
-      m.endingLeft = true;
-    } else {
-      m.endingRight = ending.type as StartStopDiscontinue;
-    }
-  }
-}
-
-/** `<direction>` 的各子元素（首个 + `more`） */
-const partsOf = (d: Direction): DirectionPart[] => [d, ...(d.more ?? [])];
-
-/** 表情/跳转记号（`rit.` / `Fine` / `D.S.` / 𝄋 / `mf`）；段落词不算（断句另读）。 */
-function directionMarks(d: Direction): JDirection[] {
-  const res: JDirection[] = [];
-  for (const it of partsOf(d)) {
-    if (it.type === "words") {
-      const t = (it.text ?? "").trim();
-      const bare = t.replace(/^[（(]\s*/, "").replace(/\s*[）)]$/, "");
-      if (!t || SECTION_WORD_RE.test(t) || SECTION_WORD_RE.test(bare)) continue;
-      if (!/[\p{L}\p{N}]/u.test(t)) continue;
-      res.push({
-        text: t,
-        music: false,
-        italic: xmlFont(it)?.style === "italic",
-        ...(xmlAlign(it).justify === "right" ? { atBarEnd: true } : {}),
-      });
-    } else if (it.type === "segno" || it.type === "coda") {
-      res.push({ text: it.type === "segno" ? GlyphCodes.segno : GlyphCodes.coda, music: true, italic: false });
-    } else if (it.type === "dynamics") {
-      const g = it.text ? dynamicGlyphs(it.text) : "";
-      if (g) res.push({ text: g, music: true, dynamic: true, italic: false });
-    }
-  }
-  return res;
-}
-
-/** 读完一小节：只留 voice ≤ 1、和弦取最高音（歌词并到它上面），再按调号推唱名与记号（倚音先于主音）。
- *  **经简谱语义层**：唱名与八度点 `degreeFromPitch`、小节内延续的记号 `AccidentalCarry.mark`；双升/双降印成 `#`/`b`。 */
-function initXmlMeasure(m: JMeasure, carry: AccidentalCarry, clefOctave: number): void {
-  m.entries = m.entries.filter((e) => e.kind !== "chord" || (e as XChord).voice <= 1);
-  for (const ch of chords(m)) {
-    if (ch.notes.length <= 1) continue;
-    let cur = -1;
-    let maxPit = 0;
-    const lrc: JLyric[] = [];
-    (ch.notes as XNote[]).forEach((nt, i) => {
-      if (nt.pitch > maxPit) {
-        cur = i;
-        maxPit = nt.pitch;
-      }
-      lrc.push(...nt.lyrics);
-    });
-    const v = ch.notes[cur]!;
-    v.lyrics = lrc;
-    ch.notes = [v];
-  }
-  const init = (nt: XNote): void => {
-    const pitch = { step: nt.step as Pitch["step"], alter: nt.alter, octave: nt.octave };
-    const key = { fifths: m.key.fifths };
-    const d = degreeFromPitch(pitch, key);
-    nt.number = nt.rest ? "0" : String(d.number);
-    nt.jpAlter = JP_ALTER[carry.mark(pitch, key) ?? ""] ?? " ";
-    nt.jpOctave = d.octaveShift - clefOctave; // 八度谱号：照记谱八度写，同 `assignDegrees`
-  };
-  for (const ch of chords(m)) {
-    for (const g of ch.graceNotes) init(g as XNote);
-    if (ch.rest) continue;
-    for (const nt of ch.notes) init(nt as XNote);
-  }
-}
-
-/** 副歌判定：曲尾那一段各位置都只剩一行歌词 → 各段共用（房内的单行歌词只属于该房次，不算）。 */
-function findRefrain(measures: readonly JMeasure[]): void {
-  const countInf = new Map<string, { pos: Fraction; n: number }>();
-  let inEnding = false;
-  for (const m of measures) {
-    if (m.endingLeft) inEnding = true;
-    for (const ent of chords(m)) {
-      if (inEnding) continue;
-      let cnt = 0;
-      for (const n of ent.notes) for (const l of n.lyrics) if (l.text.length > 0) cnt++;
-      if (cnt === 0) continue;
-      const pos = m.position.plus(ent.position);
-      const key = pos.toString();
-      const prev = countInf.get(key);
-      countInf.set(key, { pos, n: (prev?.n ?? 0) + cnt });
-    }
-    if (m.endingRight !== null) inEnding = false;
-  }
-  const entries = [...countInf.values()].sort((a, b) => a.pos.compareTo(b.pos));
-  let refrainPos: Fraction | null = null;
-  for (let i = entries.length - 1; i >= 0; i--) {
-    if (entries[i]!.n === 1) refrainPos = entries[i]!.pos;
-    else if (entries[i]!.n > 1) break;
-  }
-  if (!refrainPos) return;
-  for (const m of measures) {
-    const end = m.position.plus(measureDuration(m));
-    if (end.compareTo(refrainPos) <= 0) continue;
-    for (const ent of chords(m)) {
-      if (m.position.plus(ent.position).compareTo(refrainPos) < 0) continue;
-      for (const n of ent.notes) for (const l of n.lyrics) l.refrain = true;
-    }
-  }
 }
 
 // ───────────────────────── 简谱形状（经排版行视图） ─────────────────────────
@@ -886,12 +409,12 @@ function rowsPart(
   return measures;
 }
 
-/** 文本谱 `&xx` 记号 → 引擎画的奏法记号名（`entry.ts::addNotations`）。 */
+/** 文本谱 `&xx` 记号 → 奏法记号名。 */
 const ARTIC_OF_ORNAMENT: Readonly<Record<string, string>> = { zy: "accent", dy: "staccato", bc: "tenuto", hx: "breath" };
 
 /**
  * 原样档（`decorate`）才要的那几样：和弦、段落词、重音、力度/术语。展开档不画它们（投影片只要旋律与词）；倚音两档都画（见 `rowsPart`）。
- * 只收引擎画得出的：奏法记号是重音、顿音、保持音、换气（`entry.ts::addNotations`），其余 `&xx` 暂不出现。
+ * 只收引擎画得出的：奏法记号是重音、顿音、保持音、换气，其余 `&xx` 暂不出现。
  */
 function decorateChord(ch: JChord, el: NoteElement): void {
   if (el.chord) ch.harmony = el.chord;

@@ -1,4 +1,4 @@
-// 段落词（「（副歌）」）的量宽与落点：简谱引擎（`layout.ts::Line.addSectionWords` / `spreadForSectionWords` / `nudgeForSectionWords`）
+// 段落词（「（副歌）」）的量宽与落点：旧简谱引擎（`layout.ts::Line.addSectionWords` / `spreadForSectionWords` / `nudgeForSectionWords`）
 // 与原样文档（`layout/original/place/band.ts`、`spacing.ts`）共用这一份判据。
 import type { CompressMode } from "../common/cjkpunct";
 import type { Font } from "../layout/font";
@@ -11,7 +11,7 @@ export interface SectionWordGeom {
   width: number;
   /** 段落词字号：让位间隙与抬升量都按它算 */
   size: number;
-  /** 与和弦之间留的净空；不给就是 0.6 个字号（简谱引擎：按字面盒量，收口括号墨迹顶到字面右缘，见 `placeSectionWord`）。
+  /** 与和弦之间留的净空；不给就是 0.6 个字号（旧简谱引擎：按字面盒量，收口括号墨迹顶到字面右缘，见 `placeSectionWord`）。
    *  原样文档按墨迹量，给的是和弦与和弦之间那道空（用户定：段落词在保持间距的前提下尽早出现，不离左边的和弦老远） */
   gap?: number;
   /** 和弦那条基线 */

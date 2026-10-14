@@ -128,29 +128,6 @@ export function defaultJianpuStyle(fontSize: number): JianpuStyle {
   };
 }
 
-/** 「排版方式」那几个开关：不是尺寸，由档位决定。 */
-export interface JianpuFlags {
-  /** 一张连续长纸（原样档长图） */
-  continuous: boolean;
-  /** 标题与词曲排在第一页顶上（原样档） */
-  bookHead: boolean;
-  /** 源里的行放不下就整首重新断行（原样档） */
-  reflow: boolean;
-  /** `song` = 每页底印曲名与页码；`none` = 页眉页脚由整本合成那一层加（成书） */
-  furniture: "song" | "none";
-}
-
-export function jianpuFlagsOf(sheet: StyleSheet): JianpuFlags {
-  const preset = sheet.jianpu.preset ?? "default";
-  const original = preset === "original";
-  return {
-    continuous: original && isLongImage(sheet),
-    bookHead: original,
-    reflow: original,
-    furniture: preset === "book" ? "none" : "song",
-  };
-}
-
 export function jianpuStyleOf(sheet: StyleSheet): JianpuStyle {
   const preset = sheet.jianpu.preset ?? "default";
   let st: JianpuStyle;

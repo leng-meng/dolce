@@ -38,7 +38,7 @@ export function paintBand(c: OriginalCtx, g: Group, el: MusicElement, kinds?: Re
       paintChord(c, g, t, x, y);
       continue;
     }
-    // SMuFL 字形（奏法、力度、跳转字形）挂 `smufl`（`musicText`）：PPTX 按它转曲、成书按它落乐谱字体（同简谱引擎的 `SmuflText`）
+    // SMuFL 字形（奏法、力度、跳转字形）挂 `smufl`（`musicText`）：PPTX 按它转曲、成书按它落乐谱字体（同旧简谱引擎的 `SmuflText`）
     const family = t.face === "lyric" ? m.style.font.lyric.family : m.style.font.text.family;
     const tf = t.face === "music" ? musicText(t.text, new Font("Bravura", t.size), c.ink) : text(t.text, x, y, new Font(family, t.size), c.ink);
     if (t.face === "music") {
@@ -199,7 +199,7 @@ export function paintOrnaments(c: OriginalCtx, g: Group, el: NoteElement | Barli
       g.add(p);
     } else if (orn.name === "hx") {
       // 换气：细笔画的 V 挂在音符右上角（形状与落点走公共那一份，engrave/breath.ts）
-      g.add(breathPath(x, baseline, m.ink.noteHeight, 1.1, c.ink)); // 类名 `breath`，不进上方带（同简谱引擎）
+      g.add(breathPath(x, baseline, m.ink.noteHeight, 1.1, c.ink)); // 类名 `breath`，不进上方带（同旧简谱引擎）
     }
   }
   paintBand(c, g, el, NOTE_MARKS);

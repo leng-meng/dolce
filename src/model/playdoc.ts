@@ -1,6 +1,6 @@
 // `ScoreDoc`（MusicXML 形状）→ 演唱顺序、试听输入、`.jpwabc` 写出端输入。
 //
-// **口径同简谱引擎输入 `model/jianpuinput.ts::jianpuInputOfXml`**（回归 `playorder-check`）：
+// 口径（回归 `playorder-check`）：
 //   - 只读第一声部；小节、和弦、歌词段号、房号、反复经 `phrasedoc.ts::phrasePartOfDoc` 拼（与断句同一份输入）
 //   - 跳转取 `<direction><sound>`：落点是**游标当时的位置**（最后一个非倚音和弦的终点），
 //     由 `Direction.afterElements` 还原成它前面那个音符的终点
@@ -111,7 +111,7 @@ function slursOf(song: Song): { starts: Set<ElementId>; ends: Map<ElementId, num
 }
 
 /** 一个声部各和弦的歌词（导出 MIDI 的歌词事件）：段号、副歌取断句输入那份（同音同号已顺延、`findRefrain` 判过副歌，
- *  与 MusicXML 展开档 `jianpuInputOfXml` 同口径——副歌各遍都唱），字取模型的、并上收尾标点。
+ *  副歌各遍都唱），字取模型的、并上收尾标点。
  *  断句输入只收 voice ≤ 1，其余 voice 的和弦这里没有，由 `chordEntry` 直接读模型。 */
 function lyricsOfPart(song: Song, partIndex: number): Map<ElementId, TimelineLyric[]> {
   const out = new Map<ElementId, TimelineLyric[]>();

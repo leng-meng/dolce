@@ -1,13 +1,10 @@
-// 把乐句分析的断点写到简谱排版引擎的输入上（成书重排用），以及断句要的「放不放得下」换键。
+// 把乐句分析的断点写进文档（成书重排用），以及断句要的「放不放得下」换键。
 //
-// 断句在 `ScoreDoc` 拼出的断句输入（`phraseinput.ts`）上跑，引擎吃的是 `model/jianpuinput.ts` 的投影；
-// 两边的和弦**按元素 id 对上**。断点直接写成引擎输入里的换行条目，数据一路不落地成文本。
+// 断句在 `ScoreDoc` 拼出的断句输入（`phraseinput.ts`）上跑，两边的和弦**按元素 id 对上**，断点经 `model/breaks.ts::applyBreaks` 写回。
 //
 // 无 DOM 依赖。
 import type { Chord, ElementId, Measure, Song } from "../model/doc";
 import { applyBreaks, type LineStart } from "../model/breaks";
-import type { JChord, JMeasure } from "../layout/input";
-import { breakAfterChord, breakAtMeasureEnd } from "../model/jianpuinput";
 import { chordsOf, type PhraseChord, type PhrasePart } from "./phraseinput";
 import { headFpOf, lyricPunctScore, mainLyricText, type CutCandidate, type FitMetric, type PhraseBreaks } from "./phrase";
 
@@ -29,77 +26,6 @@ export interface ApplyBreakResult {
   lines: number;
   pages: number;
 }
-
-/** 引擎量出来的自然跨度（按引擎输入的和弦）换成按断句输入的和弦：两边按元素 id 对上。 */
-export function fitForInput(
-  fit: { width: number; spans: ReadonlyMap<JChord, { x0: number; x1: number }> },
-  idOf: ReadonlyMap<PhraseChord, ElementId>,
-): FitMetric {
-  const byId = new Map<ElementId, { x0: number; x1: number }>();
-  for (const [c, sp] of fit.spans) if (c.id !== null) byId.set(c.id, sp);
-  const spans = new Map<PhraseChord, { x0: number; x1: number }>();
-  for (const [c, id] of idOf) {
-    const sp = byId.get(id);
-    if (sp) spans.set(c, sp);
-  }
-  return { width: fit.width, spans };
-}
-
-/**
- * 在断句输入上算出的断点写进引擎输入（`measures` 一般是 `score.parts[0].measures`）。
- * 两边小节一一对应、和弦按元素 id 对上；对不上直接抛错，不静默。
- */
-export function applyPhraseBreaks(
-  measures: readonly JMeasure[], input: PhrasePart, idOf: ReadonlyMap<PhraseChord, ElementId>, breaks: PhraseBreaks,
-  opt: ApplyBreakOptions = {},
-): ApplyBreakResult {
-  if (measures.length !== input.measures.length) {
-    throw new Error(`断句输入与引擎输入小节数对不上：${input.measures.length} / ${measures.length}`);
-  }
-  const chordOf = new Map<ElementId, JChord>();
-  for (const m of measures) for (const e of m.entries) if (e.kind === "chord" && e.id !== null) chordOf.set(e.id, e);
-  const target = (c: PhraseChord): JChord => {
-    const id = idOf.get(c);
-    const hit = id === undefined ? undefined : chordOf.get(id);
-    if (!hit) throw new Error(`断句输入的和弦在引擎输入里找不到（id ${id}）`);
-    return hit;
-  };
-  const linesPerPage = opt.linesPerPage ?? 4;
-  const sectionNewPage = opt.sectionNewPage ?? false;
-  const useMidBreaks = opt.useMidBreaks ?? true;
-  let lines = 0;
-  let pages = 1;
-  // 段落起点一定换页，但**不能连着换两次**：段界落在小节内部（sectionCutChords）时，
-  // 那个小节的末尾往往同时也是 measureBreaks 里的一条。
-  let justPaged = false;
-
-  const brk = (write: (page: boolean) => void, forcePage: boolean): void => {
-    lines++;
-    const page = forcePage || (linesPerPage > 0 && !justPaged && lines % linesPerPage === 0);
-    write(page);
-    if (page) {
-      pages++;
-      lines = 0;
-    }
-    justPaged = page;
-  };
-
-  for (let i = 0; i < measures.length; i++) {
-    const m = measures[i]!;
-    if (useMidBreaks) {
-      for (const c of chordsOf(input.measures[i]!)) {
-        if (!breaks.midBreaks.has(c) && !breaks.sectionCutChords.has(c)) continue;
-        brk((page) => breakAfterChord(m, target(c), page), sectionNewPage && breaks.sectionCutChords.has(c));
-      }
-    }
-    const next = i + 1;
-    if (next < measures.length && (breaks.measureBreaks.has(next) || breaks.sectionStarts.has(next))) {
-      brk((page) => breakAtMeasureEnd(m, page), sectionNewPage && breaks.sectionStarts.has(next));
-    }
-  }
-  return { lines, pages };
-}
-
 
 /** 原样文档引擎量出来的自然跨度（键是元素 id，`layoutBookDoc` 的 `measure`）换成按断句输入的和弦。 */
 export function fitForIds(

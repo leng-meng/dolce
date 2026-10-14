@@ -1,5 +1,5 @@
 // 谱行**上方那一带**的定位：弧、连音、奏法记号、和弦、注释、松叶、转调标签、力度/术语/跳转字、临时伴奏行、房号。
-// 判据整段从简谱引擎搬来（`layout.ts::Line.collectBandItems` / `stackAbove` / `placeDirections` / `addEnding`），
+// 判据整段从旧简谱引擎搬来（`layout.ts::Line.collectBandItems` / `stackAbove` / `placeDirections` / `addEnding`），
 // 堆叠走公共那一份（`engrave/upperband.ts::stackUpperBand`）：按实际墨迹盒一次排清，不再按固定槽位摆。
 // y 一律在这里定死（相对声部基线、行坐标 x），`compose/` 只照 `PlacedText` / `PlacedMark` 画。
 import type { BarlineElement, MusicElement } from "../../../pu/ast";
@@ -35,7 +35,7 @@ const TEXT_KINDS = new Set(["chord", "section-word", "key", "direction"]);
 /** 并排块下行（主旋律下移的那一段）上的东西不为上行让位：它本来就在上行底下 */
 const LOWER_ROW = ["split"] as const;
 
-/** 和弦字号（没设就按数字字号的 0.6，同简谱引擎 `directionWidth`） */
+/** 和弦字号（没设就按数字字号的 0.6，同旧简谱引擎 `directionWidth`） */
 function textSize(m: JianpuGrid): number {
   return m.style.size.chord > 0 ? m.style.size.chord : m.style.size.note * 0.6;
 }
@@ -224,7 +224,7 @@ export function placeBand(
   }
 
   // ---- 层 1.5：松叶（用户定：松叶在和弦之上——起始落点贴音，跨度里有和弦、注释撞上才抬到它们之上） ----
-  // 起始落点同简谱引擎（`Line.addWedges`）：跨度里音符那一摞的墨迹顶之上一道叠层的空；开口与线宽见 `engrave/hairpin.ts::JP_HAIRPIN`
+  // 起始落点同旧简谱引擎（`Line.addWedges`）：跨度里音符那一摞的墨迹顶之上一道叠层的空；开口与线宽见 `engrave/hairpin.ts::JP_HAIRPIN`
   const hairpinLw = jpHairpinLineWidth(m.style.stroke.hairpin, nh);
   const hairpinHeight = nh * JP_HAIRPIN.half * 2 + hairpinLw;
   for (const mk of marks) {
@@ -559,13 +559,13 @@ function placeCue(items: readonly PlacedItem[], layers: PlacedLayer[], boxes: Ba
 }
 
 /**
- * **房号**：全行同一条车道（一房二房的横线是一条）。按房的各段分别让（简谱引擎 `Line.addEnding` 是整段一律让「房号 + 竖脚」，
+ * **房号**：全行同一条车道（一房二房的横线是一条）。按房的各段分别让（旧简谱引擎 `Line.addEnding` 是整段一律让「房号 + 竖脚」，
  * 并排块上行这类高东西一进区间整条就抬得老高——同一首歌二房）：
  *   - 左端房号与左竖脚垂下的那一截（区间左边多看一个房号字号）：下面的墨迹顶之上「0.7 个房号字号 + 竖脚」；
  *   - 其余横线底下：带顶、音符墨迹顶之上一道空；
  *   - 竖脚落在小节线上：线顶之上「竖脚 + 一道空」，区间里的其它小节线同横线。
  * 力度/跳转字不算（房里的 `Fine`、`D.S.` 反过来排到房号线之上，用户定）。
- * 字号、竖脚、房号落点同简谱引擎（`size.ending`、`engrave/ending.ts` 的 `endingDrop` / `labelBaselineOf`）；
+ * 字号、竖脚、房号落点同旧简谱引擎（`size.ending`、`engrave/ending.ts` 的 `endingDrop` / `labelBaselineOf`）；
  * 竖脚下面最深的是竖脚还是房号墨迹底，按更深的那个让（同 `Line.addEnding` 的 `depth`）。
  */
 function placeEndings(

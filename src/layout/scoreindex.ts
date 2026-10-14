@@ -15,12 +15,6 @@ interface CellHit extends Hit {
   pass: number;
 }
 
-export interface ScoreIndexOptions {
-  /** 歌词收在音符格里（简谱引擎）：音节标签不带 id，按所在音符格认；某段取不到就退回整个音符格。
-   *  原样文档的音节各自成一格、带 id，取不到就是没有。 */
-  cellLyrics: boolean;
-}
-
 export class ScoreIndex {
   private cells = new Map<ElementId, CellHit[]>();
   private barlines = new Map<string, Hit>();
@@ -28,16 +22,16 @@ export class ScoreIndex {
   private syllables = new Map<string, Hit>();
   private systems = new Map<PageItem, PageItem[]>();
 
-  private constructor(private readonly opts: ScoreIndexOptions) {}
+  private constructor() {}
 
-  static build(pages: readonly PageItem[], opts: ScoreIndexOptions): ScoreIndex {
-    const ix = new ScoreIndex(opts);
+  static build(pages: readonly PageItem[]): ScoreIndex {
+    const ix = new ScoreIndex();
     pages.forEach((pg, i) => ix.walk(pg, i));
     return ix;
   }
 
   static empty(): ScoreIndex {
-    return new ScoreIndex({ cellLyrics: false });
+    return new ScoreIndex();
   }
 
   private lastNoteId: ElementId | null = null;
@@ -133,20 +127,9 @@ export class ScoreIndex {
     return this.slurs.get(`${start}:${end}`) ?? null;
   }
 
-  /** 收在元素 `id` 第 `pass` 遍那个音符格里的各段歌词与源段号。 */
-  cellSyllables(id: ElementId, pass = 0): { hit: Hit; verse: number }[] {
-    const cell = this.note(id, pass);
-    if (!cell) return [];
-    return findByKind(cell.item, "syllable").map((item) => ({ hit: { page: cell.page, item }, verse: item.ident?.verse ?? 0 }));
-  }
-
-  /** 元素 `id` 第 `verse` 段（行内 0 起）歌词那个字；`verseNo` 是源段号（缺省 = verse + 1）。 */
-  syllable(id: ElementId, verse = 0, verseNo?: number): Hit | null {
-    const own = this.syllables.get(`${id}:${verse}`);
-    if (own || !this.opts.cellLyrics) return own ?? null;
-    const ls = this.cellSyllables(id, verse);
-    const one = ls.find((l) => l.verse === (verseNo ?? verse + 1)) ?? (ls.length === 1 ? ls[0] : undefined);
-    return one ? one.hit : this.note(id, verse);
+  /** 元素 `id` 第 `verse` 段（行内 0 起）歌词那个字。 */
+  syllable(id: ElementId, verse = 0): Hit | null {
+    return this.syllables.get(`${id}:${verse}`) ?? null;
   }
 
   /** 元素 `id` 音符格里某种部件，按页面树顺序（命中的不再往下找）。 */

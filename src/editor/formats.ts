@@ -88,7 +88,7 @@ export interface FormatCaps {
   /** 有没有代码区。`.musicxml` 没有：打开只进谱面视图（五线谱编辑那一路），要编辑先转成文本格式（新文档）。 */
   textEditor: boolean;
   /** 源文怎么变成 `ScoreDoc`：`scoredoc` = 适配器的 `toScoreDoc` 解析（文本谱、123、ABC、jcx、jianpu-ly、MusicXML）；
-   *  `jpwabc` = `.jpwabc` 分节文件经 `jpwToScoreDoc`，另带 `.Layout` 分页描述（只管展开档）。排版都是同一个简谱引擎。 */
+   *  `jpwabc` = `.jpwabc` 分节文件经 `jpwToScoreDoc`，另带 `.Layout` 分页描述（只管展开档）。排版都是同一个旧简谱引擎。 */
   layout: "scoredoc" | "jpwabc";
   /** 有没有「按乐句重排」（要有 `FormatAdapter.relayoutText`）。`.musicxml` 没有代码区，不给。 */
   phraseRelayout: boolean;
@@ -218,7 +218,7 @@ const PU: FormatAdapter = {
   profileKnob: "original",
   caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true },
   toScoreDoc: (text) => parsePu(text),
-  // 原样档走原样文档布局（印刷原版的观感），展开档投影成简谱引擎输入
+  // 原样档走原样文档布局（印刷原版的观感），展开档投影成简谱输入模型
   reloadSpec: {
     what: () => t("fmt.textScore"),
     reject: rejectFatal((d) => t("status.puFatal", { error: diagText(d) })),
@@ -230,7 +230,7 @@ const PU: FormatAdapter = {
 };
 
 /** 123 —— 简谱主格式。原生解析直出 `ScoreDoc`；排版直接吃 `ScoreDoc`。
- *  档位旋钮跟文本谱同一个（`originalProfile`）：两者的原样档都可走原样文档布局、展开档都投影成简谱引擎输入。 */
+ *  档位旋钮跟文本谱同一个（`originalProfile`）：两者的原样档都可走原样文档布局、展开档都投影成简谱输入模型。 */
 const J123: FormatAdapter = {
   id: "123",
   defaultExt: ".123",

@@ -1698,7 +1698,7 @@ export class PartMeasureLayout {
     const pstf = this.part.staves[stf];
     const t0 = this.measureInfo.offset;
     const ts = pstf.getTime(t0);
-    // 拍位判据走公共那一份（engrave/beatgroup.ts，与简谱引擎、原样文档同一条）：残节按小节末尾对齐
+    // 拍位判据走公共那一份（engrave/beatgroup.ts，与旧简谱引擎、原样文档同一条）：残节按小节末尾对齐
     const measures = this.part.measures;
     const isLast = this === measures[measures.length - 1];
     const next = isLast ? undefined : measures[this.measureInfo.index + 1];

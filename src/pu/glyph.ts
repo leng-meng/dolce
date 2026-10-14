@@ -39,7 +39,7 @@ export const ORNAMENTS: Readonly<Record<string, OrnamentGlyph>> = {
   tr: { glyph: C(0xe566), placement: "above", scale: 0.9, label: "颤音" },
 };
 
-/** 文本谱认的力度名（语法表）；字形走公共那一份（engrave/dynamics.ts），与五线谱、简谱引擎同一套。 */
+/** 文本谱认的力度名（语法表）；字形走公共那一份（engrave/dynamics.ts），与五线谱、旧简谱引擎同一套。 */
 export const DYNAMICS: Readonly<Record<string, string>> = Object.fromEntries(
   ["ppp", "pp", "p", "mp", "mf", "f", "ff", "fff", "sf", "fp", "sfp", "sfz", "sffz", "fz", "rf", "rfz"].map((n) => [n, dynamicGlyphs(n)]),
 );

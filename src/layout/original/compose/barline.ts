@@ -42,7 +42,7 @@ export function paintBarline(c: OriginalCtx,
   // 粗细组合、反复点、线间距**全部走谱面那一路的画法**（engrave/barline.ts::BarlineGlyph）。
   // 原先这里是自成一套：填充 rect 而不是 GraphicLine、粗线 ×2.6、线距 barlineDoubleGap、
   // 反复点在 ±0.18H 且离线 6px——同一件事两种写法，改一处忘一处。
-  // 纵向范围与简谱引擎同一口径（`barlineSpan`），连谱号跨声部时下缘再加 spanHeight。
+  // 纵向范围与旧简谱引擎同一口径（`barlineSpan`），连谱号跨声部时下缘再加 spanHeight。
   const span = barlineSpan(m);
   const bs = puBarlineSpec(el);
   if (!bs) {

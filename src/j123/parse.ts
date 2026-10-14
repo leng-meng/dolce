@@ -1090,7 +1090,7 @@ function buildMusicLine(
 /**
  * 123/ABC 的房号约定：**一组房的最后一房不封口**。ABC 本身没有区分封口与否的写法（ABC §4.9/§4.10：房号止于
  * 双线、反复线或下一房的开始），读入时结束类小节线一律收成 `stop`；这里把「后面不再紧跟一房」的那个 `stop`
- * 改记 `discontinue`。排版器（简谱引擎、原样文档布局、五线谱）只照模型里的值画，不再各自判断；
+ * 改记 `discontinue`。排版器（旧简谱引擎、原样文档布局、五线谱）只照模型里的值画，不再各自判断；
  * MusicXML、文本谱照各自原文。
  */
 function markLastEndings(part: Part): void {

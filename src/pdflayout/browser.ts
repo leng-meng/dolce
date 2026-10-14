@@ -8,17 +8,12 @@
 // 等于把 painter 再写一遍；而页面树本来就只有三种叶子（GraphicPath / GraphicLine / TextFrame），
 // 照着 layout/walk.ts 的骨架递归扁平化一次就完事，逻辑一比一对应、不冒回归风险。
 import { GraphicPath, JpNumber, JpOctaveDot, Lyric, PageItem, SmuflText, TextFrame } from "../layout/pageitem";
-import type { LayoutOptions } from "../layout/options";
 import type { DrawItem, DrawPage, DrawText } from "./drawlist";
 import type { BookStyle } from "./bookstyle";
 import type { StyleRole } from "../style/sheet";
-import { jianpuLayoutOf, measureJianpu, PaintResources, ScorePainter, type JianpuConfig } from "../layout/painter";
 import { computeStyle } from "../style/cascade";
 import { THEMES } from "../style/themes";
 import { walkPageItem, type ItemVisitor } from "../layout/walk";
-import type { FitMetric } from "../score/applybreaks";
-import { clearBreaks, type JScore } from "../layout/input";
-import type { MetaData } from "../smufl/smufl";
 import { Font } from "../layout/font";
 import type { Direction, DirectionPart, ScoreDoc } from "../model/doc";
 import { SECTION_WORD_RE } from "../score/phraseinput";
@@ -56,14 +51,7 @@ function matOf(it: PageItem): Mat6 {
 
 /** 页面树里的一个叶子该按哪个角色落字（决定字体与是否走轮廓）。
  *  用 instanceof 判，不用 classes：排版件本来就有 JpNumber / Lyric / SmuflText 这些类型。 */
-/** 增时线要往上挪多少，才能让它的墨迹中心与数字的墨迹中心（＝小节线中点）齐平。 */
-function dashInkShift(opt: LayoutOptions): number {
-  const nb = opt.numberBound("1");
-  const db = opt.numberBound("-");
-  return (nb.top + nb.bottom) / 2 - (db.top + db.bottom) / 2;
-}
-
-/** 同上，按增时线自己的字量（原样文档引擎那一路没有 `LayoutOptions`）。 */
+/** 增时线要往上挪多少，才能让它的墨迹中心与数字的墨迹中心（＝小节线中点）齐平（按增时线自己的字量）。 */
 function dashInkShiftOf(font: Font): number {
   const nb = font.charBound("1");
   const db = font.charBound("-");
@@ -73,7 +61,7 @@ function dashInkShiftOf(font: Font): number {
 /** 透到 `DrawText.cls` 的那几个 class（顺序即优先级）。 */
 const CLS_TAGS = ["ending", "ending-line", "section-word", "key-change", "chord", "direction", "tuplet-line", "grace", "grace-line", "artic"];
 
-function roleOfItem(it: TextFrame, opt?: LayoutOptions): StyleRole {
+function roleOfItem(it: TextFrame): StyleRole {
   // 和弦是 engrave/chord.ts 造的普通 TextFrame，只有 classes 认得出来（见那边的注释）
   if (it.classes.has("chord-music") || it.classes.has("smufl")) return "smufl";
   if (it.classes.has("chord")) return "chord";
@@ -93,11 +81,7 @@ function roleOfItem(it: TextFrame, opt?: LayoutOptions): StyleRole {
   if (it instanceof SmuflText) return "smufl";
   if (it instanceof JpNumber || it instanceof JpOctaveDot) return "note";
   if (it instanceof Lyric) return "lyric";
-  // 原样文档引擎的成书页上没有标题、署名（整本那一层排），剩下的文字（段号等）都随歌词
-  if (!opt) return "lyric";
-  const s = it.font?.size ?? 0;
-  if (s >= opt.titleSize * 0.9) return "title";
-  if (s >= opt.creditSize * 0.9) return "credit";
+  // 成书页上没有标题、署名（整本那一层排），剩下的文字（段号等）都随歌词
   return "lyric";
 }
 
@@ -109,8 +93,6 @@ export const bookRoleOf = (it: TextFrame): StyleRole =>
 
 export interface ToDrawOptions {
   style?: BookStyle;
-  /** 简谱引擎的选项（定角色、增时线墨迹对齐）。混排那一路不给，改给 `roleOf`。 */
-  options?: LayoutOptions;
   /** 文字叶子该按哪个角色落字。给了就不走 `roleOfItem`（混排按字体族定角色，见 pdflayout/songbook.ts）。 */
   roleOf?: (it: TextFrame) => string;
   pageNo: number;
@@ -173,12 +155,12 @@ export function pageItemsToDrawPage(root: PageItem | undefined, w: number, h: nu
       //（实测差 1.37pt），照字体基线摆就一排音符里高一道低一道。
       // 只在**画的时候**补这一下——排版度量（entry 高度、纵向栅格、行容量）不能动，
       // 那是「简谱纵向栅格」那把统一的尺子。
-      const role0 = (o.roleOf ? o.roleOf(it) : roleOfItem(it, o.options!)) as StyleRole;
+      const role0 = (o.roleOf ? o.roleOf(it) : roleOfItem(it)) as StyleRole;
       const dash = role0 === "note" && (it.text === "-" || it.text === "\u2013");
       // 语义标记：**只给 scripts/line-check.mjs 用**，不参与度量。房号与段号同归 verseNum、
       // 转调标记混在 lyric 里，光看 role 分不开（见 DrawText.cls）。
       const cls = CLS_TAGS.find((c) => it.classes.has(c));
-      const dy = !dash ? 0 : o.options ? dashInkShift(o.options) : it.font ? dashInkShiftOf(it.font) : 0;
+      const dy = dash && it.font ? dashInkShiftOf(it.font) : 0;
       const y = applyY(m, 0, 0);
       const t: DrawText = {
         t: "text",
@@ -271,108 +253,17 @@ export function maxStaffRowCells(pages: DrawPage[]): number {
   return mx;
 }
 
-/** 成书这一路的简谱排版设置：字号取 lyric 那一档、灌进 BookStyle（`book` 预设）。 */
-function bookConfig(style: BookStyle): JianpuConfig {
-  return { style: computeStyle([THEMES.book, [{ set: { book: style } }]], { engine: "book" }) };
-}
+// ───────────────── 成书 ─────────────────
 
-/** 成书这一路灌好的排版选项（不排谱；样式快照脚本比对用）。 */
-export function bookLayoutOptions(style: BookStyle, smuflMeta?: MetaData): LayoutOptions {
-  return jianpuLayoutOf(bookConfig(style), { smuflMeta }).options;
-}
-
-/**
- * 成书这一路排一首：按 BookStyle 排到宽 `style.page.w`、高 `pageH` 的纸上，第 0 页是排版器给单曲加的独立标题页。
- *
- * 三个调用点（`measureCellsPerLine` / scripts/rebuild.mjs 的 `renderPages` 两次）共用这一个构造。
- * `smuflMeta` 不给的话，layout 会在延长号/跳转记号上抛 "no smufl bbox"。
- */
-export function layoutBookSong(score: JScore, style: BookStyle, pageH: number, smuflMeta?: MetaData): ScorePainter {
-  const p = new ScorePainter(PaintResources.fixed(smuflMeta));
-  p.loadSync({ view: "original", score, breakDesc: null, ...bookConfig(style), page: { w: style.page.w, h: pageH } });
-  return p;
-}
-
-/**
- * **真实坐标量一遍**：每个和弦占的横向区间 + 版心宽度。
- *
- * 「一行放不放得下」的唯一可靠判据（用户口径：「不要算格数，真实坐标排一遍，放不下再补刀」）。
- * 量到的坐标与排版器折行时用的是同一把尺子（`layout.ts::Line.naturalSpans`），
- * 所以断句/补刀/合并按它判，排版器就不会在断点之外再折一刀。
- *
- * 与 `measureCellsPerLine` 的分工：那个给出的是「一行大概几格」的**近似**，
- * 只在拿不到真实坐标时兜底（以及给 `phrase.ts` 的行长目标当量纲）。
- *
- * **断点不影响这些坐标**（自然位置在分行之前就算完了），所以整首量一次就够，
- * 补刀/合并反复试的时候不必重排。
- */
-export function measureChordSpans(score: JScore, style: BookStyle, smuflMeta?: MetaData): FitMetric {
-  // 与 measureCellsPerLine 同理：先清掉原谱的换行，量的是「自然排下来有多宽」。
-  clearBreaks(score);
-  const { width, spans } = measureJianpu(score, style.page.w, bookConfig(style), { smuflMeta });
-  return { width, spans };
-}
-
-/**
- * 空排一遍，量出「一行放得下几格」。
- *
- * 格 = 简谱横向占位（一个音符 1 格，长音的每根增时线各占 1 格）。
- * 乐句排版要按这个数定行长，否则它算出来的行长与排版器实际能放的对不上，
- * 排版器会在小节中间再折一次，行尾挂着孤零零一个音。
- */
-export function measureCellsPerLine(score: JScore, style: BookStyle, smuflMeta?: MetaData): number {
-  // **先清掉原谱的换行**：不清的话排版器照 musicxml 的 `<print new-system>` 分行，
-  // 量到的是「原书每行几格」而不是「一行放得下几格」——005《荣耀归与天父》原书那几行是
-  // 30/26/27/17 格，量出 27，可它其实放得下 30。清掉之后排版器才真的按宽度塞满再折行。
-  clearBreaks(score);
-  const p = layoutBookSong(score, style, style.page.h, smuflMeta);
-  const opt = p.layout.options;
-  const cw = style.page.w - opt.marginLeft - opt.marginRight;
-
-  // 真的排一遍再量：一格多宽由排版器的 entry 宽度决定（歌词字宽 + 音符间距 + 各种避让），
-  // 不是「歌词字宽」那么简单——照字宽估会高估一倍，乐句断点算出的行长排版器根本放不下。
-  // **按行分组**再量：全页的 x 混在一起排序，跨行的 x 会回绕，
-  // 相邻差就成了八度点那种零点几个点的值（实测中位数 3.2pt，格数算出 98）。
-  const byRow = new Map<string, number[]>();
-  for (let i = 1; i < p.pageCount; i++) {
-    const dp = pageItemsToDrawPage(p.layout.pages[i], style.page.w, style.page.h, {
-      style,
-      options: opt,
-      pageNo: i,
-      meta: { kind: "score", songs: [] },
-    });
-    for (const it of dp.items) {
-      // 只数**占一格**的：数字与增时线。八度点（"."）也是 note 角色，
-      // 但它在音符上/下方、自成一「行」，混进来会把行的计数搅乱。
-      if (it.t !== "text" || it.role !== "note" || it.cls === "grace" || !isCellNote(it.text)) continue;
-      // 按**页 + 基线**分组：各页的谱行落在同样几条基线上，只用 y 会把跨页的行并成一行、计数翻倍
-      const key = `${i}:${Math.round(it.y)}`;
-      const a = byRow.get(key) ?? [];
-      a.push(it.xs[0]);
-      byRow.set(key, a);
-    }
-  }
-  // 空排（已清掉原谱换行）时排版器是**按宽度塞满**再折行的，所以「装得最多的那一行」就是容量。
-  // 比按字宽估、或按相邻 x 差的中位数算都可靠——那些量法会被八度点、附点、
-  // 增时线这些同格里的小东西带偏（实测中位数法算出 98 格，实际只放得下 13）。
-  // 取**最大值**：塞满折行后每行都顶着版心宽，只有末行短，中位数反而被末行拖低
-  //（005 塞满后各行 30 格上下、末行短，中位数只有 27，于是「赞美主…」那两句并不到一行去）。
-  const counts = [...byRow.values()].map((r) => r.length).sort((a, b) => a - b);
-  const cells = counts.length ? counts[counts.length - 1] : 0;
-  return Math.max(6, cells || Math.floor(cw / opt.lrcFont.measureText("国")));
-}
-
-// ───────────────── 原样文档引擎这一路（子计划 6；rebuild.mjs `--one-engine`） ─────────────────
-
-/** 成书读谱：MusicXML → 文档，只留第一首、第一个声部（主旋律，同 `jianpuInputOfXml` 只投 `parts[0]`）。 */
+/** 成书读谱：MusicXML → 文档，只留第一首、第一个声部（主旋律）。 */
 export function bookDocOf(xml: string): ScoreDoc {
   const doc = loadScoreDoc(xml);
   doc.songs = doc.songs.slice(0, 1);
   for (const song of doc.songs) {
     keepFirstPart(song);
-    // 谱里自带的段落词文字（「（副歌）」）不印：成书的段落词只认书级元数据（`putSectionWords`），同简谱引擎 `jianpuinput.ts::directionMarks` 的认法
+    // 谱里自带的段落词文字（「（副歌）」）不印：成书的段落词只认书级元数据（`putSectionWords`），同旧简谱引擎 `jianpuinput.ts::directionMarks` 的认法
     for (const part of song.parts) for (const m of part.measures) if (m.directions) m.directions = m.directions.flatMap(dropSectionWords);
-    // 歌词字前印的段号（MusicXML 把「1.」写进首字）去掉：段号由引擎按行挂（同简谱引擎 `ignoreVerseNumber`）
+    // 歌词字前印的段号（MusicXML 把「1.」写进首字）去掉：段号由引擎按行挂（同旧简谱引擎 `ignoreVerseNumber`）
     for (const part of song.parts) for (const m of part.measures) for (const el of m.elements) {
       if (el.kind !== "chord") continue;
       for (const l of el.lyrics ?? []) {
@@ -380,7 +271,7 @@ export function bookDocOf(xml: string): ScoreDoc {
         if (at > 0) l.text = l.text.slice(at);
       }
     }
-    // 房号规整成 `1.2`（原书口径，同简谱引擎；原样档照原文印）
+    // 房号规整成 `1.2`（原书口径，同旧简谱引擎；原样档照原文印）
     for (const part of song.parts) for (const m of part.measures) for (const b of m.barlines ?? []) if (b.ending?.text) b.ending.text = normEndingText(b.ending.text);
   }
   return doc;
@@ -429,7 +320,7 @@ export function layoutBookDoc(doc: ScoreDoc, style: BookStyle, pageH: number, me
 
 /** 成书这一路的尺子（原样文档引擎吃的那份 `JianpuStyle`；dev 的 style-snapshot 快照它）。 */
 export function bookStyleOf(style: BookStyle): JianpuStyle {
-  return jianpuStyleOf(bookConfig(style).style!);
+  return jianpuStyleOf(computeStyle([THEMES.book, [{ set: { book: style } }]], { engine: "book" }));
 }
 
 /** 真实坐标量一遍（同 `measureChordSpans`）：清掉原谱的换行、整首不折，量每个音（键为元素 id）的自然横向区间与版心宽。 */

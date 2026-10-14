@@ -1,4 +1,4 @@
-// 分数式简谱拍号：简谱引擎、原样文档、混排简谱层共用。
+// 分数式简谱拍号：旧简谱引擎、原样文档、混排简谱层共用。
 import { Point, Rect } from "../common/geom";
 import { GraphicLine, PageItem, TextFrame } from "../layout/pageitem";
 import type { Font } from "../layout/font";

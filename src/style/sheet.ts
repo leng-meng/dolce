@@ -1,4 +1,4 @@
-// 样式表：一份谱「长什么样」的唯一描述。四把尺子（简谱 `LayoutOptions`、原样文档布局 `JianpuMetrics`、
+// 样式表：一份谱「长什么样」的唯一描述。尺子（简谱 `JianpuStyle`、
 // 成书 `BookStyle`、五线谱 `MixedOptions`）都由适配器从这里取值，见 `style/jianpu.ts` 等。
 //
 // 形状对着 CSS：角色（选择器）→ 声明块；级联见 `cascade.ts`，命名主题见 `themes.ts`，单位见 `units.ts`。
@@ -128,7 +128,7 @@ export interface PageDecl {
   mirror?: boolean;
 }
 
-/** 简谱引擎（`LayoutOptions`）的预设。公式在 `style/jianpu.ts`。 */
+/** 简谱尺子（`JianpuStyle`）的预设。公式在 `style/jianpu.ts`。 */
 export type JianpuPreset = "default" | "original" | "pptx" | "book";
 
 export interface StyleSheet {
@@ -136,7 +136,7 @@ export interface StyleSheet {
   roles: Partial<Record<StyleRole | TemplateRole, RoleDecl>>;
   page: PageDecl;
   /** **简谱内容**（各模式通用）：`overrides` 的键是 `style/keys.ts::JIANPU_KEYS` 的逻辑键，
-   *  纯简谱那几档落 `LayoutOptions`、混排落 `MixedOptions` 的简谱层字段，在 preset 之后叠上。 */
+   *  纯简谱那几档落 `JianpuStyle`、混排落 `MixedOptions` 的简谱层字段，在 preset 之后叠上。 */
   jianpu: { preset?: JianpuPreset; overrides?: Record<string, Length | boolean> };
   /** **五线谱内容**（`mode: staff / mixed`）：键是 `style/keys.ts::STAFF_KEYS` 的逻辑键，落 `MixedOptions`
    *  （tenths）。长度只收 em / sp——pt 要等 MusicXML 的 `<scaling>`。 */

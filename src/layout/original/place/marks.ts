@@ -48,7 +48,7 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid,
     const spread = m.note.beamHalfSpan;
     const padLeft = isArc ? (chainedLeft ? dx : 0) : -spread;
     const padRight = isArc ? (chainedRight ? dx : 0) : -spread;
-    // 跳房子的竖脚**对齐小节线的线位**（同简谱引擎 `Line.endingSpan`）：起点取房内首音之前那条线的最后一根、
+    // 跳房子的竖脚**对齐小节线的线位**（同旧简谱引擎 `Line.endingSpan`）：起点取房内首音之前那条线的最后一根、
     // 终点取末音之后那条的第一根（`:‖` 与 `‖:` 两房相接时一个落细线、一个落粗线，天然分开）。不画的线按锚点
     let vx0: number | null = null;
     let vx1: number | null = null;

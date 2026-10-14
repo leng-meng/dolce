@@ -51,11 +51,11 @@ export interface BookMetrics {
 
   // —— 上下带 ——
   chordToNoteEm: number; // 和弦 baseline → 音符墨迹上缘
-  /** 和弦排成纯文本（原书就是一行普通文字，没有 SMuFL 字形）。见 LayoutOptions.chordPlainText。 */
+  /** 和弦排成纯文本（原书就是一行普通文字，没有 SMuFL 字形）。见 `JianpuStyle.look.chordPlain`。 */
   chordPlain?: boolean;
-  /** 升降号写在字母前/后（见 LayoutOptions.accidentalSide）。 */
+  /** 升降号写在字母前/后（见 `JianpuStyle.look.accidentalSide`）。 */
   accidentalSide?: "before" | "after";
-  /** 临时记号的样子；不给 = `classic`（照原书）。见 LayoutOptions.accidentalStyle。 */
+  /** 临时记号的样子；不给 = `classic`（照原书）。见 `JianpuStyle.look.accidentalStyle`。 */
   accidentalStyle?: "csym" | "classic";
   lyricToLyricEm: number; // 相邻歌词行 baseline 差
 
@@ -89,7 +89,7 @@ export interface BookMetrics {
   finalBarlineWidthEm: number; // × 歌词字号
 
   /** 弧 / 上方带离叠层顶的空（em），原书量的（高音点上距 / 低音点下距 / 减时线首层距三者的均值）。
-   *  → LayoutOptions.jpStackGap。样式键 `slur-gap`。 */
+   *  → `JianpuStyle.vertical.slurGap`。样式键 `slur-gap`。 */
   stackGapEm: number;
   /** 叠层（八度点、减时线）的空 ÷ 数字墨迹高；不给 = 各引擎同一个缺省。样式键 `stack-gap`。 */
   stackGap?: number;

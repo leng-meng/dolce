@@ -1,4 +1,4 @@
-// 房号括线（volta / ending）的**画法**：简谱引擎（`layout.ts::Line.drawEnding`）与五线谱 / 混排
+// 房号括线（volta / ending）的**画法**：旧简谱引擎（`layout.ts::Line.drawEnding`）与五线谱 / 混排
 // （`mixed/render.ts::drawEnding`）共用。位置各算各的（简谱按小节线墨迹、五线谱按小节的 tick 与数据区），
 // 这里只管「横线 + 可选的两侧竖脚 + 房号」怎么落笔，两边观感因此一致。
 import type { Font } from "../layout/font";

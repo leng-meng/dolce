@@ -1,5 +1,5 @@
 // 展开档（反复与多段歌词逐遍展开、一遍一页）：按演唱顺序（`PlayItem[]`）把行视图里的小节逐遍切出来，
-// 每遍接成一长行、只挂这一遍的歌词，再按版心宽逐行装满（同简谱引擎 `layout.ts::Line.doLineBreak`），
+// 每遍接成一长行、只挂这一遍的歌词，再按版心宽逐行装满（同旧简谱引擎 `layout.ts::Line.doLineBreak`），
 // 拼成一份「展开后的」行视图交给 `layoutSong` 照常排——横向、纵向、上方带全是原样档那一套。
 //
 // 逐遍怎么走（首尾裁切、遍末与往回跳换页）复用 `jianpu/expand.ts::walkPlay`；小节的切法同 `pu/phrasesong.ts::buildMeasures`
@@ -15,7 +15,7 @@ import type { InkMeasurer } from "./model";
 import { naturalColumns } from "./spacing";
 import { assignLyrics, layoutVoiceLine } from "./voice";
 
-/** 展开出来的行 → 各符号所在那一遍的遍号（与 `elements` 平行）。绘制端给音符身份标 `pass`（同简谱引擎 `fromChord` 的 `lrc`：
+/** 展开出来的行 → 各符号所在那一遍的遍号（与 `elements` 平行）。绘制端给音符身份标 `pass`（同旧简谱引擎 `fromChord` 的 `lrc`：
  *  是 `PlayItem.pass` 即段号，不是第几遍），播放高亮按它找同一个音在哪一遍那一格 */
 export const passesOfRow = new WeakMap<ScoreLine, readonly number[]>();
 
@@ -88,7 +88,7 @@ function sourceBreaks(
 }
 
 /** 一个小节在这一遍里取哪些符号：`skip` 去掉开头几个音（连同其前的符号），`limit` 只留前几个音（截断处不要小节线）；
- *  临时伴奏 / 并排块不画（简谱引擎展开档的投影也跳过它） */
+ *  临时伴奏 / 并排块不画（旧简谱引擎展开档的投影也跳过它） */
 function cutSlots(slots: readonly Slot[], rows: readonly RowView[], cut: { skip: number; limit: number }): Slot[] {
   const isNote = (s: Slot): boolean => rows[s.row]!.elements[s.idx]!.kind === "note";
   let out = [...slots];
@@ -160,7 +160,7 @@ function logicalMarks(rows: readonly RowView[]): LogicalMark[] {
 
 /**
  * 展开档只要旋律与词（投影片）：和弦、段落词、奏法、力度/术语、小节线上的跳转字与 segno、松叶、临时伴奏都不画，
- * 延长记号与倚音留着（倚音用户定保留；同简谱引擎展开档的投影 `jianpuinput.ts::rowsPart`）。换下来的符号记同一个 id。
+ * 延长记号与倚音留着（倚音用户定保留；同旧简谱引擎展开档的投影 `jianpuinput.ts::rowsPart`）。换下来的符号记同一个 id。
  */
 function bare(el: MusicElement): MusicElement {
   if (el.kind === "note") {
@@ -176,7 +176,7 @@ function bare(el: MusicElement): MusicElement {
   return el;
 }
 
-/** 字前的印刷段号（MusicXML 把 `1.` 与字并成一个音节 `1.圣`）去掉：一遍只挂一段词，段号没有意义（同简谱引擎 `ignoreVerseNumber`）。
+/** 字前的印刷段号（MusicXML 把 `1.` 与字并成一个音节 `1.圣`）去掉：一遍只挂一段词，段号没有意义（同旧简谱引擎 `ignoreVerseNumber`）。
  *  换下来的音节记同一个归属（`DocView.syllableOwner`） */
 function bareSyllable(syl: LyricSyllable, owners: Map<LyricSyllable, unknown>): LyricSyllable {
   const m = /^[0-9.]+/.exec(syl.text);
@@ -234,7 +234,7 @@ function rowOf(
     if (used.has(el)) el = { ...el };
     used.add(el);
     if (unrolled && el.kind === "barline") el = plainBarline(el);
-    // 小节线的样式（同简谱引擎）：`.jpwabc` 不认样式、一律细线，只有整首最后一条画终止线；
+    // 小节线的样式（同旧简谱引擎）：`.jpwabc` 不认样式、一律细线，只有整首最后一条画终止线；
     // 其余格式照源，整首最后一条是细线的也补成终止线（`Barline` 的 `final`）
     if (el.kind === "barline") {
       const repeat = el.type.startsWith("repeat");
@@ -413,7 +413,7 @@ function passesByDur(
     },
     passEnd: () => {},
   });
-  // 时值：四分音符为 1，多连音按比例（同简谱引擎 `layoutTimes`）
+  // 时值：四分音符为 1，多连音按比例（同旧简谱引擎 `layoutTimes`）
   const ratios = rows.map((r) => tupletRatios(r));
   const dur = (s: Slot): Fraction => {
     const el = rows[s.row]!.elements[s.idx]!;
@@ -564,7 +564,7 @@ export function expandView(
   breakDesc: string | null = null,
 ): DocView {
   const idOf = view.idOf as Map<MusicElement, unknown>;
-  // 只排第一首（同简谱引擎展开档：`jianpuInputOfDoc` 缺省只投第一首；一份多首的文本谱展开档只见第一首，记在 dev 待办）
+  // 只排第一首（同旧简谱引擎展开档：`jianpuInputOfDoc` 缺省只投第一首；一份多首的文本谱展开档只见第一首，记在 dev 待办）
   const song = view.songs[0];
   const pd = plans[0];
   if (!song || !pd) return { ...view, songs: view.songs.slice(0, 1) };

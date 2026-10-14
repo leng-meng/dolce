@@ -151,13 +151,3 @@ export function measureDuration(m: JMeasure): Fraction {
   }
   throw new Error("measure has no chord");
 }
-
-/** 空谱：排版器还没装谱时的占位。 */
-export function emptyScore(): JScore {
-  return { parts: [], title: "", credit: [], playData: new PlayData() };
-}
-
-/** 去掉原谱的全部换行（量「自然排下来有多宽」、量一行放得下几格时用）。改的是调用方手里那份输入。 */
-export function clearBreaks(score: JScore): void {
-  for (const p of score.parts) for (const m of p.measures) m.entries = m.entries.filter((e) => e.kind !== "break");
-}

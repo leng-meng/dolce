@@ -66,11 +66,11 @@ export function layoutSong(
   songIndex = 0,
   headerBottom = 0,
   ink: InkMeasurer,
-  /** 展开档（`place/expand.ts` 展开过的行视图）与成书：谱行按简谱引擎展开档的口径码页，见下面的 `slideBlock` */
+  /** 展开档（`place/expand.ts` 展开过的行视图）与成书：谱行按旧简谱引擎展开档的口径码页，见下面的 `slideBlock` */
   expanded = false,
 ): PlacedPage[] {
   // 行占满版心：行首最左的内容（数字落笔原点、升降号、歌词左缘）贴左缘，两端对齐后行末的占位右缘
-  //（末个音符的字面右缘、或末条小节线）贴右缘，同简谱引擎
+  //（末个音符的字面右缘、或末条小节线）贴右缘，同旧简谱引擎
   const width = contentWidth(m);
   moveTrailingSectionWords(song);
   autoVerseNumbers(song, m);
@@ -128,7 +128,7 @@ export function layoutSong(
       const pre = laidOut.map((l, vi) => {
         const voice = group.voices[vi]!;
         const underlines = computeUnderlines(voice, l.items, m, l.groups);
-        // 第一行歌词的位置：样式给了 `lyric-baseline` 就不低于它；自动值与简谱引擎同一口径
+        // 第一行歌词的位置：样式给了 `lyric-baseline` 就不低于它；自动值与旧简谱引擎同一口径
         //（`layout.ts::Line.updateLyricY`）：数字墨迹底往下一个音符字号，再让开 max(0.4 字号, 数字底之下的叠层深度)
         //——一行里有「减时线 + 低音点」叠下来的音，歌词整行跟着下移，免得字顶贴到低音点上。
         const inkBottom = lineInkBottom(l.items, m);
@@ -256,7 +256,7 @@ export function layoutSong(
     firstTop = headerBottom + m.style.size.lyric - inkTop;
   }
   const otherTop = m.page.margin.top + m.page.firstSystemTop * 0.35;
-  // 展开档、成书：同简谱引擎 `Layout.layoutVertically`——块按占位盒紧挨着码（块间 `staffDist`），放不满的页把行距摊开到 `systemSpread`、整块居中
+  // 展开档、成书：同旧简谱引擎 `Layout.layoutVertically`——块按占位盒紧挨着码（块间 `staffDist`），放不满的页把行距摊开到 `systemSpread`、整块居中
   const laid = expanded ? paginate(blocks, {
     pageTop: () => m.page.margin.top,
     bottom: bottomLimit,
@@ -272,7 +272,7 @@ export function layoutSong(
   return laid.map((pg, i) => ({
     song: songIndex,
     firstOfSong: i === 0,
-    // 成书量「这一页自然叠起来多高」（半页起排、两首同页紧排用，同简谱引擎各行盒高之和 + 行距下限）
+    // 成书量「这一页自然叠起来多高」（半页起排、两首同页紧排用，同旧简谱引擎各行盒高之和 + 行距下限）
     ...(expanded ? { natural: pg.reduce((h, { block }) => h + block.bottom - block.top, 0) + Math.max(0, pg.length - 1) * m.style.vertical.staffDist } : {}),
     groups: pg.map(({ block, y }) => {
       shiftGroup(block.group, y);
@@ -282,8 +282,8 @@ export function layoutSong(
 }
 
 /**
- * 展开档的谱行占位盒（相对组原点）：照简谱引擎谱行 Group 的包围盒——数字、歌词按**字体盒**（ascent / descent）算，
- * 弧、高八度点、低音点等按墨迹，取并集。页数、每页行数要与简谱引擎展开档一致（用户定）。
+ * 展开档的谱行占位盒（相对组原点）：照旧简谱引擎谱行 Group 的包围盒——数字、歌词按**字体盒**（ascent / descent）算，
+ * 弧、高八度点、低音点等按墨迹，取并集。页数、每页行数要与旧简谱引擎展开档一致（用户定）。
  */
 function slideBlock(voices: ReadonlyArray<{ pv: PlacedVoice; inkBottom: number }>, ink: InkMeasurer): { top: number; bottom: number } {
   const d = ink.digit("1").ink;
@@ -391,7 +391,7 @@ function shiftGroup(g: PlacedGroup, dy: number): void {
 
 /**
  * 段落词挂在**行末那个音符**上时，它标的其实是下一行的起句（「（副歌）」印在主歌最后一行的行尾没有意义，
- * 副歌是从下一行开始唱的）——挪到下一行（同一声部）行首那个音符上，那里已有段落词就不挪（同简谱引擎 `Line.layout` 那一段）。
+ * 副歌是从下一行开始唱的）——挪到下一行（同一声部）行首那个音符上，那里已有段落词就不挪（同旧简谱引擎 `Line.layout` 那一段）。
  * 只改行视图（`docView` 每次排版现做的那份），不改 ScoreDoc。
  */
 /**

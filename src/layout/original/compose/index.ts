@@ -37,7 +37,7 @@ import { expandView } from "../place/expand";
 import { playDataOfSong } from "../../../model/playsong";
 import type { PlayItem } from "../../../score/playorder";
 
-/** 原样文档排版的外部配置：尺子（`style/jianpu.ts::jianpuStyleOf`，与简谱引擎同一份）、纸、页脚模板。 */
+/** 原样文档排版的外部配置：尺子（`style/jianpu.ts::jianpuStyleOf`，与旧简谱引擎同一份）、纸、页脚模板。 */
 export interface OriginalDocumentConfig {
   readonly style: JianpuStyle;
   readonly page: GridPage;
@@ -93,10 +93,10 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   const style = applyDocOptions(cfg.style, meta0?.fontSizes ?? [], meta0?.margins ?? [], cfg.userMargins);
   const m = gridOf(style, cfg.page);
   if (cfg.leftIndent) m.page.margin.left += cfg.leftIndent;
-  // 展开档、成书的谱页不叠页眉：首组贴着上边距起（同简谱引擎 `fromScore`）
+  // 展开档、成书的谱页不叠页眉：首组贴着上边距起（同旧简谱引擎 `fromScore`）
   const slide = !!(cfg.expanded || cfg.book);
   if (slide || cfg.snippet) m.page.firstSystemTop = 0;
-  // 展开档的演唱顺序：同简谱引擎展开档那一份（`forExpanded`：带歌词的声部在前、同号歌词顺延）
+  // 展开档的演唱顺序：同旧简谱引擎展开档那一份（`forExpanded`：带歌词的声部在前、同号歌词顺延）
   const plays = cfg.expanded ? source.songs.map((_, i) => playDataOfSong(source, i, { forExpanded: true })) : null;
   const plans = plays ? plays.map((pd) => pd?.measures ?? null) : null;
   const c: OriginalCtx = {
@@ -117,7 +117,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   c.heads = slide || cfg.snippet ? [] : input.songs.map((song) => placeHeader(song.metadata, m, headMeasure));
   const headerBottoms = c.heads.map((h) => h.bottom);
   // 量具注入给排版（它不碰字体）。歌词量的是**画出来的**那串：与 paintSyllables 同一串挤压后的笔位，
-  // 首尾留白的口径同简谱引擎的 `Lyric.headBlank / tailBlank`（横向避让的判据从那边整段搬来，见 place/spacing.ts）
+  // 首尾留白的口径同旧简谱引擎的 `Lyric.headBlank / tailBlank`（横向避让的判据从那边整段搬来，见 place/spacing.ts）
   const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
   const chordWord = new Font(m.style.font.text.family, m.style.size.chord);
   const chordMusic = new Font("Bravura", m.style.size.chord);

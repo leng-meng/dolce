@@ -232,7 +232,7 @@ function drawJpBeams(eng: MixedOptions, container: Group, md: PartMeasureLayout)
             const low = Math.max(0, -melodyNote(c).octaveJp());
             if (low > 0) from = Math.max(from, stackBottom(row.inkBottom, c.jpBeamCount(), low, row.st) + row.st.gap);
           }
-          // 钩子的形状与简谱引擎、原样文档同一笔（engrave/grace.ts::graceHook），朝右弯向后面的主音
+          // 钩子的形状与旧简谱引擎、原样文档同一笔（engrave/grace.ts::graceHook），朝右弯向后面的主音
           const h = graceHook((rx + lx) / 2, from, row.inkBottom - row.inkTop, 1);
           const hook = new GraphicPath();
           hook.fill = false;
