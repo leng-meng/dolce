@@ -194,7 +194,24 @@ function plainBarline(el: BarlineElement): BarlineElement {
   return { ...el, type: repeat ? "normal" : el.type, repeatForwardAfter: false };
 }
 
-const hasText = (l: LyricLine | undefined): boolean => !!l && l.syllables.some((x) => x.text.length > 0);
+/** 第 `v` 段整首最后一个字落在哪（源行序、行内第几个字）；按 `lyricsOf` 缓存 */
+const verseEnds = new WeakMap<readonly (readonly LyricLine[])[], Map<number, [number, number]>>();
+
+/** (`row`, `k`) 这一格在第 `v` 段整首最后一个字之后（这一段的词唱完了） */
+function afterVerseEnd(lyricsOf: readonly (readonly LyricLine[])[], v: number, row: number, k: number): boolean {
+  let ends = verseEnds.get(lyricsOf);
+  if (!ends) verseEnds.set(lyricsOf, (ends = new Map()));
+  let end = ends.get(v);
+  if (!end) {
+    end = [-1, -1];
+    lyricsOf.forEach((lines, r) => {
+      const l = lines.find((x) => x.verseFrom <= v && v <= x.verseTo);
+      l?.syllables.forEach((x, i) => { if (x.text) end = [r, i]; });
+    });
+    ends.set(v, end);
+  }
+  return row > end[0] || (row === end[0] && k > end[1]);
+}
 
 /** 一遍里的符号区间 [a, b) 拼成一行行视图：记号截到行内（跨行的标续接），歌词只挂这一遍的那一行 */
 function rowOf(
@@ -260,9 +277,10 @@ function rowOf(
     const v = pass.verses[i]!;
     const k = cursorOf[s.row]![s.idx]!;
     const own = lyricsOf[s.row]!.find((l) => l.verseFrom <= v && v <= l.verseTo);
-    // 这一遍在这一行一个字都没写（副歌只在第 1 段写了，190《凡愿意者可来》、395《十架归路》）：整行借最前面写了词的那一段。
-    // 按整行判，段内用 `/` 留空的拖腔格不借
-    const line = hasText(own) ? own : lyricsOf[s.row]!.find(hasText) ?? own;
+    // 这一段的词已经唱完（整首里这一段最后一个字之后：副歌只在第 1 段写了，190《凡愿意者可来》、395《十架归路》、
+    // 020《向主歌唱》第 2 段「庆贺。」之后的哈利路亚）：借最前面在这一格写了字的那一段。段中间用 `/` 留空的拖腔格后面还有字，不借
+    const done = afterVerseEnd(lyricsOf, v, s.row, k);
+    const line = !done ? own : lyricsOf[s.row]!.find((l) => !!l.syllables[k]?.text) ?? own;
     const syl = line?.syllables[k];
     if (syl && syl.text) any = true;
     syllables.push(syl ? bareSyllable(syl, owners) : { text: "", source: first.source });
