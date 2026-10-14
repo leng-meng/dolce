@@ -106,7 +106,8 @@ interface PartBuild {
   openTuplets: OpenMark[];
   /** `srcs`：欠着的这些记号在原文里的位置（`AttachedSource`，只给编辑用），随记号一起落到元素上 */
   pending: { chord?: string; annotations: string[]; decos: string[]; srcs: AttachedSource[] };
-  openEnding: number[][];
+  /** 开着的房号：房号与起头那一小节的序号 */
+  openEnding: Array<{ nums: number[]; measureNo: number }>;
   /** 当前歌词块；`afterLyrics` 表示上一块已经跟过 `w` 行，下一条音乐行开新块 */
   block?: LyricBlock;
   afterLyrics: boolean;
@@ -950,7 +951,7 @@ function buildMusicLine(
         const existingLeft = (pb.measure.barlines ?? []).find((b) => b.location === "left");
         if (existingLeft) existingLeft.ending = ending;
         else (pb.measure.barlines ??= []).push({ location: "left", ending, source: t.source });
-        openEnding.push(nums);
+        openEnding.push({ nums, measureNo: pb.measureNo });
         break;
       }
 
@@ -980,8 +981,18 @@ function buildMusicLine(
         // 结束类小节线收掉开着的房号
         const isEndingStop = ["light-light", "light-heavy", "heavy-light"].includes(bl.style ?? "");
         if (isEndingStop && openEnding.length) {
-          const nums = openEnding.pop()!;
+          const nums = openEnding.pop()!.nums;
           bl.ending = { numbers: nums, type: "stop", text: nums.join(",") };
+        } else if (openEnding.length) {
+          // 没封口的后一房（前一小节以 `:|` 收、这一房在本小节起头）碰不到结束线：只罩这一小节、右端敞口（用户定，2026-10-14：
+          // 从 MusicXML 转来的二房 `[2 … | Gm …` 原先一路延到曲末，020《向主歌唱》）
+          const top = openEnding[openEnding.length - 1]!;
+          const prev = pb.part.measures[pb.part.measures.length - 1];
+          const afterRepeat = !!prev?.barlines?.some((x) => x.location === "right" && x.repeat === "backward");
+          if (top.measureNo === pb.measureNo && afterRepeat) {
+            openEnding.pop();
+            bl.ending = { numbers: top.nums, type: "discontinue", text: top.nums.join(",") };
+          }
         }
         (pb.measure.barlines ??= []).push(bl);
         pb.inlineBreak = null; // `$` 之后先到的是小节线：小节末换行，小节级那一份就够了
