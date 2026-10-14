@@ -56,8 +56,9 @@ export const STAFF_LONG_IMAGE_WIDTH = STANDARD_PAPERS[STAFF_PAPER_DEFAULT]![0];
 export const isPaper = (k: unknown): k is string =>
   typeof k === "string" && Object.prototype.hasOwnProperty.call(PAPER_SIZES, k);
 
-/** 原样档的角色字号：照 500 首成书（音符 12.08 时：歌词 11.8、和弦 10.1、标题 22.0、署名 11.0、三连音与房号 7.2、段落词 7.8），
- *  折成音符字号的倍数、取两位有效数字（落到 pt 时再取整或 .5，见 `style/jianpu.ts::rolePt`）。 */
+/** 原样档的角色字号：照 500 首成书（音符 12.08 时：歌词 11.8、和弦 10.1、标题 22.0、署名 11.0、三连音与房号 7.2），
+ *  折成音符字号的倍数、取两位有效数字（落到 pt 时再取整或 .5，见 `style/jianpu.ts::rolePt`）。
+ *  段落词成书量到 7.8（0.65em），屏幕上看太小，用户定与和弦同大（0.85em）。 */
 const PRINT_ROLES = {
   lyric: { size: "1em" },
   verseNum: { size: "1em" },
@@ -66,7 +67,7 @@ const PRINT_ROLES = {
   title: { size: "1.8em" },
   credit: { size: "0.9em" },
   tuplet: { size: "0.6em" },
-  sectionWord: { size: "0.65em" },
+  sectionWord: { size: "0.85em" },
 } as const;
 
 /** 原样档的笔画与间距：照 500 首（`dev/style/books/hymn500-measured.ss` 的 @jianpu），em = 音符字号，取两位有效数字或常见分数。

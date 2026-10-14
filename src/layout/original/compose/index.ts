@@ -123,8 +123,18 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     sectionWord(str) {
       const font = roleFont["section-word"];
       const run = sectionWordRun(font, str, m.style.look.punctCompress);
-      const b = font.charBound(str);
-      return { advance: run.width, xs: run.xs, ink: new Rect(0, b.top, run.width, b.bottom) };
+      // 墨迹逐字按挤压后的笔位量：半身档下开括号「（」左挪了半格，墨落在笔位右边约半个字身处，照字面盒算左缘就差出这一截
+      const chars = [...str];
+      const ink = new Rect(Infinity, Infinity, -Infinity, -Infinity);
+      chars.forEach((ch, i) => {
+        const b = font.charBound(ch);
+        const x = run.xs?.[i] ?? (i === 0 ? 0 : font.measureText(chars.slice(0, i).join("")));
+        ink.left = Math.min(ink.left, x + b.left);
+        ink.right = Math.max(ink.right, x + b.right);
+        ink.top = Math.min(ink.top, b.top);
+        ink.bottom = Math.max(ink.bottom, b.bottom);
+      });
+      return { advance: run.width, xs: run.xs, ink: chars.length ? ink : new Rect(0, 0, 0, 0) };
     },
     smufl: (glyph, size) => new Font("Bravura", size).charBound(glyph),
   };

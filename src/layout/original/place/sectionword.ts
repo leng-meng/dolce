@@ -25,15 +25,18 @@ export interface ChordSpan {
 }
 
 /**
- * 第 `i` 个符号上那条段落词落在哪儿。`xOf` 给符号的锚点 x（数字墨迹中心）——撑开预演时是试算的列坐标，真正摆时是定好的 `it.x`。
+ * 第 `i` 个符号上那条段落词落在哪儿（返回落笔点 x）。`xOf` 给符号的锚点 x（数字墨迹中心）——撑开预演时是试算的列坐标，真正摆时是定好的 `it.x`。
  * 锚点取数字墨迹左缘（同简谱引擎 `anchorX`），本小节界取前后两条小节线；和弦都当作在同一条基线上（用户定：同一行和弦同基线）。
+ * **按墨迹摆**：段落词墨迹左缘对锚点、与和弦墨迹之间留和弦与和弦之间那道空（`spreadChords` 的 0.28 个和弦字号）。
+ * 简谱引擎按字面盒、净空 0.6 个字号——半身档下开括号「（」的墨迹在笔位右边约半个字身，两笔叠起来就离左边的和弦老远（审图定改）。
+ * `word` 是段落词墨迹的左右缘（相对落笔点）。
  */
 export function sectionWordSlot(
   items: readonly PlacedItem[],
   i: number,
   xOf: (it: PlacedItem) => number,
   chords: readonly ChordSpan[],
-  wordWidth: number,
+  word: { left: number; right: number },
   m: JianpuGrid,
   lineRight: number,
 ): SectionWordSlot & { anchorX: number } {
@@ -45,8 +48,9 @@ export function sectionWordSlot(
   for (const c of chords) if (c.at === it) own = Math.max(own ?? -Infinity, c.x1);
   const slot = placeSectionWord({
     anchorX,
-    width: wordWidth,
+    width: word.right - word.left,
     size: m.style.size.sectionWord,
+    gap: m.style.size.chord * 0.28,
     baseY: 0,
     chords: chords.map((c) => ({ x0: c.x0, x1: c.x1, y: 0 })),
     barLeft: barLeftAt ?? 0,
@@ -56,5 +60,5 @@ export function sectionWordSlot(
     atLineStart: lineStartIndex(items) === i,
     ...(own !== undefined ? { ownChordRight: own } : {}),
   });
-  return { ...slot, anchorX };
+  return { ...slot, x: slot.x - word.left, anchorX };
 }

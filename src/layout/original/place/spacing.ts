@@ -323,7 +323,7 @@ export function placeColumns(
  */
 class SectionWordRoom {
   private readonly colOf = new Map<PlacedItem, number>();
-  private readonly words: Array<{ items: PlacedItem[]; i: number; width: number; start: boolean }> = [];
+  private readonly words: Array<{ items: PlacedItem[]; i: number; ink: { left: number; right: number }; start: boolean }> = [];
 
   constructor(
     lines: ReadonlyArray<{ items: PlacedItem[] }>,
@@ -338,12 +338,12 @@ class SectionWordRoom {
       const start = lineStartIndex(l.items);
       l.items.forEach((it, i) => {
         const w = sectionWordOf(it.element);
-        if (w) this.words.push({ items: l.items, i, width: ink.sectionWord(w).advance, start: i === start });
+        if (w) this.words.push({ items: l.items, i, ink: ink.sectionWord(w).ink, start: i === start });
       });
     }
   }
 
-  private slot(w: { items: PlacedItem[]; i: number; width: number }, X: readonly number[]) {
+  private slot(w: { items: PlacedItem[]; i: number; ink: { left: number; right: number } }, X: readonly number[]) {
     const xOf = (it: PlacedItem): number => X[this.colOf.get(it)!]!;
     const chords: ChordSpan[] = [];
     for (const it of w.items) {
@@ -355,7 +355,7 @@ class SectionWordRoom {
       const x = xOf(it) - r.advance / 2;
       chords.push({ x0: x + r.ink.left, x1: x + r.ink.right, at: it });
     }
-    return sectionWordSlot(w.items, w.i, xOf, chords, w.width, this.m, this.width);
+    return sectionWordSlot(w.items, w.i, xOf, chords, w.ink, this.m, this.width);
   }
 
   spread(X: number[], lyricRight: number[], rightOf: () => number, justified: (xs: number[]) => void): void {

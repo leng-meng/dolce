@@ -214,7 +214,7 @@ export function placeBand(
       const text = sectionWordOf(w.it.element)!;
       const r = ink.sectionWord(text);
       const row = spans.filter((c) => (c.at.dy ?? 0) === (w.it.dy ?? 0));
-      const slot = sectionWordSlot(items, w.i, (it) => it.x, row, r.advance, m, width || Infinity);
+      const slot = sectionWordSlot(items, w.i, (it) => it.x, row, r.ink, m, width || Infinity);
       const t = sectionWordText(w.it.element, text, slot.x, w.base, r);
       texts.push(t);
       boxes.push({ key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom, layer: 1, rank: 1, kind: "section-word", ...lower(w.it) });

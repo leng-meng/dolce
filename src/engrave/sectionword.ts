@@ -11,6 +11,9 @@ export interface SectionWordGeom {
   width: number;
   /** 段落词字号：让位间隙与抬升量都按它算 */
   size: number;
+  /** 与和弦之间留的净空；不给就是 0.6 个字号（简谱引擎：按字面盒量，收口括号墨迹顶到字面右缘，见 `placeSectionWord`）。
+   *  原样文档按墨迹量，给的是和弦与和弦之间那道空（用户定：段落词在保持间距的前提下尽早出现，不离左边的和弦老远） */
+  gap?: number;
   /** 和弦那条基线 */
   baseY: number;
   chords: { x0: number; x1: number; y: number }[];
@@ -87,7 +90,7 @@ export function sectionWordRun(font: Font, text: string, mode: CompressMode): { 
 export function placeSectionWord(g: SectionWordGeom): SectionWordSlot {
   // 与和弦之间要留的净空。**半身档下末字是收口括号**，它的墨迹一直顶到 advance 的右边缘，
   // 原来那 0.3 个字身量到纸上只剩一线（173 的「（副歌）」右括号与后面的 G 描边挨着）。
-  const gap = g.size * 0.6;
+  const gap = g.gap ?? g.size * 0.6;
   // 压不压字看**全行的和弦**（段落词本来就可以伸出小节线，撞的往往是下一小节的第一个和弦）；
   // 但**让位只能在本小节内**——这两件事口径不同，别混。撞上小节外的和弦时右移左移都没用，
   // 只能靠 spreadForSectionWords 撑开本小节：小节线右边的东西整体右移，段落词留在原处，空档就出来了。
