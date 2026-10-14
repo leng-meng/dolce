@@ -896,7 +896,7 @@ function decorateChord(ch: JChord, el: NoteElement): void {
   for (const orn of el.ornaments) {
     const art = ARTIC_OF_ORNAMENT[orn.name];
     if (art) ch.articulations.push(art);
-    else if (DYNAMICS[orn.name]) ch.directions.push({ text: DYNAMICS[orn.name]!, music: true, italic: false });
+    else if (DYNAMICS[orn.name]) ch.directions.push({ text: DYNAMICS[orn.name]!, music: true, dynamic: true, italic: false });
     else if (TERMS[orn.name]) ch.directions.push({ text: TERMS[orn.name]!, music: false, italic: true });
     // 挂在音符上的跳转记号：segno / coda（左线上的跳转目标，`docView` 挂到小节头一个音上）印在音符上方；
     // Fine / D.S. 落到音符上的（小节没有右线）照小节线上的口径贴着小节末
