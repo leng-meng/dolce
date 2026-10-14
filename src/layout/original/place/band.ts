@@ -3,17 +3,17 @@
 // 堆叠走公共那一份（`engrave/upperband.ts::stackUpperBand`）：按实际墨迹盒一次排清，不再按固定槽位摆。
 // y 一律在这里定死（相对声部基线、行坐标 x），`compose/` 只照 `PlacedText` / `PlacedMark` 画。
 import type { BarlineElement, MusicElement } from "../../../pu/ast";
-import { BARLINE_MARKS, DYNAMICS, ORNAMENTS, TERMS } from "../../../pu/glyph";
+import { BARLINE_MARKS, DYNAMICS, TERMS } from "../../../pu/glyph";
 import { Point, Rect } from "../../../common/geom";
 import { Slur } from "../../pageitem";
 import { bandTop, stackUpperBand, type BandItem } from "../../../engrave/upperband";
 import { DYNAMIC_SIZE } from "../../../engrave/dynamics";
 import { tupletDigits } from "../../../engrave/tuplet";
-import { accidentalRise, type AccidentalKind } from "../../../engrave/accidental";
+import { endingDrop, endingLabelDx, labelBaselineOf, normEndingText } from "../../../engrave/ending";
 import { stackBottom, stackTop as stackTopOf } from "../../../engrave/stack";
 import { barlineSpan, bracketLineWidth, jianpuSlurStyle, type JianpuGrid } from "../metrics";
 import type { InkMeasurer, PlacedItem, PlacedLayer, PlacedMark, PlacedText } from "./model";
-import { graceTop, noteBeams, stackTop } from "./vertical";
+import { articStack, entryTop, noteBeams, stackTop } from "./vertical";
 import { barlineBox } from "./spacing";
 
 /** 一个声部（或并排块上行）的上方带排完的结果。 */
@@ -36,14 +36,6 @@ const LOWER_ROW = ["split"] as const;
 /** 和弦字号（没设就按数字字号的 0.6，同简谱引擎 `directionWidth`） */
 function textSize(m: JianpuGrid): number {
   return m.style.size.chord > 0 ? m.style.size.chord : m.style.size.note * 0.6;
-}
-
-/** 音符那一摞（数字、高八度点、临时记号、倚音）的墨迹顶，相对基线（不含 dy） */
-function entryTop(el: MusicElement, m: JianpuGrid): number {
-  let top = Math.min(-m.ink.noteHeight / 2, stackTop(el, m));
-  const g = graceTop(el, m);
-  if (g !== null) top = Math.min(top, g);
-  return top;
 }
 
 /** 弧（简谱弧，同页 slur 那一条月牙）的墨迹盒与「这一段 x 上多高」：照 `Line.collectBandItems` 的弧那一段 */
@@ -139,31 +131,18 @@ export function placeBand(
     const el = it.element;
     const dy = it.dy ?? 0;
     if (el.kind === "note") {
-      // 起始落点照 `NoteEntry.notationTop`：叠层顶（数字 + 高八度点）之上一道空，有临时记号再让它 1.6 道
-      const half = nh / 2;
-      let artBottom = stackTopOf(-half, Math.max(0, el.octave), m.ink.stack) - gap;
-      if (el.accidental !== undefined) {
-        artBottom = Math.min(artBottom, -half - accidentalRise(el.accidental as AccidentalKind, nh, m.style.look.accidentalScale) - gap * 1.6);
-      }
-      let top = entryTop(el, m);
-      for (const orn of el.ornaments) {
-        // 换气是挂在右上角的 V（compose/note.ts 贴着音符画），不进带
-        const g = orn.name === "hx" ? undefined : ORNAMENTS[orn.name];
-        if (!g) continue;
-        const fs = m.style.size.note * g.scale;
-        const r = ink.smufl(g.glyph, fs);
-        // 同一个音上几个记号往上摞（各自一道空）；`+` 抬高级别照旧按级预抬
-        const y = artBottom - r.bottom - orn.level * m.note.levelStep;
-        const x = it.x - (r.left + r.right) / 2;
-        const t: PlacedText = { kind: "artic", el, text: g.glyph, face: "music", size: fs, x, y: y + dy, ink: r.offset(x, y + dy) };
+      const art = articStack(el, m, ink, gap);
+      for (const g of art.glyphs) {
+        const t: PlacedText = {
+          kind: "artic", el, text: g.glyph, face: "music", size: g.size, x: it.x + g.x, y: g.y + dy, ink: g.ink.offset(it.x, dy),
+        };
         texts.push(t);
         boxes.push({
           key: t, x0: t.ink.left, x1: t.ink.right, top: t.ink.top, bottom: t.ink.bottom,
           layer: 0, rank: Number.MAX_SAFE_INTEGER, kind: "artic", skipKinds: dy ? ["tuplet", ...LOWER_ROW] : ["tuplet"],
         });
-        artBottom = y + r.top - m.ink.stack.gap;
-        top = Math.min(top, y + r.top);
       }
+      const top = art.top;
       // 和弦/注释/转调标签的起始基线：本音那一摞（含临时记号、倚音、奏法记号）的墨迹顶之上 `chordGap`（`NoteEntry.addHarmony`）
       const base = top - m.style.vertical.chordGap + dy;
       if (el.chord) pushChord(el, it.x, base, el.chord, dy);
@@ -282,7 +261,7 @@ export function placeBand(
 
   const groups = placeDirections(items, boxes, texts, m, ink, width);
   placeCue(items, layers, boxes, m);
-  placeEndings(items, marks, boxes, groups, m);
+  placeEndings(items, marks, boxes, groups, m, ink);
   // 松叶、房号的 y 上面是按声部基线算的（已含下行的 dy）；compose 画记号时还要再加 `mk.dy`，这里扣回去
   for (const mk of marks) {
     if (mk.y !== undefined && mk.dy !== undefined && mk.mark.type !== "slur" && mk.mark.type !== "tuplet") mk.y -= mk.dy;
@@ -553,18 +532,26 @@ function placeCue(items: readonly PlacedItem[], layers: PlacedLayer[], boxes: Ba
  *   - 其余横线底下：带顶、音符墨迹顶之上一道空；
  *   - 竖脚落在小节线上：线顶之上「竖脚 + 一道空」，区间里的其它小节线同横线。
  * 力度/跳转字不算（房里的 `Fine`、`D.S.` 反过来排到房号线之上，用户定）。
- * 字号、竖脚仍照原样文档的画法（小节线高的一半，compose/marks.ts）；改走尺子是子计划 4.2。
+ * 字号、竖脚、房号落点同简谱引擎（`size.ending`、`engrave/ending.ts` 的 `endingDrop` / `labelBaselineOf`）；
+ * 竖脚下面最深的是竖脚还是房号墨迹底，按更深的那个让（同 `Line.addEnding` 的 `depth`）。
  */
 function placeEndings(
-  items: readonly PlacedItem[], marks: PlacedMark[], boxes: BandItem[], directions: ReadonlyMap<object, PlacedText[]>, m: JianpuGrid,
+  items: readonly PlacedItem[], marks: PlacedMark[], boxes: BandItem[], directions: ReadonlyMap<object, PlacedText[]>,
+  m: JianpuGrid, ink: InkMeasurer,
 ): void {
   const voltas = marks.filter((mk) => mk.mark.type === "volta");
   if (voltas.length === 0) return;
-  const H = m.style.vertical.barlineHeight;
-  const labelSize = H * 0.5;
-  const drop = H * 0.5;
+  const labelSize = m.style.size.ending;
+  const drop = endingDrop(m.style.vertical.bracketFoot, labelSize);
   const gap = m.style.vertical.slurGap;
   const lw = bracketLineWidth(m);
+  const dx = endingLabelDx(lw, labelSize, m.style.vertical.bracketFoot);
+  /** 房号墨迹（相对横线左端、横线心 y = 0）；跨行续过来的那一段不印 */
+  const labelInk = (mk: PlacedMark): Rect | null => {
+    if (mk.openLeft || !mk.mark.caption) return null;
+    const r = ink.text(normEndingText(mk.mark.caption), "ending").ink;
+    return r.offset(dx, labelBaselineOf(r.top, labelSize, lw));
+  };
   const span = barlineSpan(m);
   const band = boxes.filter((b) => b.kind !== "direction");
   /** [x0, x1] 里音符那一摞与带的最高墨迹 */
@@ -581,8 +568,9 @@ function placeEndings(
     const leftFoot = !mk.openLeft;
     const rightFoot = !mk.openRight && mk.mark.openEnd !== true;
     if (leftFoot) {
-      const labelW = mk.mark.caption ? labelSize * (0.4 + 0.6 * mk.mark.caption.length) : 0;
-      top = Math.min(top, inkTop(mk.x0 - labelSize, mk.x0 + labelW + labelSize * 0.3) - labelSize * 0.7 - drop);
+      const label = labelInk(mk);
+      const depth = Math.max(drop, label?.bottom ?? 0);
+      top = Math.min(top, inkTop(mk.x0 - labelSize, mk.x0 + (label?.right ?? 0)) - labelSize * 0.7 - depth);
     }
     top = Math.min(top, inkTop(mk.x0, mk.x1) - gap - lw / 2);
     for (const it of items) {
@@ -596,7 +584,8 @@ function placeEndings(
   top -= (Math.max(...voltas.map((mk) => mk.level)) - 1) * m.note.levelStep;
   for (const mk of voltas) {
     mk.y = top;
-    boxes.push({ key: mk, x0: mk.x0, x1: mk.x1, top: top - lw / 2, bottom: top + drop, layer: 3, kind: "ending" });
+    const bottom = Math.max(drop, labelInk(mk)?.bottom ?? 0);
+    boxes.push({ key: mk, x0: mk.x0, x1: mk.x1, top: top - lw / 2, bottom: top + bottom, layer: 3, kind: "ending" });
   }
   // 房里（含竖脚、房号那一截）的力度/跳转字抬到房号线之上一道空
   for (const b of boxes) {

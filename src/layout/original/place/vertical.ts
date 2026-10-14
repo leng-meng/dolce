@@ -4,7 +4,9 @@ import { jianpuGraceMetrics, jianpuGraceNotes, type JianpuGrid } from "../metric
 import { graceBottom, graceGeometry, type GraceGeom } from "../../../engrave/grace";
 import { stackBottom, stackTop as stackTopOf } from "../../../engrave/stack";
 import { accidentalRise, type AccidentalKind } from "../../../engrave/accidental";
-import type { PlacedItem, PlacedVoice } from "./model";
+import { ORNAMENTS } from "../../../pu/glyph";
+import type { Rect } from "../../../common/geom";
+import type { InkMeasurer, PlacedItem, PlacedVoice } from "./model";
 
 /**
  * 一组倚音画在哪（相对锚点 x、基线 baseline）。**画（compose/note.ts::paintGrace）与让位共用这一份**：
@@ -93,6 +95,54 @@ export function stackTop(el: MusicElement | undefined, m: JianpuGrid, withAccide
   return Math.min(accTop, stackTopOf(-m.ink.noteHeight / 2, el.octave, m.ink.stack));
 }
 
+
+/** 音符那一摞（数字、高八度点、临时记号、倚音）的墨迹顶，相对基线（不含 dy） */
+export function entryTop(el: MusicElement, m: JianpuGrid): number {
+  let top = Math.min(-m.ink.noteHeight / 2, stackTop(el, m));
+  const g = graceTop(el, m);
+  if (g !== null) top = Math.min(top, g);
+  return top;
+}
+
+/** 音符上的一个奏法记号字形：落笔点 `x`/`y` 与墨迹 `ink` 都相对基线、x 相对音符墨迹中心 */
+export interface ArticGlyph {
+  glyph: string;
+  size: number;
+  x: number;
+  y: number;
+  ink: Rect;
+}
+
+/**
+ * 音符上的奏法记号（延长记号等）往上摞的落点，与它们连同那一摞的墨迹顶（相对基线，不含 dy）。
+ * 起始落点照 `NoteEntry.notationTop`：叠层顶（数字 + 高八度点）之上 `gap`，有临时记号再让它 1.6 道；
+ * 同一个音上几个记号各隔一道叠层的空，源码里的 `+` 抬高级别照旧按级预抬。
+ * 上方带（band.ts）按它摆字形，连音括线（marks.ts）按 `top` 让开跨度里每个音（同 `Line.addTuplet`）。
+ */
+export function articStack(el: MusicElement, m: JianpuGrid, ink: InkMeasurer, gap: number): { glyphs: ArticGlyph[]; top: number } {
+  let top = entryTop(el, m);
+  const glyphs: ArticGlyph[] = [];
+  if (el.kind !== "note") return { glyphs, top };
+  const nh = m.ink.noteHeight;
+  let artBottom = stackTopOf(-nh / 2, Math.max(0, el.octave), m.ink.stack) - gap;
+  if (el.accidental !== undefined) {
+    artBottom = Math.min(artBottom, -nh / 2 - accidentalRise(el.accidental as AccidentalKind, nh, m.style.look.accidentalScale) - gap * 1.6);
+  }
+  for (const orn of el.ornaments) {
+    // 换气是挂在右上角的 V（compose/note.ts 贴着音符画），不进带
+    const g = orn.name === "hx" ? undefined : ORNAMENTS[orn.name];
+    if (!g) continue;
+    const size = m.style.size.note * g.scale;
+    const r = ink.smufl(g.glyph, size);
+    const y = artBottom - r.bottom - orn.level * m.note.levelStep;
+    const x = -(r.left + r.right) / 2;
+    const box = r.offset(x, y);
+    glyphs.push({ glyph: g.glyph, size, x, y, ink: box });
+    artBottom = box.top - m.ink.stack.gap;
+    top = Math.min(top, box.top);
+  }
+  return { glyphs, top };
+}
 
 /**
  * 一个音符**最低的墨迹**（相对基线）：数字墨迹底、减时线最下一层、低音点，取最低的那个。

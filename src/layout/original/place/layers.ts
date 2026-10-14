@@ -1,7 +1,7 @@
 // 内联层：`{bz…}` 临时伴奏（主旋律上方小字号行）与 `{dsb…}` 并排块。
 import type { ScoreLine } from "../../../pu/ast";
 import type { JianpuGrid } from "../metrics";
-import type { PlacedItem, PlacedLayer, PlacedSplit } from "./model";
+import type { InkMeasurer, PlacedItem, PlacedLayer, PlacedSplit } from "./model";
 import { type BeatCtx, SPLIT_BRACE_W, computeUnderlines, layoutVoiceLine } from "./voice";
 import { splitRise } from "./vertical";
 import { placeMarks } from "./marks";
@@ -11,6 +11,7 @@ export function placeLayers(
   voice: ScoreLine,
   items: PlacedItem[],
   m: JianpuGrid,
+  ink: InkMeasurer,
   ctx: BeatCtx = {},
 ): PlacedLayer[] {
   const out: PlacedLayer[] = [];
@@ -96,7 +97,7 @@ export function placeLayers(
     for (let i = hostAt; i <= endAt; i++) items[i]!.dy = split;
     const underlines = computeUnderlines(inner, laid.items, m, laid.groups);
     for (const u of underlines) u.dy = -split;
-    const marks = placeMarks(inner, laid.items, m);
+    const marks = placeMarks(inner, laid.items, m, ink);
     const placed: PlacedSplit = {
       dy: -split,
       line: inner,

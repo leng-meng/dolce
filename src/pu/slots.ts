@@ -818,13 +818,16 @@ function toPuSong(song: Song, index: number, rawLines: readonly string[]): SongV
         texts = p.texts;
         textSources = p.textSources ?? [];
       }
+      const segs = segmentMarks(marksOfPart(pi), builds[pi]!, r);
+      // 123/ABC 的解析器同时写了连音标记，按 `timeMod` 补出来的同一段就不再要（否则同一个连音画两遍）
+      const extra = tuplets[pi]![r]!.filter((t) => !segs.some((s) => s.type === "tuplet" && s.start === t.start && s.end === t.end));
       const line: RowView = {
         part,
         measures: perPart[pi]![r]!.measures,
         refs: build.refs,
         voice: voiceOf(pi),
         elements: build.elements,
-        marks: [...segmentMarks(marksOfPart(pi), builds[pi]!, r), ...voltas[pi]![r]!, ...tuplets[pi]![r]!],
+        marks: [...segs, ...voltas[pi]![r]!, ...extra],
         lyrics: rowLyrics(build, p?.lyricLines),
         raw: p?.source ? (rawLines[p.source.line] ?? "") : "",
         source: p?.source ?? ZERO,

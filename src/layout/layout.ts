@@ -7,7 +7,7 @@ import { Fraction } from "../common/fraction";
 import { Point } from "../common/geom";
 import { BandItem, bandTop, stackUpperBand } from "../engrave/upperband";
 import { BarStyle, StartStopDiscontinue } from "../score/enums";
-import { addEndingBracket, labelBaseline } from "../engrave/ending";
+import { addEndingBracket, endingDrop, endingLabelDx, labelBaseline, normEndingText } from "../engrave/ending";
 import { TupletGlyph } from "../engrave/tuplet";
 import type { Font } from "./font";
 import { measureDuration, type JChord, type JDirection, type JMeasure, type JNote, type JScore } from "./input";
@@ -1711,8 +1711,7 @@ export class Line {
       for (const b of barInk) if (b.last >= sp.x0 - 0.5 && b.first <= sp.x1 + 0.5) above = Math.min(above, b.top);
     }
     if (!Number.isFinite(above)) return stillOpen;
-    // 竖脚长照五线谱：与房号字号等长（五线谱是两个线距、房号 20 tenths）
-    const drop = opt.bracketFoot > 0 ? opt.bracketFoot : opt.endingSize;
+    const drop = endingDrop(opt.bracketFoot, opt.endingSize);
     // 括线下面最深的是竖脚还是房号（房号从横线往下排，可能比短脚还低）：按更深的那个让开下方的音符与和弦
     const lw = opt.bracketWidth > 0 ? opt.bracketWidth : opt.barlineWidth;
     let depth = drop;
@@ -1764,11 +1763,10 @@ export class Line {
       leftFoot: !sp.cont, rightFoot: sp.closed,
       lineWidth: lw, color: opt.color,
       // 数字摆在竖脚**右侧**、横线**下方**（纵向从横线往下按墨迹算，见 `ending.ts::labelBaseline`）。
-      // 横向：编辑器照五线谱右移约半个字号；成书照原书 0.28 个字号（竖脚是实测的短脚 `bracketFoot`）
       label: sp.num && !sp.cont ? {
         text: sp.num,
         font: this.endingFont(opt),
-        dx: lw + opt.endingSize * (opt.bracketFoot > 0 ? 0.28 : 0.4),
+        dx: endingLabelDx(lw, opt.endingSize, opt.bracketFoot),
       } : undefined,
       // line-check 的 L10/L11 靠 ending-line 认；ending 见 browser.ts::roleOfItem（归 verseNum 那一档，别当成音符）
       classes: { line: "ending-line", label: "ending" },
@@ -2270,14 +2268,6 @@ export class Layout {
   shiftToMargin(): void {
     for (const pg of this.pages) pg.x += this.options.marginLeft;
   }
-}
-
-/** 房号原文规整：只由数字与分隔（逗号/顿号/中点/空格/句点）组成时，数字之间统一用半角句点，
- *  尾点照原文（原书 `1.2` / `3` 不带尾点）；含别的字（`Fine`、`D.C.`…）原样返回。 */
-function normEndingText(text: string): string {
-  if (!/^[\d\s.,，、·]+$/.test(text) || !/\d/.test(text)) return text;
-  const t = text.trim();
-  return (t.match(/\d+/g) ?? []).join(".") + (t.endsWith(".") ? "." : "");
 }
 
 function substringAfter(s: string, delim: string): string {

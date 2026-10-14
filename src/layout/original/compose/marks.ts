@@ -2,7 +2,7 @@
 import { Font } from "../../font";
 import { Point } from "../../../common/geom";
 import { BeamLine, Group, Slur } from "../../pageitem";
-import { addEndingBracket } from "../../../engrave/ending";
+import { addEndingBracket, endingDrop, endingLabelDx, normEndingText } from "../../../engrave/ending";
 import { TupletGlyph } from "../../../engrave/tuplet";
 import { sustainDash } from "../../../engrave/dash";
 import { beamY, highDotY, lowDotY } from "../../../engrave/stack";
@@ -95,19 +95,20 @@ export function paintMark(c: OriginalCtx, root: Group, mk: PlacedMark, left: num
     }
     case "volta": {
       const y = baseline + (mk.y ?? -m.ink.noteHeight / 2);
-      // 画法走公共那一份（engrave/ending.ts，与简谱引擎、混排同一套）：比例照混排——
-      // 竖脚与房号字号都是谱高的一半（谱高取小节线高），房号在左脚右侧、横线下方按墨迹定位。
-      const H = m.style.vertical.barlineHeight;
-      const size = H * 0.5;
+      // 画法走公共那一份（engrave/ending.ts，与简谱引擎、混排同一套）；字号、竖脚、房号离左脚的距离同简谱引擎（尺子的 `size.ending`、`bracketFoot`）
+      const size = m.style.size.ending;
+      const foot = m.style.vertical.bracketFoot;
       const lw = bracketLineWidth(m);
       const showLabel = !!mk.mark.caption && !mk.openLeft; // 跨行续过来的房子不再重复房号
       addEndingBracket(root, {
-        x0, x1, top: y, drop: H * 0.5,
+        x0, x1, top: y, drop: endingDrop(foot, size),
         leftFoot: !mk.openLeft,
         // `]/`（诗歌本）与 `[…/`（番茄）表示右端不封口
         rightFoot: !mk.openRight && mk.mark.openEnd !== true,
         lineWidth: lw, color: c.ink,
-        label: showLabel ? { text: mk.mark.caption!, font: c.digitFont.makeWithSize(size), dx: lw + size * 0.4 } : undefined,
+        label: showLabel
+          ? { text: normEndingText(mk.mark.caption!), font: c.digitFont.makeWithSize(size), dx: endingLabelDx(lw, size, foot) }
+          : undefined,
         classes: { line: "ending-line", label: "ending" },
       });
       break;

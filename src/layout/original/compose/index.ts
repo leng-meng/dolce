@@ -90,7 +90,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     term: chordWord,
     jump: chordWord,
     "key-label": chordWord,
-    ending: new Font(m.style.font.note.family, m.style.size.ending),
+    ending: c.digitFont.makeWithSize(m.style.size.ending), // 同 compose/marks.ts 画房号的那个字
     words: new Font(m.style.font.text.family, m.style.size.words),
   };
   const ink: InkMeasurer = {

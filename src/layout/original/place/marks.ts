@@ -2,12 +2,12 @@
 import type { Mark, ScoreLine } from "../../../pu/ast";
 import { jianpuSlurRise, type JianpuGrid } from "../metrics";
 import { ARC_CHAIN_INSET_DIV, arcClearShift, jpArcY } from "../../../engrave/arc";
-import type { PlacedItem, PlacedMark } from "./model";
-import { stackTop } from "./vertical";
+import type { InkMeasurer, PlacedItem, PlacedMark } from "./model";
+import { articStack, stackTop } from "./vertical";
 import { barlineLines } from "./spacing";
 
 /** 把记号的元素下标区间换算成行内 x 区间；弧线、多连音的 y 也在这里定（跳房子、松叶的 y 见 band.ts）。 */
-export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid): PlacedMark[] {
+export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid, ink: InkMeasurer): PlacedMark[] {
   if (items.length === 0) return [];
   const first = items[0]!;
   const last = items[items.length - 1]!;
@@ -68,7 +68,18 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid)
       startEl: a.element,
       endEl: b.element,
     };
-    if (mark.type === "slur" || mark.type === "tuplet") {
+    if (mark.type === "tuplet" && m.style.look.tupletStyle === "bracket") {
+      // 连音括线（同 `Line.addTuplet`）：**跨度里每个音**那一摞（含高八度点、临时记号、奏法记号）的墨迹顶之上一道空，
+      // 不只看两端（中间那个音带升号时只看两端，括线就压在升号上）。两段弧风格仍按下面的「简谱弧只看起止」
+      const gap = m.style.vertical.slurGap;
+      let top = Infinity;
+      for (const it of items) {
+        if (it.srcIndex < a.srcIndex || it.srcIndex > b.srcIndex || it.element.kind !== "note" || it.element.hidden) continue;
+        top = Math.min(top, articStack(it.element, m, ink, gap).top);
+      }
+      if (!Number.isFinite(top)) top = Math.min(stackTop(a.element, m), stackTop(b.element, m));
+      placed.y = top - gap - (level - 1) * m.note.levelStep;
+    } else if (mark.type === "slur" || mark.type === "tuplet") {
       // 简谱弧（engrave/arc.ts，三条简谱路同一条；多连音的两段弧也是弧）：只看起止两个音——两摞的墨迹顶
       // （终点算上临时记号）取高者，再往上一道叠层的空；源码里的 `+` 抬高级别照旧按 level 上移
       placed.y = jpArcY(stackTop(a.element, m, false), stackTop(b.element, m), m.ink.stack.gap)

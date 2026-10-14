@@ -32,8 +32,30 @@ export interface EndingBracket {
  * 文字顶都落在横线下方，永远不与横线相压。
  */
 export function labelBaseline(font: Font, text: string, lineWidth: number): number {
-  const inkTop = Math.min(0, font.charBound(text).top); // 基线之上为负
-  return lineWidth / 2 + font.size * LABEL_GAP - inkTop;
+  return labelBaselineOf(font.charBound(text).top, font.size, lineWidth);
+}
+
+/** 同 `labelBaseline`，墨迹顶（基线之上为负）由调用方量好（原样文档定位端不碰字体）。 */
+export function labelBaselineOf(inkTop: number, size: number, lineWidth: number): number {
+  return lineWidth / 2 + size * LABEL_GAP - Math.min(0, inkTop);
+}
+
+/** 竖脚长：尺子给了实测短脚（`vertical.bracketFoot`，成书）就用它，否则与房号字号等长（五线谱是两个线距、房号 20 tenths）。 */
+export function endingDrop(bracketFoot: number, size: number): number {
+  return bracketFoot > 0 ? bracketFoot : size;
+}
+
+/** 房号离左脚的横向距离：编辑器照五线谱右移约半个字号；成书照原书 0.28 个字号（竖脚是实测的短脚）。 */
+export function endingLabelDx(lineWidth: number, size: number, bracketFoot: number): number {
+  return lineWidth + size * (bracketFoot > 0 ? 0.28 : 0.4);
+}
+
+/** 房号原文规整：只由数字与分隔（逗号/顿号/中点/空格/句点）组成时，数字之间统一用半角句点，
+ *  尾点照原文（原书 `1.2` / `3` 不带尾点）；含别的字（`Fine`、`D.C.`…）原样返回。 */
+export function normEndingText(text: string): string {
+  if (!/^[\d\s.,，、·]+$/.test(text) || !/\d/.test(text)) return text;
+  const t = text.trim();
+  return (t.match(/\d+/g) ?? []).join(".") + (t.endsWith(".") ? "." : "");
 }
 
 /** 画进 `g`，返回房号那个文字对象（没有房号时为 null），调用方需要时自己 `update()`。 */
