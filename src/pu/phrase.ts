@@ -16,14 +16,12 @@
 // 无 DOM 依赖。
 
 import { Fraction } from "../common/fraction";
-import { chooseLineLayout, fitForInput, pageBreakLines } from "../score/applybreaks";
+import { chooseLineLayout, fitForIds, pageBreakLines } from "../score/applybreaks";
 import { computePhraseBreaks } from "../score/phrase";
 import { chordsOf, type PhraseChord } from "../score/phraseinput";
-import type { JChord, JScore } from "../layout/input";
 import { elementQuarters, linesOfVoice, tupletRatios, voiceNumbers } from "./ast";
 import type { MusicElement, NoteElement, PuSong, ScoreLine, SourceSpan } from "./ast";
 import { phrasePartOfSong } from "./phrasesong";
-import { jianpuInputOfDoc } from "../model/jianpuinput";
 import type { ElementId, ScoreDoc } from "../model/doc";
 import { docView } from "./slots";
 
@@ -102,8 +100,8 @@ function indexAtTick(st: VoiceStream, tick: Fraction): number {
   return st.elements.length;
 }
 
-/** 量行长的尺子：按本函数交给它的那份引擎输入量自然跨度（和弦按元素 id 对回断句输入）。 */
-export type FitMeasure = (score: JScore) => { width: number; spans: ReadonlyMap<JChord, { x0: number; x1: number }> } | null;
+/** 量行长的尺子：量这份文档第 `song` 首各音的自然跨度（键是元素 id，按 id 对回断句输入）。 */
+export type FitMeasure = (doc: ScoreDoc, song: number) => { width: number; spans: ReadonlyMap<string | number, { x0: number; x1: number }> } | null;
 
 /**
  * 算出这一首该怎么按乐句分行。
@@ -147,9 +145,8 @@ export function puPhraseLines(
 
   const breaks = computePhraseBreaks(part, { pageLines: PAGE_LINES });
   if (opt.measure) {
-    const score = jianpuInputOfDoc(sdoc, { song: songIdx, forExpanded: true });
-    const measured = score?.parts[0] ? opt.measure(score) : null;
-    if (measured) chooseLineLayout(part, breaks, 0, { fit: fitForInput(measured, input.idOf) });
+    const measured = opt.measure(sdoc, songIdx);
+    if (measured) chooseLineLayout(part, breaks, 0, { fit: fitForIds(measured, input.idOf) });
   }
 
   // 断点 → 主旋律元素流下标（「在此元素之前起新行」）。

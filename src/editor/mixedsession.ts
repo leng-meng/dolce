@@ -6,7 +6,6 @@
 
 import type { ElementId, ScoreDoc } from "../model/doc";
 import type { MetaData } from "../smufl/smufl";
-import type { JChord } from "../layout/input";
 import { staffOptionsOf } from "../layout/painter";
 import { phraseCuts, type FitMeasure } from "../pu/phrase";
 import { layoutStaff } from "../mixed/layout";
@@ -66,18 +65,7 @@ export class MixedSession {
       options.page = this.host.staffPage;
       const { width, byId } = staffChordSpans(layoutStaff(bare, options));
       if (byId.size === 0) return null;
-      const measure: FitMeasure = (score) => {
-        const spans = new Map<JChord, { x0: number; x1: number }>();
-        for (const part of score.parts) {
-          for (const m of part.measures) {
-            for (const e of m.entries) {
-              const sp = e.kind === "chord" && e.id !== null ? byId.get(e.id) : undefined;
-              if (sp) spans.set(e as JChord, sp);
-            }
-          }
-        }
-        return { width, spans };
-      };
+      const measure: FitMeasure = () => ({ width, spans: byId });
       const cuts = phraseCuts(doc, 0, { measure });
       if (!cuts) return null;
       return new Set(cuts.flatMap((c) => (c.id === null ? [] : [c.id])));

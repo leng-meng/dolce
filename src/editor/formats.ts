@@ -87,14 +87,9 @@ const rejectNoNotes = (msg: () => string) => (doc: ScoreDoc): string | null =>
 export interface FormatCaps {
   /** 有没有代码区。`.musicxml` 没有：打开只进谱面视图（五线谱编辑那一路），要编辑先转成文本格式（新文档）。 */
   textEditor: boolean;
-  /** 谱面走哪套排版：`scoredoc` = 解析成 `ScoreDoc` 后原样档看 `originalLayout`、展开档经 `jianpuInputOfDoc`
-   *  （文本谱、123、ABC）；`jpwabc` = `.jpwabc` 经 `jianpuInputOfJpw` 走简谱引擎（两档）。 */
+  /** 源文怎么变成 `ScoreDoc`：`scoredoc` = 适配器的 `toScoreDoc` 解析（文本谱、123、ABC、jcx、jianpu-ly、MusicXML）；
+   *  `jpwabc` = `.jpwabc` 分节文件经 `jpwToScoreDoc`，另带 `.Layout` 分页描述（只管展开档）。排版都是同一个简谱引擎。 */
   layout: "scoredoc" | "jpwabc";
-  /** `scoredoc` 这一路**原样档**用哪种布局算法（排版器都是同一个 `ScorePainter`）：
-   *  `jianpu` = 投影成简谱引擎输入、与 `.jpwabc` 原样档同一套（123、ABC；多声部的曲子仍回落原样文档布局，
-   *  引擎只排一条旋律）；`document` = 原样文档布局（`layout/original/`，文本谱的印刷原版观感、MusicXML）。
-   *  `jpwabc` 本来就走引擎。 */
-  originalLayout: "jianpu" | "document";
   /** 有没有「按乐句重排」（要有 `FormatAdapter.relayoutText`）。`.musicxml` 没有代码区，不给。 */
   phraseRelayout: boolean;
 }
@@ -190,10 +185,10 @@ const JPWABC: FormatAdapter = {
   label: () => "JPWABC",
   title: (host) => host.painterTitle.split("\n")[0] ?? "",
   profileKnob: "jp",
-  caps: { textEditor: true, layout: "jpwabc", phraseRelayout: true, originalLayout: "jianpu" },
+  caps: { textEditor: true, layout: "jpwabc", phraseRelayout: true },
   reload: (host, text) => host.reloadJpwabc(text),
   // `.jpwabc` 是分节文件：只重切 `.Voice` 的行，别的节（样式、歌词、分页描述）一个字不动。
-  // 尺子不用：这一路的展开档走的是另一套引擎输入，拿 `jianpuInputOfDoc` 那把尺子量不对。
+  // 尺子不用：`.jpwabc` 只挪 `.Voice` 里的 `$`，按出厂的小节数目标断。
   relayoutText: (text) => {
     const f = JpwFile.fromString(text);
     if (!f) return text;
@@ -221,7 +216,7 @@ const PU: FormatAdapter = {
     return first ? first[1]!.trim() : "";
   },
   profileKnob: "original",
-  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "document" },
+  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true },
   toScoreDoc: (text) => parsePu(text),
   // 原样档走原样文档布局（印刷原版的观感），展开档投影成简谱引擎输入
   reloadSpec: {
@@ -253,7 +248,7 @@ const J123: FormatAdapter = {
     return first ? first[1]!.trim() : "";
   },
   profileKnob: "original",
-  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "jianpu" },
+  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true },
   toScoreDoc: parse123,
   reloadSpec: {
     what: () => "123",
@@ -284,7 +279,7 @@ const ABC: FormatAdapter = {
     return first ? first[1]!.trim() : "";
   },
   profileKnob: "original",
-  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "jianpu" },
+  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true },
   toScoreDoc: parseAbc,
   reloadSpec: { what: () => "ABC", reject: rejectNoNotes(() => t("status.abcNoNotes")), reportOnReject: true },
   relayoutText: (text, measure) => emitFrom(text, measure, parseAbc, emitAbc),
@@ -315,7 +310,7 @@ const JCX: FormatAdapter = {
     return first ? first[1]!.trim() : "";
   },
   profileKnob: "original",
-  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "jianpu" },
+  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true },
   toScoreDoc: parseJcx,
   reloadSpec: { what: () => t("fmt.jcx.label"), reject: rejectNoNotes(() => t("status.jcxNoNotes")), reportOnReject: true },
   relayoutText: (text, measure) => emitFrom(text, measure, parseJcx, emitJcx),
@@ -350,7 +345,7 @@ const JLY: FormatAdapter = {
     return first ? first[1]!.trim() : "";
   },
   profileKnob: "original",
-  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true, originalLayout: "jianpu" },
+  caps: { textEditor: true, layout: "scoredoc", phraseRelayout: true },
   // 「按乐句重排」：**只把曲行按每 4 小节重新断行**，词行/页头/注释一个字不动（上游不看行，
   // 但 dolce 自己按文件的行排版；一行到底就挤成一团）。尺子还没接（`measure` 先不用），
   // 用的是写出端同一套"每 4 小节一行"的出厂值。
@@ -377,7 +372,7 @@ const MUSICXML: ScoreDocAdapter = {
     return m ? m[1]!.trim() : "";
   },
   profileKnob: "original",
-  caps: { textEditor: false, layout: "scoredoc", phraseRelayout: false, originalLayout: "document" },
+  caps: { textEditor: false, layout: "scoredoc", phraseRelayout: false },
   // MusicXML 只给绝对音高，简谱排版要度数
   toScoreDoc: (text) => {
     const doc = loadScoreDoc(text);

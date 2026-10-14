@@ -158,12 +158,14 @@ export function measureJianpu(
   return jianpuLayoutOf(cfg, res).measureNatural(score, width);
 }
 
-/** 自然量宽（原样文档引擎，乐句重排用）：清掉换行、整首不折，量第一首每个音（键为元素 id）的自然横向区间与版心宽。
+/** 自然量宽（原样文档引擎，乐句重排用）：清掉换行、整首不折，量第 `song` 首每个音（键为元素 id）的自然横向区间与版心宽。
  *  `slide`：按展开档的画法量（数字共基线、增时线「-」字）。不改 `doc`。 */
 export function measureDocument(
-  doc: ScoreDoc, sheet: StyleSheet, width: number, slide = false,
+  doc: ScoreDoc, sheet: StyleSheet, width: number, slide = false, song = 0,
 ): { width: number; spans: Map<string | number, { x0: number; x1: number }> } {
-  const clone = structuredClone(doc);
+  const one = doc.songs[song];
+  if (!one) return { width: 0, spans: new Map() };
+  const clone = structuredClone({ ...doc, songs: [one] });
   for (const song of clone.songs) clearSongBreaks(song);
   const r = layoutOriginalDocument(clone, {
     style: jianpuStyleOf(sheet),

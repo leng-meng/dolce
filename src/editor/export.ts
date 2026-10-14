@@ -110,11 +110,7 @@ function baseName(app: App): string {
   // 五线谱/混排档不重排简谱那侧（在这两档里打开的文档，简谱排版器还停在上一份），标题取混排排版器的
   const mixedTitle = app.mode === "mixed" ? app.mixedPainter?.title.split("\n")[0] : "";
   if (mixedTitle) return mixedTitle;
-  if (app.adapter.caps.layout === "scoredoc") {
-    const t = app.puScore()?.title.split("\n")[0];
-    if (t) return t;
-  }
-  return app.painter.score.title.split("\n")[0] || t("file.untitled");
+  return app.painter.title.split("\n")[0] || t("file.untitled");
 }
 
 export async function exportCurrentPagePng(app: App): Promise<void> {

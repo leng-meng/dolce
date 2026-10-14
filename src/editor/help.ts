@@ -5,12 +5,10 @@ import type { App } from "./app";
 import { PaintResources, ScorePainter } from "../layout/painter";
 import { JpwFile, LayoutSection } from "../jpword/jpwfile";
 import { jpwToScoreDoc } from "../model/fromjpw";
-import { jianpuInputOfDoc, jianpuInputOfJpw } from "../model/jianpuinput";
 import { parse123 } from "../j123/parse";
-import type { JScore } from "../layout/input";
+import type { ScoreDoc } from "../model/doc";
 import type { StyleSheet } from "../style/sheet";
 import { THEMES, computeStyleForPaper, themeOfMode } from "../style/themes";
-import { PlayItem } from "../score/playorder";
 import type { MetaData } from "../smufl/smufl";
 import { isTauriRuntime } from "./fileio";
 import { FEEDBACK_EMAIL, openFeedbackMail } from "./feedback";
@@ -48,28 +46,25 @@ export function renderExampleSvg(meta: MetaData, jpwabc: string, opts: ExampleOp
     return null;
   }
   if (!f) return null;
-  let score;
+  let doc;
   try {
-    score = jianpuInputOfJpw(jpwToScoreDoc(f));
+    doc = jpwToScoreDoc(f);
   } catch {
     return null;
   }
-  if (!score) return null;
-  return renderExampleScore(meta, score, f.getSection(LayoutSection)?.desc ?? null, opts);
+  return renderExampleScore(meta, doc, f.getSection(LayoutSection)?.desc ?? null, opts);
 }
 
-/** 同上，源码是 123：`parse123` → `jianpuInputOfDoc`（与编辑器里 123 的原样档同一条投影）。有 error 诊断即不画。 */
+/** 同上，源码是 123（与编辑器里 123 的原样档同一条路）。有 error 诊断即不画。 */
 export function render123ExampleSvg(meta: MetaData, text: string, opts: ExampleOpts = {}): SVGSVGElement | null {
-  let score;
+  let doc;
   try {
-    const doc = parse123(text);
+    doc = parse123(text);
     if (doc.diagnostics.some((d) => d.severity === "error")) return null;
-    score = jianpuInputOfDoc(doc);
   } catch {
     return null;
   }
-  if (!score) return null;
-  return renderExampleScore(meta, score, null, opts);
+  return renderExampleScore(meta, doc, null, opts);
 }
 
 interface ExampleOpts { width?: number; height?: number; titlePage?: boolean }
@@ -81,31 +76,21 @@ function exampleStyleSheet(): StyleSheet {
   return (exampleStyle ??= computeStyleForPaper([THEMES[themeOfMode("original")]], { mode: "original", engine: "jianpu" }));
 }
 
-/** 一次性 painter 排一份引擎输入、取第一页（不碰实时谱面，共用 App 的 SMuFL 元数据）。 */
+/** 一次性 painter 排一份文档、取第一页（不碰实时谱面，共用 App 的 SMuFL 元数据）。 */
 function renderExampleScore(
   meta: MetaData,
-  score: JScore,
+  doc: ScoreDoc,
   breakDesc: string | null,
   opts: ExampleOpts,
 ): SVGSVGElement | null {
   // 纸宽约等于卡片宽（1:1 显示）：长示例在纸上折行，而不是排成一长条再整体缩小
   const width = opts.width ?? 760;
   const height = opts.height ?? 540;
-  // Lyric-less snippets get pass=0 → empty playData → blank layout. Synthesize
-  // a single play pass over all measures so examples without lyrics still render.
-  if (score.playData.measures.length === 0 && score.parts[0]) {
-    const pi = new PlayItem();
-    pi.pass = 1;
-    pi.mid = 0;
-    pi.end = score.parts[0].measures.length;
-    score.playData.measures.push(pi);
-    score.playData.isSimpple = true;
-  }
   const p = new ScorePainter(PaintResources.fixed(meta));
   try {
     p.loadSync({
       view: "original",
-      score,
+      doc,
       breakDesc,
       style: exampleStyleSheet(),
       // 示例画在压暗的米白纸上（styles.css 的 --help-paper），墨色也从纯黑收一档，

@@ -7,10 +7,8 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { sniffDialect, type Dialect } from "../pu";
 import type { ElementId, ScoreDoc } from "../model/doc";
 import { applyBreaks } from "../model/breaks";
-import type { JScore } from "../layout/input";
-import { clearBreaks } from "../layout/input";
 import { JpwFile, LayoutSection } from "../jpword/jpwfile";
-import { measureJianpu, PaintResources, ScorePainter, type JianpuPaintRequest, type SyncPaintRequest } from "../layout/painter";
+import { measureDocument, PaintResources, ScorePainter, type SyncPaintRequest } from "../layout/painter";
 import { toPt } from "../layout/result";
 import { computeStyle, sanitizeLayer, upsertRule, type StyleRule } from "../style/cascade";
 import type { Length } from "../style/units";
@@ -21,14 +19,15 @@ import { headerFontsOf, headerLayerOfSong, type HeaderFonts, type HeaderRole } f
 import { dirOf, editorRules, findBookSheet, registerFontFaces, relativePath, type BookSheet, type BookSheetMap } from "./booksheet";
 import { replaceStyleRef } from "../j123/metaedit";
 import type { PageDecl } from "../style/sheet";
-import { isLongImage, jianpuSizes } from "../style/jianpu";
+import { jianpuSizes } from "../style/jianpu";
 import type { DeepPartial, StyleSheet } from "../style/sheet";
 import { LONG_IMAGE_WIDTH, PAGE_RATIOS, STAFF_LONG_IMAGE_WIDTH, STAFF_PAPER_DEFAULT, THEMES, computeStyleForPaper, isPaper, themeOfMode } from "../style/themes";
 import { JpNumber, Lyric as LayoutLyric, TextFrame, type PageItem } from "../layout/pageitem";
 import { colorToCss } from "../common/geom";
 import { MetaData } from "../smufl/smufl";
-import { jianpuInputOfDoc, jianpuInputOfJpw } from "../model/jianpuinput";
 import type { FitMeasure } from "../pu/phrase";
+import { docView } from "../pu/slots";
+import { voiceNumbers } from "../pu/ast";
 import type { JpwMeta, JpwRange } from "../omrkit/types";
 import { loadConverter, type HanDirection } from "../common/hanconv";
 import { convertScoreDoc, convertSourceText, detectHanDirection } from "../model/hanconv";
@@ -76,16 +75,6 @@ export type ViewMode = JianpuLayoutMode | "staff" | "mixed";
 
 /** 文本谱的扩展名。`.txt` 太泛，靠 sniffDialect 兜底，认不出就不动。 */
 
-/** 开发开关（简谱合并成一个引擎期间，见 docs/架构.md §6.2）：原样档的单声部 123 / ABC 与 `.jpwabc` 也交给原样文档引擎排，
- *  供横向排法与旧引擎逐音比对（`dev/scripts/xpos-compare.mjs`）。不进界面、不进设置；切路由之后删掉。 */
-function oneEngineDev(): boolean {
-  try {
-    return localStorage.getItem("dolce-dev-one-engine") === "1";
-  } catch {
-    return false;
-  }
-}
-
 export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost, FileSwitchHost, VisualHost {
   /** 预览排版器（唯一的 `ScorePainter`）：简谱原样 / 展开档、原样文档（文本谱与多声部）、五线谱 / 混排档
    *  都由它排、铺页、高亮。 */
@@ -109,19 +98,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   private _puDialect: Dialect | null = null;
   /** 上次解析结果的缓存（同一份文本不重复解析）。文本谱的乐句重排也读它（原文区间在模型上，`pu/relayout.ts`）。 */
   private _scoreDoc: { text: string; doc: ScoreDoc } | null = null;
-  /** 上次投影出的引擎输入（展开档谱面、导出 PPTX 共用）。 */
-  private _puScoreCache: {
-    text: string;
-    /** 投影出这份输入的模型（排版器、同步索引认的是它的排版行视图） */
-    doc: ScoreDoc;
-    /** 展开档那一份调过声部顺序与段号（`JianpuInputOptions.forExpanded`），与原样档那份不通用 */
-    forExpanded: boolean;
-    /** 「简谱旋律取自」第几个声部（MusicXML 投影前挪到最前的那个） */
-    melody: number;
-    /** 「歌词来源」（null = 跟旋律） */
-    lyric: number | null;
-    score: JScore | null;
-  } | null = null;
   private _highlightCompartment = new Compartment();
 
   // ---- 双向定位（代码区光标 ↔ 谱面元素，见 editor/sync.ts）----
@@ -518,11 +494,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return paper;
   }
 
-  /** 原样档当前是不是长图那一档。 */
-  get jpLongImage(): boolean {
-    return isLongImage(this.styleOf("original"));
-  }
-
   /** 原样档换纸（「长图」也是其中一档）。 */
   setJpPaper(paper: string): void {
     this.applyRenderSettings({ jpPaper: paper });
@@ -573,18 +544,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     this.meta = meta;
     this.painter = new ScorePainter(PaintResources.fixed(meta));
     this.scorePane = scorePane;
-  }
-
-  /** 按当前档与设置组一份简谱引擎的排版请求（预览与 `jianpuLineStarts` 共用）。
-   *  展开档取展开档样式里的投影片尺寸，原样档取 `layoutPage` 那张纸。 */
-  private _jianpuRequest(score: JScore, breakDesc: string | null): JianpuPaintRequest {
-    if (this.layoutMode === "expanded") return { view: "expanded", score, breakDesc, style: this.styleOf("expanded") };
-    return { view: "original", score, breakDesc, style: this.styleOf("original"), page: this.layoutPage };
-  }
-
-  /** 把一份引擎输入交给排版器排版（资源在构造时已就绪，同步提交）。 */
-  private _layoutScore(score: JScore, breakDesc: string | null, p = this.painter): void {
-    p.loadSync(this._jianpuRequest(score, breakDesc));
   }
 
   /** 简谱版面切换（原版 / PPT）。展开档 = 2026-08 排版重构之前的笔画观感，
@@ -854,24 +813,26 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
   /** 简谱视图此刻会排出的各行首音（和弦 id），五线谱自动铺排拿它当优选断点（`xmlproject.ts::applyLineStarts`）。
    *  另造一个排版器按当前档与纸排一遍，不动屏幕上那个（混排档里屏幕上那个可能还是旧文本排的）。
-   *  走原样文档布局的（文本谱原样档、多声部）返回 null：那一路一行就是 `ScoreDoc` 里的一行，不用另给。 */
+   *  文本谱、MusicXML 与多声部的原样档返回 null：那一路一行就是 `ScoreDoc` 里的一行，不用另给。 */
   jianpuLineStarts(): ReadonlySet<number> | null {
-    let score: JScore | null = null;
-    let breakDesc: string | null = null;
     try {
+      let req: SyncPaintRequest | null;
       if (this.adapter.caps.layout === "jpwabc") {
         const f = JpwFile.fromString(this.getText());
         const doc = this.jpwDoc;
         if (!f || !doc) return null;
-        score = jianpuInputOfJpw(doc);
-        breakDesc = f.getSection(LayoutSection)?.desc ?? null;
-      } else if (this.layoutMode === "expanded" || this._originalOnJianpu()) {
-        score = this.puScore();
+        req = { view: this.layoutMode, doc, style: this.styleOf(this.layoutMode), breakDesc: f.getSection(LayoutSection)?.desc ?? null };
+      } else if (this.layoutMode === "expanded") {
+        req = this.expandedRequest();
+      } else {
+        const doc = this.currentScoreDoc();
+        if (!doc || this.docFormat === "pu" || this.docFormat === "musicxml" || !singleVoice(doc)) return null;
+        req = { view: "original", doc, style: this.styleOf("original") };
       }
-      if (!score) return null;
+      if (!req) return null;
       // 另一个排版器实例按当前档与纸排一遍，不动屏幕上那个
       const p = new ScorePainter(this.painter.resources);
-      this._layoutScore(score, breakDesc, p);
+      p.loadSync(req);
       return new Set(p.result?.jianpuLineStarts ?? []);
     } catch (e) {
       console.warn("量简谱断行失败，按源文换行", e);
@@ -915,24 +876,21 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     }
     if (!f) return false;
     let doc: ScoreDoc;
-    let score: JScore | null;
     try {
       doc = jpwToScoreDoc(f);
-      score = jianpuInputOfJpw(doc);
     } catch (e) {
       console.error("import failed", e);
       this._jpwDoc = null;
       return false;
     }
     this._jpwDoc = doc;
-    if (!score) return false;
+    if (!doc.songs[0]?.parts[0]) return false;
     this._syncPhraseBase(text);
 
     const breakDesc = f.getSection(LayoutSection)?.desc ?? null;
     this._breakDesc = breakDesc; // 导出 PPTX 时另排一遍要用同一份分页描述
     try {
-      if (oneEngineDev()) this.painter.loadSync({ view: this.layoutMode, doc, style: this.styleOf(this.layoutMode), breakDesc });
-      else this._layoutScore(score, breakDesc);
+      this.painter.loadSync({ view: this.layoutMode, doc, style: this.styleOf(this.layoutMode), breakDesc });
     } catch (e) {
       console.error("layout failed", e);
       return false;
@@ -946,8 +904,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
 
   /** `scoredoc` 那一路（文本谱、123、ABC、jcx、jianpu-ly、MusicXML）的重排：解析 → 闸门 → 排版 → 报诊断。
-   *  各格式的差异在适配器的 `reloadSpec`（`formats.ts`）。原样档看 `caps.originalLayout` 选布局，
-   *  展开档投影成简谱引擎输入、与 `.jpwabc` 同一个排版器。 */
+   *  各格式的差异在适配器的 `reloadSpec`（`formats.ts`），排版都交给同一个简谱引擎。 */
   private _reloadScoreDoc(adapter: ScoreDocAdapter, text: string): boolean {
     const spec = adapter.reloadSpec;
     const what = spec.what();
@@ -969,7 +926,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
       return false;
     }
     this._scoreDoc = { text, doc };
-    this._puScoreCache = null; // 文本变了，引擎输入要重建
     this._syncPhraseBase(text);
     // 只有文本谱的解析带方言（代码区标签要它），别的格式归 null
     this._puDialect = (doc.puDialect ?? (adapter.id === "pu" ? "tomato" : null)) as Dialect | null;
@@ -980,51 +936,31 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return true;
   }
 
-  /** 展开档的排版请求（导出 PPTX 在别的档另排一份用，`export.ts::pptxPainter`）：开发开关下交给原样文档引擎，否则投影成简谱引擎输入。
-   *  没有曲行时返回 null。 */
+  /** 展开档的排版请求（导出 PPTX 在别的档另排一份用，`export.ts::pptxPainter`）。没有曲行时返回 null。 */
   expandedRequest(): SyncPaintRequest | null {
     const style = this.styleOf("expanded");
-    if (oneEngineDev()) {
-      const src = this.docFormat === "jpwabc" ? this._jpwDoc : this.currentScoreDoc();
-      if (!src) return null;
-      const breakDesc = this.adapter.caps.layout === "scoredoc" ? null : this._breakDesc;
-      return { view: "expanded", doc: this.docFormat === "jpwabc" ? src : this._expandedDoc(src), style, breakDesc };
-    }
-    const score = this.adapter.caps.layout === "scoredoc" ? this.puScore(true) : this.painter.score;
-    if (!score) return null;
-    return { view: "expanded", score, breakDesc: this.adapter.caps.layout === "scoredoc" ? null : this._breakDesc, style };
+    const src = this.docFormat === "jpwabc" ? this._jpwDoc : this.currentScoreDoc();
+    if (!src || !hasLines(src)) return null;
+    if (this.docFormat === "jpwabc") return { view: "expanded", doc: src, style, breakDesc: this._breakDesc };
+    return { view: "expanded", doc: this._expandedDoc(src), style };
   }
 
-  /** 展开档交给原样文档引擎的那份文档：MusicXML 按声部面板换旋律声部与歌词来源（同 `puScore`，元素 id 不变）。 */
+  /** 展开档排的那份文档：MusicXML 按声部面板换旋律声部与歌词来源（元素 id 不变）。 */
   private _expandedDoc(doc: ScoreDoc): ScoreDoc {
     if (this.docFormat !== "musicxml") return doc;
     const lyr = this.lyricPart !== null ? withLyricsFrom(doc, this.lyricPart, this.melodyPart) : doc;
     return withMelodyFirst(lyr, this.melodyPart);
   }
 
-  /** 原样档这一份 `ScoreDoc` 走不走简谱引擎布局：格式说走（`caps.originalLayout`），
-   *  且投影出来只有一条旋律——引擎只排 `parts[0]`，多声部的曲子仍回落原样文档布局。 */
-  private _originalOnJianpu(): boolean {
-    if (this.adapter.caps.originalLayout !== "jianpu" || this.layoutMode !== "original" || oneEngineDev()) return false;
-    const score = this.puScore(false);
-    return score !== null && score.parts.length === 1;
-  }
-
-  /** 经 `ScoreDoc` 排版并铺页（文本谱、123、ABC 共用）：
-   *  展开档先投影成简谱引擎输入、与 `.jpwabc` 同一个排版器；原样档 123/ABC 的单声部曲子同样投影后
-   *  交给引擎（与 `.jpwabc` 原样档同一套），文本谱与多声部走原样文档布局（印刷原版的观感）。都由同一个 `ScorePainter` 排。 */
+  /** 经 `ScoreDoc` 排版并铺页（文本谱、123、ABC、jcx、jianpu-ly、MusicXML 共用，同一个简谱引擎）。 */
   private _layoutScoreDoc(doc: ScoreDoc, what: string): boolean {
     try {
-      if (this.layoutMode === "expanded" && oneEngineDev()) {
-        this.painter.loadSync({ view: "expanded", doc: this._expandedDoc(doc), style: this.styleOf("expanded") });
-      } else if (this.layoutMode === "expanded" || this._originalOnJianpu()) {
-        // 同一份文本只投影一次（puScore 有缓存）；点选与高亮按元素 id 认
-        const score = this.puScore();
-        if (!score) {
+      if (this.layoutMode === "expanded") {
+        if (!hasLines(doc)) {
           this.setStatus(t("status.noLines", { what }));
           return false;
         }
-        this._layoutScore(score, null);
+        this.painter.loadSync({ view: "expanded", doc: this._expandedDoc(doc), style: this.styleOf("expanded") });
       } else {
         this.painter.loadSync({ view: "original", doc, style: this.styleOf("original") });
       }
@@ -1547,30 +1483,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   }
 
 
-  /** 当前文档投影出的引擎输入（展开档谱面与导出 PPTX 共用）。
-   *  `forExpanded`：展开档那一份（带歌词的声部换到最前、同号歌词顺延，见 `JianpuInputOptions.forExpanded`）。 */
-  puScore(forExpanded = this.layoutMode === "expanded"): JScore | null {
-    if (this.adapter.caps.layout !== "scoredoc") return null;
-    const text = this.getText();
-    const doc = this.currentScoreDoc();
-    if (!doc) return null;
-    const c = this._puScoreCache;
-    if (c && c.text === text && c.doc === doc && c.forExpanded === forExpanded && c.melody === this.melodyPart && c.lyric === this.lyricPart) return c.score;
-    let score: JScore | null;
-    try {
-      // MusicXML 的简谱只排第一声部：声部面板选了别的声部当简谱旋律，就把它挪到最前再投影（元素 id 不变）；
-      // 歌词来源选了别的声部，先把那个声部的词按时刻换到旋律声部上
-      const lyr = this.docFormat === "musicxml" && this.lyricPart !== null ? withLyricsFrom(doc, this.lyricPart, this.melodyPart) : doc;
-      const src = this.docFormat === "musicxml" ? withMelodyFirst(lyr, this.melodyPart) : doc;
-      score = jianpuInputOfDoc(src, { forExpanded });
-    } catch (e) {
-      console.error("投影引擎输入失败", e);
-      return null;
-    }
-    this._puScoreCache = { text, doc, score, forExpanded, melody: this.melodyPart, lyric: this.lyricPart };
-    return score;
-  }
-
   /** 当前文本谱的排版器（播放高亮 / 导出用）。 */
   /** 见 `_breakDesc`。 */
   get breakDesc(): string | null {
@@ -1595,7 +1507,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
 
   /** FormatHost：谱面排版器认得的标题。 */
   get painterTitle(): string {
-    return this.painter.score.title;
+    return this.painter.title;
   }
 
   /** 切换编辑的源格式：换高亮、清掉另一路的状态。 */
@@ -1612,7 +1524,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     } else {
       this._puDialect = null;
       this._scoreDoc = null;
-      this._puScoreCache = null;
       }
     // 没有代码区的格式（`.musicxml`）把代码区收起来
     document.getElementById("body")?.classList.toggle("no-code", !this.adapter.caps.textEditor);
@@ -1985,7 +1896,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
       this.lyricPart = j >= 0 ? j : null;
     }
     this.playback.remapParts(map);
-    this._puScoreCache = null;
     this.reloadNow();
     if (this.mode === "mixed") void this._renderMixedPages();
   }
@@ -1999,7 +1909,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   setLyricPart(i: number | null): void {
     if (this.lyricPart === i) return;
     this.lyricPart = i;
-    this._puScoreCache = null;
     this.reloadNow();
   }
 
@@ -2007,7 +1916,6 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   setMelodyPart(i: number): void {
     if (this.melodyPart === i) return;
     this.melodyPart = i;
-    this._puScoreCache = null;
     this.reloadNow();
     if (this.mode === "mixed") void this._renderMixedPages();
   }
@@ -2354,27 +2262,20 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   }
 
   /**
-   * 文本谱的行长尺子。
+   * 乐句重排的行长尺子：按当前档的纸、字号与样式量自然宽（`painter.ts::measureDocument`，与真正排版同一个引擎）。
    *
-   * **只有展开档有**：那一档两种格式同走 `ScorePainter` 展开档，量宽（`measureJianpu`）与真正排版的
-   * 是同一套坐标。原样档走的是原样文档布局——字号与纸张另算、量宽还没接（简谱合并子计划 7），拿简谱那把尺子
-   * 去量会以为「两句并一行还宽绰」，排出来却要硬折（73《我主耶稣是生命源》一行 8 小节）。
-   * 没有尺子时 `phrase.ts` 按出厂的小节数目标断，也就是一句一行——印刷原版要的正是这个。
+   * 文本谱、多声部的原样档不给尺子：没有尺子时 `phrase.ts` 按出厂的小节数目标断，也就是一句一行——印刷原版要的正是这个
+   * （拿尺子量会以为「两句并一行还宽绰」，73《我主耶稣是生命源》一行排了 8 小节）。
    */
   private _puPhraseMeasure(): FitMeasure | null {
-    // 123/ABC 原样档走引擎时（`_originalOnJianpu`）量它自己那张纸、那个字号，与 `.jpwabc` 原样档同口径
-    if (this._originalOnJianpu()) return (score) => this._fitOf(score, this.layoutPage.w, this.fontSize);
-    if (this.layoutMode !== "expanded") return null;
-    // 量的是断行模块自己投影的那份输入，所以给的是函数不是结果。
-    return (score) => this._fitOf(score, this.pageW, jianpuSizes(this.styleOf("expanded")).fontSize);
-  }
-
-  /** 乐句重排的行长度量：按实际纸宽与字号量出每小节自然宽度（`phrase.ts::targetMeasForFit`）。
-   *  另起一个 painter 来量，且要 `lyricStack > 0`：展开档会按反复与多段各排一遍，按小节取跨度就成了整首。 */
-  private _fitOf(score: JScore, width: number, fontSize: number): ReturnType<FitMeasure> {
-    clearBreaks(score);
-    // lyricStack 只要 > 0：不展开反复，一遍就够量
-    return measureJianpu(score, width, { style: null, fontSize, lyricStack: fontSize }, { smuflMeta: this.meta });
+    const view = this.layoutMode;
+    if (view === "original") {
+      const doc = this.currentScoreDoc();
+      if (this.docFormat === "pu" || !doc || !singleVoice(doc)) return null;
+    }
+    const sheet = this.styleOf(view);
+    const width = this.layoutPage.w;
+    return (doc, song) => measureDocument(doc, sheet, width, view === "expanded", song);
   }
 
   /** 注册工具栏「简繁」按钮，供转换期间切换加载中状态。 */
@@ -2883,4 +2784,15 @@ function mapMeta(meta: JpwMeta, ch: { mapPos(pos: number, assoc?: number): numbe
     titleRange: meta.titleRange ? mr(meta.titleRange) : undefined,
     authorRanges: meta.authorRanges.map((a) => ({ text: a.text, range: mr(a.range) })),
   };
+}
+
+/** 这份文档有没有可排的曲行（首曲至少一行）。 */
+function hasLines(doc: ScoreDoc): boolean {
+  return docView(doc).songs[0]?.pages.some((p) => p.groups.length > 0) ?? false;
+}
+
+/** 首曲只有一条旋律（单声部）。 */
+function singleVoice(doc: ScoreDoc): boolean {
+  const song = docView(doc).songs[0];
+  return song !== undefined && voiceNumbers(song).length === 1;
 }
