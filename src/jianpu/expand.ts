@@ -31,6 +31,8 @@ export interface MeasureCut {
   limit: number;
   /** 整首最后一小节 */
   final: boolean;
+  /** 接在前一小节同一行、不在它前面换行（`PlayItem.glueFrom`） */
+  glue?: boolean;
 }
 
 export interface PlaySink {
@@ -63,6 +65,7 @@ export function walkPlay(items: readonly PlayItem[], sink: PlaySink): void {
         skip: mid === it.mid ? it.skip : 0,
         limit: mid === it.end - 1 ? it.limit : -1,
         final: mid === it.end - 1 && idx === items.length - 1,
+        ...(it.glueFrom >= 0 && mid >= it.glueFrom ? { glue: true } : {}),
       });
     }
     if (it.endOfPass) {
