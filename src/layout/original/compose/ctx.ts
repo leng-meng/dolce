@@ -8,6 +8,7 @@ import { fillRect, strokePath, textItem } from "../../../engrave/prims";
 import type { Region } from "../../../style/ss";
 import type { DocView } from "../../../pu/slots";
 import type { PlacedScore, PlacedText } from "../place/model";
+import type { PlacedHeader } from "../place/header";
 import type { MusicElement } from "../../../pu/ast";
 
 /** 一次原样文档排版的上下文（原 PuPainter 的实例状态）。墨色也在这里：
@@ -27,6 +28,8 @@ export interface OriginalCtx {
   /** 墨色（`style.page.color`）。歌词同色。 */
   ink: number;
   lyricInk: number;
+  /** 各首的页眉定位（place/header.ts::placeHeader；`compose/index.ts` 排版前填） */
+  heads?: readonly PlacedHeader[];
   /** 页脚模板（样式表的 `song-foot` 区域；没有就不印） */
   foot: Region | null;
 }

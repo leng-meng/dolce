@@ -31,7 +31,8 @@ import { reflowLineStarts } from "../place/reflow";
 import type { OriginalCtx } from "./ctx";
 import { paintPage, systemLeft } from "./page";
 import { footerSpan, layoutFooters } from "./footer";
-import { headerBottom } from "./header";
+import { headerMeasurer } from "./header";
+import { placeHeader } from "../place/header";
 
 /** 原样文档排版的外部配置：尺子（`style/jianpu.ts::jianpuStyleOf`，与简谱引擎同一份）、纸、页脚模板。 */
 export interface OriginalDocumentConfig {
@@ -81,7 +82,9 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     lyricInk: style.page.color,
     foot: cfg.foot,
   };
-  const headerBottoms = doc.songs.map((song) => headerBottom(c, song.metadata));
+  const headMeasure = headerMeasurer(m);
+  c.heads = doc.songs.map((song) => placeHeader(song.metadata, m, headMeasure));
+  const headerBottoms = c.heads.map((h) => h.bottom);
   // 量具注入给排版（它不碰字体）。歌词量的是**画出来的**那串：与 paintSyllables 同一串挤压后的笔位，
   // 首尾留白的口径同简谱引擎的 `Lyric.headBlank / tailBlank`（横向避让的判据从那边整段搬来，见 place/spacing.ts）
   const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
