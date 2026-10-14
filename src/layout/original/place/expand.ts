@@ -218,6 +218,8 @@ export function jpwOriginalView(view: DocView): DocView {
   };
 }
 
+const hasText = (l: LyricLine | undefined): boolean => !!l && l.syllables.some((x) => x.text.length > 0);
+
 /** 一遍里的符号区间 [a, b) 拼成一行行视图：记号截到行内（跨行的标续接），歌词只挂这一遍的那一行 */
 function rowOf(
   pass: Pass, a: number, b: number, rows: readonly RowView[], lyricsOf: readonly (readonly LyricLine[])[],
@@ -280,8 +282,12 @@ function rowOf(
     const el = rows[s.row]!.elements[s.idx]!;
     if (!takesLyric(el)) continue;
     const v = pass.verses[i]!;
-    const line = lyricsOf[s.row]!.find((l) => l.verseFrom <= v && v <= l.verseTo);
-    const syl = line?.syllables[cursorOf[s.row]![s.idx]!];
+    const k = cursorOf[s.row]![s.idx]!;
+    const own = lyricsOf[s.row]!.find((l) => l.verseFrom <= v && v <= l.verseTo);
+    // 这一遍在这一行一个字都没写（副歌只在第 1 段写了，190《凡愿意者可来》、395《十架归路》）：整行借最前面写了词的那一段。
+    // 按整行判，段内用 `/` 留空的拖腔格不借
+    const line = hasText(own) ? own : lyricsOf[s.row]!.find(hasText) ?? own;
+    const syl = line?.syllables[k];
     if (syl && syl.text) any = true;
     syllables.push(syl ? bareSyllable(syl, owners) : { text: "", source: first.source });
   }
@@ -423,7 +429,25 @@ function passesByDur(
   };
   let total = new Fraction(0);
   for (const sl of slices) for (const s of sl) total = total.plus(dur(s));
-  const info = durationInfo(desc, total, simple ? plan.length : null);
+  const info0 = durationInfo(desc, total, simple ? plan.length : null);
+  // 时值断点之后一拍以内就是源里的换行（`$`）的，断在源换行上：JP-Word 记的时值常比源换行早半拍到一拍
+  //（048《创造奇功》31 对 32、156《一百只羊有九十九》11 对 12、32.5 对 33），照记的断会把行末那个音挤到下一行行首
+  const srcBreaks: Fraction[] = [];
+  {
+    let t = new Fraction(0);
+    all.slots.forEach((s, i) => {
+      if (i > 0 && s.row !== all.slots[i - 1]!.row) srcBreaks.push(t);
+      t = t.plus(dur(s));
+    });
+  }
+  const one = new Fraction(1);
+  const info = new Map<string, number>();
+  for (const [k, v] of info0) {
+    const at = Fraction.fromString(k);
+    const snap = srcBreaks.find((b) => b.compareTo(at) > 0 && b.minus(at).compareTo(one) <= 0);
+    const key = (snap ?? at).toString();
+    info.set(key, Math.max(info.get(key) ?? 0, v));
+  }
   const out: Pass = { slots: [], verses: [], breaks: new Map() };
   let tick = new Fraction(0);
   let lineBeg = 0;

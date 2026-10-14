@@ -82,7 +82,8 @@ const PRINT_JIANPU: Record<string, Length | boolean> = {
   "slur-min-arc": "0.28em",
   "hairpin-width": "0.05em",
   "repeat-dot-diameter": "0.16em",
-  "time-sig-rule": "0.025em",
+  // 拍号分数线与小节线同粗（原 0.025em，字号 12 时只有 0.3pt，看着太细；2026-10-14 用户定加粗）
+  "time-sig-rule": `${1 / 14}em`,
   "slur-gap": "0.15em",
   "lyric-stack": "1.25em",
   // 和弦基线离音符墨迹顶留一道空（0 = 贴着数字）。0.25em 时和弦贴得太近（用户定调大，2026-10-14）
