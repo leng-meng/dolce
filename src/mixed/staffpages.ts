@@ -223,6 +223,8 @@ function drawFrames(
       : 20;
 
     const maxCreditSize = Math.max(0, ...data.credits.map((c) => c.fontSize));
+    /** 本页画出的页眉各行：落笔点与墨迹顶（排完整块不得高过上边距） */
+    const headLines: { tf: TextFrame; x: number; y: number; inkTop: number }[] = [];
     for (const cr of data.credits) {
       // 页眉字体（设置面板「页眉」一组 / 谱里 credit 自带的，`style/header.ts`）：给了的盖过 credit 自己的
       const justify = cr.justify === LCR.Right ? "right" : cr.justify === LCR.Center ? "center" : "left";
@@ -233,11 +235,18 @@ function drawFrames(
       const font = headerRoleFont(hf, fntSz, base);
       const anchorX = cr.x > 0 ? cr.x : pageWidthTenths / 2;
       // MusicXML y from page bottom → SVG top-down；Sibelius bug 时改以页首为锚。
-      const baseY = reanchorTop
-        ? topMargin + titleFontSz + (creditMaxY - cr.y)
-        : pageHeight - cr.y;
       const lineH = fntSz * 1.2;
       const lines = cr.text.split(/\r?\n/);
+      // `valign`：`default-y` 是字顶 / 中线 / 底时换成首行基线（缺省就是基线）。陶我成器的标题是 top，当基线用就伸出上边距
+      const first = font.charBound(lines[0] ?? "");
+      const last = font.charBound(lines[lines.length - 1] ?? "");
+      const vshift = cr.valign === "top" ? -first.top
+        : cr.valign === "middle" ? -(first.top + last.bottom + (lines.length - 1) * lineH) / 2
+        : cr.valign === "bottom" ? -last.bottom - (lines.length - 1) * lineH
+        : 0;
+      const baseY = (reanchorTop
+        ? topMargin + titleFontSz + (creditMaxY - cr.y)
+        : pageHeight - cr.y) + vshift;
       // 右对齐的多行 credit：Sibelius 把整块按最宽行右对齐，块内各行左缘对齐
       //（参考 PDF 里"词曲…/翻译…"两行 xMin 相同、右缘不同），而非逐行各自右对齐。
       const blockW = cr.justify === LCR.Right
@@ -256,7 +265,17 @@ function drawFrames(
         m.setAffine([1, 0, 0, 1, x, baseY + li * lineH]);
         tf.matrix = m;
         pg.add(tf);
+        headLines.push({ tf, x, y: baseY + li * lineH, inkTop: font.charBound(line).top });
       });
+    }
+    // 页眉整块不得高过上边距：有一行伸出去就整块往下挪
+    const over = topMargin - Math.min(Infinity, ...headLines.map((h) => h.y + h.inkTop));
+    if (over > 0) {
+      for (const h of headLines) {
+        const m = new Matrix33();
+        m.setAffine([1, 0, 0, 1, h.x, h.y + over]);
+        h.tf.matrix = m;
+      }
     }
 
     // System group positioned at (leftMargin+sys.leftMargin, topMargin+ypos+topY+musicYOffset)

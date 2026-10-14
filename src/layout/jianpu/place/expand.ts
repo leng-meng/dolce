@@ -60,6 +60,8 @@ interface Pass {
   slots: Slot[];
   verses: number[];
   breaks: Map<number, boolean>;
+  /** 往回跳（同一段词）处必断的行：落在第几个符号之前 */
+  hard?: Set<number>;
 }
 
 /**
@@ -126,6 +128,9 @@ function passesOf(
     },
     passEnd: () => {
       cur = null;
+    },
+    jumpBack: () => {
+      if (cur) (cur.hard ??= new Set()).add(cur.slots.length);
     },
   });
   return passes;
@@ -240,6 +245,8 @@ function rowOf(
       const repeat = el.type.startsWith("repeat");
       let type = el.type;
       if (bars.plain && !repeat && type !== "invisible") type = "normal";
+      // 终止线只画在整首最后（用户定 2026-10-14）：D.C. 前、曲中 `|]` 唱到半路的都画成细线
+      if (type === "end" && i !== bars.finalAt) type = "normal";
       if (i === bars.finalAt && type === "normal") type = "end";
       if (type !== el.type) el = { ...el, type };
     }
@@ -300,6 +307,8 @@ function rowOf(
 export function fillLines(
   row: ScoreLine, forced: ReadonlyMap<number, boolean>, m: JianpuGrid, ink: InkMeasurer, width: number,
   meter: SongView["metadata"]["meters"][number] | undefined,
+  /** 必断的行（往回跳处）；`skipShort`：源里的换行会留下不到三分之一宽的短行就不照断（跳进源行中间、接着就碰上源换行，094） */
+  opts: { hard?: ReadonlySet<number>; skipShort?: boolean } = {},
 ): Array<{ start: number; page: boolean }> {
   const laid = layoutVoiceLine(row, m, { meter });
   for (const it of laid.items) it.syllables = new Array(row.lyrics.length).fill(null);
@@ -312,6 +321,11 @@ export function fillLines(
     const k = items.findIndex((it) => it.srcIndex >= at);
     if (k > 0) forcedAt.set(k, (forcedAt.get(k) ?? false) || page);
   }
+  const hardAt = new Set<number>();
+  for (const at of opts.hard ?? []) {
+    const k = items.findIndex((it) => it.srcIndex >= at);
+    if (k > 0) hardAt.add(k);
+  }
   const starts: number[] = [0];
   const pageAt = new Set<number>();
   let i = 0;
@@ -319,9 +333,14 @@ export function fillLines(
     const left = nat.leftOf.get(items[i]!) ?? 0;
     let last = i;
     while (last < items.length) {
+      if (last > i && hardAt.has(last)) break;
       if (last > i && forcedAt.has(last)) {
-        if (forcedAt.get(last)) pageAt.add(last);
-        break;
+        const page = forcedAt.get(last)!;
+        const short = (nat.rightOf.get(items[last - 1]!) ?? 0) - left < width / 3;
+        if (page || !opts.skipShort || !short) {
+          if (page) pageAt.add(last);
+          break;
+        }
       }
       const r = nat.rightOf.get(items[last]!) ?? 0;
       if (r - left < width || last === i) {
@@ -349,6 +368,31 @@ export function fillLines(
     if (n === 0 || hasNote) out.push(s);
   });
   return out;
+}
+
+/** 展开档每页最多几行（没有 `.Layout` 时；用户定 2026-10-14） */
+const MAX_ROWS = 4;
+
+/** 把一遍的各行按页分：源里已定的换页之间每段最多 `MAX_ROWS` 行；要断时优先断在副歌起头那行之前（至少留两行），
+ *  没有就按行数均分（5 行分 3 + 2，不分 4 + 1）。就地改 `page`。 */
+function pageByRows(lines: Array<{ start: number; page: boolean }>, refrainAt: (n: number) => boolean): void {
+  let s = 0;
+  while (s < lines.length) {
+    let e = s + 1;
+    while (e < lines.length && !lines[e]!.page) e++;
+    let a = s;
+    while (e - a > MAX_ROWS) {
+      let b = -1;
+      for (let k = Math.min(a + MAX_ROWS, e - 1); k >= a + 2; k--) if (refrainAt(k)) { b = k; break; }
+      if (b < 0) {
+        const pages = Math.ceil((e - a) / MAX_ROWS);
+        b = a + Math.ceil((e - a) / pages);
+      }
+      lines[b]!.page = true;
+      a = b;
+    }
+    s = e;
+  }
 }
 
 /** `.Layout` 的 `BreakPoints = …`：时值串（`|` 分页、`.` 或空格分行，`{x}` 那一段不排），累计时值 → 0 丢弃 / 1 换行 / 2 换页（同 `Layout.parseBreakDur`） */
@@ -517,6 +561,26 @@ export function expandSong(
   }
   const width = contentWidth(m);
   const meter = song.metadata.meters[0];
+  // 副歌起头的小节：标了「副歌」，或这一小节起只剩一行词、前面有字的小节不止一行（250《主，差遣我》）
+  const slotKey = (sl: Slot): string => `${sl.row}:${sl.idx}`;
+  const measureOf = new Map<string, number>();
+  slices.forEach((sl, k) => { for (const x of sl) measureOf.set(slotKey(x), k); });
+  const refrainStart = new Set<number>();
+  {
+    let prevLines = 0;
+    slices.forEach((sl, k) => {
+      const withText = new Set<LyricLine>();
+      let marked = false;
+      for (const x of sl) {
+        const el = rows[x.row]!.elements[x.idx]!;
+        if (el.kind === "note" && el.annotation?.includes("副歌")) marked = true;
+        const c = cursorOf[x.row]![x.idx]!;
+        if (c >= 0) for (const l of lyricsOf[x.row]!) if (l.syllables[c]?.text) withText.add(l);
+      }
+      if (marked || (withText.size === 1 && prevLines > 1)) refrainStart.add(k);
+      if (withText.size > 0) prevLines = withText.size;
+    });
+  }
   const pages: PageView[] = [];
   let system = 0;
   const passes = layout ? passesByDur(slices, rows, plan, layout.desc, layout.simple) : passesOf(slices, rows, plan, breaks);
@@ -535,8 +599,19 @@ export function expandSong(
       if (list) list.push(i);
       else posOf.set(k, [i]);
     });
+    // 副歌起头也换行（短行照样不断），换页才有地方落在副歌前
+    if (!layout) {
+      let prev = -1;
+      pass.slots.forEach((sl, i) => {
+        const k = measureOf.get(slotKey(sl)) ?? -1;
+        if (i > 0 && k !== prev && refrainStart.has(k) && !pass.breaks.has(i)) pass.breaks.set(i, false);
+        prev = k;
+      });
+    }
     const whole = rowOf(pass, 0, pass.slots.length, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners, bars(pass));
-    const lines = fillLines(whole, pass.breaks, m, ink, width, meter);
+    const lines = fillLines(whole, pass.breaks, m, ink, width, meter, { hard: pass.hard, skipShort: !layout });
+    // 没有 `.Layout` 的：一页最多 4 行，优先在副歌起头处换页，否则按行数均分（不留一页一行）
+    if (!layout) pageByRows(lines, (n) => refrainStart.has(measureOf.get(slotKey(pass.slots[lines[n]!.start]!)) ?? -1));
     // 一遍一页起头；遍内源里的换页另起一页
     let groups: SystemView[] = [];
     lines.forEach((l, n) => {

@@ -83,6 +83,8 @@ export class PlayData {
 
 export interface PlayLyric {
   readonly number: number;
+  /** 字面（行首可能带印刷段号「1.2.」，见 `labelPasses`） */
+  readonly text?: string;
 }
 
 export interface PlayNote {
@@ -173,6 +175,7 @@ export function playOrderOf(parts: readonly PlayPart[], jumps: PlayJumps): PlayO
   const isSimple = rep.result.length === 1;
   if (repeatByVerse && !hasVolta && !hasJump) rep.repeatByLyric();
   const out = hasJump ? perVerse(rep.result, rep.getPassCountByLrc(0, measures.length)) : expandVoltaByVerse(parts[0]!, rep.result) ?? rep.result;
+  if (hasJump) labelPasses(parts, out);
   return { measures: out, isSimple, hasRepeat: measures.some((m) => m.repeatBackward) };
 }
 
@@ -262,6 +265,36 @@ function perVerse(items: readonly PlayItem[], verses: number): PlayItem[] {
     });
   }
   return out;
+}
+
+/** 歌词行首印着几个段号（018《伟大的主》副歌第 1 行是「1.2.伟大的主」）：这一行唱那几遍，后面的行依次往后挪
+ *  （第 2 行唱第 3 遍——D.S. 回来那一遍）。按这张表把遍号换成该唱的那一行；没有这种段号时不动。 */
+function labelPasses(parts: readonly PlayPart[], items: PlayItem[]): void {
+  const labels = new Map<number, number[]>();
+  for (const part of parts) {
+    for (const m of part.measures) {
+      for (const ent of m.entries) {
+        if (!isPlayChord(ent)) continue;
+        for (const n of ent.notes) {
+          for (const l of n.lyrics) {
+            if (labels.has(l.number)) continue;
+            const hit = /^\s*(\d+(?:\s*[.,，、]\s*\d+)+)\s*[.,，、]/.exec(l.text ?? "");
+            if (hit) labels.set(l.number, (hit[1]!.match(/\d+/g) ?? []).map(Number));
+          }
+        }
+      }
+    }
+  }
+  if (![...labels.values()].some((ps) => ps.length > 1)) return;
+  const lineOf = new Map<number, number>();
+  let next = 1;
+  const lines = Math.max(0, ...parts.map((p) => verseCount(p, 0, p.measures.length)));
+  for (let line = 1; line <= lines; line++) {
+    const ps = labels.get(line) ?? [next];
+    for (const p of ps) lineOf.set(p, line);
+    next = Math.max(next, ...ps) + 1;
+  }
+  for (const it of items) it.pass = lineOf.get(it.pass) ?? it.pass;
 }
 
 /** 不推、按段数整曲逐遍（没有反复信息时的退路）。`passes` 为 0 时返回空表。 */
@@ -457,6 +490,8 @@ class RepeatProcessor {
     if (seg !== null) {
       let t = this.jumps.segno.get(seg);
       if (t === undefined) t = new TimePosition(parseInt(seg, 10) - 1, new Fraction(0));
+      // 跳回 segno 是新的一遍（同 D.C.）：018《伟大的主》D.S. 回来唱副歌第 2 行
+      m.pass++;
       this.doJump(m, t);
     }
     if (tocoda !== null) {

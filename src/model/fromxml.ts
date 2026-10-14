@@ -197,6 +197,8 @@ function readCredits(root: Element): Credit[] {
     if (just) cr.justify = just;
     const ha = readAlign(first, "halign");
     if (ha) cr.halign = ha;
+    const va = first.getAttribute("valign");
+    if (va === "top" || va === "middle" || va === "bottom" || va === "baseline") cr.valign = va;
     const page = c.getAttribute("page");
     if (page) cr.page = Number(page);
     bindSurface(cr, c);

@@ -3091,6 +3091,8 @@ export interface ScoreCredit {
   /** `<credit-words font-family / font-weight>`；没写就是歌词字体 */
   family?: string;
   bold?: boolean;
+  /** `default-y` 是字顶 / 中线 / 底（缺省是基线） */
+  valign?: "top" | "middle" | "bottom";
 }
 
 export class StaffLayout {

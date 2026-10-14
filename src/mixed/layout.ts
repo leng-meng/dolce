@@ -1352,6 +1352,7 @@ export function layoutStaff(doc: ScoreDoc, options: MixedOptions): StaffLayout {
       fontSize: c.fontSize || 0,
       ...(c.fontFamily ? { family: c.fontFamily } : {}),
       ...(c.fontWeight === "bold" ? { bold: true } : {}),
+      ...(c.valign && c.valign !== "baseline" ? { valign: c.valign } : {}),
     });
   }
   // 题下经文（123/ABC `I:meta scripture`、MusicXML `<miscellaneous-field name="scripture">`）：自动铺排时排在标题下

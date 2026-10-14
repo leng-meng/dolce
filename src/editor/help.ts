@@ -1,6 +1,7 @@
 // 帮助对话框：四个标签页（功能帮助、可视化编辑、记谱法、关于）。只读，外框走 dialogs.ts 的
 // openModal（遮罩、Esc、点遮罩关闭），内容用本文件专属的 .help-* 样式。
 // 功能帮助 = 可展开主题列表（<details>）；记谱法 = 分节说明 + 实时渲染的 SVG 示例。
+import { inkOf } from "../common/measure";
 import type { App } from "./app";
 import { PaintResources, ScorePainter } from "../layout/painter";
 import { JpwFile, LayoutSection } from "../jpword/jpwfile";
@@ -805,10 +806,10 @@ function inkBox(svg: SVGSVGElement, ctx: CanvasRenderingContext2D | null): { x: 
     if (e instanceof SVGTextElement && ctx && e.textContent) {
       const cs = getComputedStyle(e);
       ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-      const m = ctx.measureText(e.textContent);
+      const ink = inkOf(ctx, e.textContent);
       // 文字基线在本地 y = 0（layout/render.ts 一律这么画）
-      top = -m.actualBoundingBoxAscent;
-      bottom = m.actualBoundingBoxDescent;
+      top = ink.top;
+      bottom = ink.bottom;
     }
     if (b.width <= 0 && bottom - top <= 0) continue;
     const ctm = e.getScreenCTM();

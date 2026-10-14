@@ -3,6 +3,8 @@
 // **不重排版**：只在已渲染好的页面上按元素 `<g>` 的包围盒另画一层，高亮沿用 `.cursor-at` 的 CSS 类。
 // 每次重排页面节点全换，叠加层跟着 `VisualEditController.refresh()` 重画。
 
+import { inkOf } from "../../common/measure";
+
 const SVG_NS = "http://www.w3.org/2000/svg";
 const LAYER_CLASS = "vis-overlay";
 
@@ -64,13 +66,13 @@ export function inkBoxInPage(el: SVGGraphicsElement): { svg: SVGSVGElement; box:
     if (e instanceof SVGTextElement && inkCtx && e.textContent) {
       const cs = getComputedStyle(e);
       inkCtx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
-      const m = inkCtx.measureText(e.textContent);
-      top = -m.actualBoundingBoxAscent;
-      bottom = m.actualBoundingBoxDescent;
+      const ink = inkOf(inkCtx, e.textContent);
+      top = ink.top;
+      bottom = ink.bottom;
       // 单个字形（符头、谱号）横向也取墨迹；多字的一串仍按前进宽度（逐字笔位由 `x` 列表给，canvas 量不出来）
       if (e.textContent.length === 1) {
-        left = -m.actualBoundingBoxLeft;
-        right = m.actualBoundingBoxRight;
+        left = ink.left;
+        right = ink.right;
       }
     }
     if (right - left <= 0 && bottom - top <= 0) continue;

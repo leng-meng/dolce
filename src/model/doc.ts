@@ -115,6 +115,8 @@ export interface Credit {
   /** `<credit-words justify>`。与 `halign` 分开存：混排只认 `justify`（语料 5 份只写了 `halign`） */
   justify?: HAlign;
   halign?: HAlign;
+  /** `<credit-words valign>`：`default-y` 是字顶（top）、中线（middle）、底（bottom）还是基线（缺省） */
+  valign?: "top" | "middle" | "bottom" | "baseline";
   page?: number;
 }
 

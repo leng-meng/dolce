@@ -60,6 +60,76 @@ function cssFontShorthand(fontFamily: string, fontSizePx: number, fontWeight: "n
   return `${fontStyle === "italic" ? "italic " : ""}${fontWeight} ${fontSizePx}px ${family}`;
 }
 
+/** 一串字的墨迹盒（相对落笔点，基线 y = 0，向下为正）。`ctx.font` 由调用方设好。 */
+export interface InkBox {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+/**
+ * WebKit（macOS 桌面版的 WKWebView、Safari）的 `measureText` 不给真墨迹：`actualBoundingBoxLeft` 恒 0、`Right` 是前进宽度，
+ * 上下沿截到基线（「-」的下沿报 0 而不是 −0.22 em）——增时线按「-」的墨迹高画就粗了好几倍，数字、标点的横向墨迹也全错。
+ * 首次用到时拿「-」探一下，是这种实现就改成**画到离屏画布上逐像素量**（按字体与字缓存）。Chromium 照用 `measureText`。
+ */
+let inkByPixels: boolean | null = null;
+const pixelInkCache = new Map<string, InkBox>();
+let pixelCanvas: HTMLCanvasElement | null = null;
+
+function needsPixelInk(ctx: CanvasRenderingContext2D): boolean {
+  if (inkByPixels !== null) return inkByPixels;
+  const saved = ctx.font;
+  ctx.font = "100px sans-serif";
+  const m = ctx.measureText("-");
+  ctx.font = saved;
+  inkByPixels = m.actualBoundingBoxDescent >= 0 && m.actualBoundingBoxLeft === 0;
+  return inkByPixels;
+}
+
+/** 量墨迹：`measureText` 可信就用它，否则逐像素（见 `needsPixelInk`）。`ctx.font` 是要量的那种字。 */
+export function inkOf(ctx: CanvasRenderingContext2D, text: string): InkBox {
+  const m = ctx.measureText(text);
+  if (!needsPixelInk(ctx)) {
+    return { left: -m.actualBoundingBoxLeft, right: m.actualBoundingBoxRight, top: -m.actualBoundingBoxAscent, bottom: m.actualBoundingBoxDescent };
+  }
+  const key = `${ctx.font}\x01${text}`;
+  const hit = pixelInkCache.get(key);
+  if (hit) return hit;
+  // 放大到约 200px 画（边缘误差 < 0.5%），量完按比例折回
+  const px = Number(/(\d+(?:\.\d+)?)px/.exec(ctx.font)?.[1] ?? 16);
+  const k = 200 / Math.max(1, px);
+  const pad = 200;
+  const w = Math.ceil(m.width * k) + pad * 2;
+  const h = pad * 3;
+  pixelCanvas ??= document.createElement("canvas");
+  pixelCanvas.width = w;
+  pixelCanvas.height = h;
+  const c = pixelCanvas.getContext("2d", { willReadFrequently: true })!;
+  c.clearRect(0, 0, w, h);
+  c.font = ctx.font.replace(/(\d+(?:\.\d+)?)px/, `${px * k}px`);
+  c.fillStyle = "#000";
+  c.textBaseline = "alphabetic";
+  const ox = pad, oy = pad * 2;
+  c.fillText(text, ox, oy);
+  const data = c.getImageData(0, 0, w, h).data;
+  let x0 = w, x1 = -1, y0 = h, y1 = -1;
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (data[(y * w + x) * 4 + 3]! < 128) continue;
+      if (x < x0) x0 = x;
+      if (x > x1) x1 = x;
+      if (y < y0) y0 = y;
+      if (y > y1) y1 = y;
+    }
+  }
+  const box: InkBox = x1 < 0
+    ? { left: 0, right: 0, top: 0, bottom: 0 }
+    : { left: (x0 - ox) / k, right: (x1 + 1 - ox) / k, top: (y0 - oy) / k, bottom: (y1 + 1 - oy) / k };
+  pixelInkCache.set(key, box);
+  return box;
+}
+
 export function measureGlyphText(
   text: string,
   fontFamily: string,
@@ -113,17 +183,16 @@ export function measureGlyphText(
   if (glyphCtx) {
     glyphCtx.font = cssFontShorthand(fontFamily, fontSizePx, fontWeight, fontStyle);
     const cm = glyphCtx.measureText(text);
+    const ink = inkOf(glyphCtx, text);
     // **整串都是空白时 `getComputedTextLength()` 恒为 0**（浏览器把纯空白的文本节点当空的，
     // 加 `xml:space="preserve"` 也一样）。于是「空格」这个字的 advance 被量成 0，逐字量
     // advance 的那条路（`compressRun`，字体没有 chws 之类特性时走它）就把
     // 「John Laudon 词曲」排成「JohnLaudon词曲」。canvas 的 measureText 对空白是准的，拿它兜底。
     if (/^\s+$/.test(text)) width = cm.width;
-    bboxTop = -(cm.actualBoundingBoxAscent ?? fontSizePx * 0.8);
-    bboxBottom = cm.actualBoundingBoxDescent ?? fontSizePx * 0.2;
-    // actualBoundingBoxLeft is the distance *left* of the origin, so it is
-    // positive when ink overhangs to the left — negate it to get a coordinate.
-    if (cm.actualBoundingBoxLeft !== undefined) inkLeft = -cm.actualBoundingBoxLeft;
-    if (cm.actualBoundingBoxRight !== undefined) inkRight = cm.actualBoundingBoxRight;
+    bboxTop = ink.top;
+    bboxBottom = ink.bottom;
+    inkLeft = ink.left;
+    inkRight = ink.right;
   } else {
     const b = t.getBBox();
     bboxTop = b.y;

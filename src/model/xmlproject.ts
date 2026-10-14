@@ -31,6 +31,7 @@ import { applyPageMetaToDefaults } from "./pagemeta";
 import { decoKey } from "./deconames";
 import { applyBreaks } from "./breaks";
 import { songFifths } from "./keyshift";
+import { distinctNumbers } from "./phrasedoc";
 
 
 /** 记号原名 → `<articulations>` 元素名（`&xx` 与 123 的 `!xx!` 同名）。 */
@@ -1009,7 +1010,9 @@ function directionOf(o: SourceOrnament): Direction | null {
 /** 段号区间（文本谱 `C1-2:`、`.jpwabc` 的 `W1-6:`）展开成逐段的 `<lyric>`；空字不写。副歌行（`refrain`）写一条 chorus。 */
 function lyricsOf(lyrics: readonly Lyric[] | undefined): Lyric[] {
   const out: Lyric[] = [];
-  for (const l of lyrics ?? []) {
+  // 同一个音底下段号重复的（文本谱同一段曲下两行 `C1:`，其实是第 1、2 段）依次挪到下一个空号，
+  // 不挪的话五线谱 / 混排两行词叠在同一高度（文本谱专有.pu 首行）。先挪后丢空字，各音的行号才对得齐
+  for (const l of distinctNumbers(lyrics ?? [])) {
     if (!l.text) continue;
     if (l.refrain || l.numberTo === undefined) {
       out.push(l);

@@ -92,7 +92,7 @@ const OWNS: Readonly<Record<string, { attrs?: readonly string[]; kids?: readonly
   "page-margins": { attrs: ["type"], kids: "*" },
   "lyric-font": { attrs: ["font-family", "font-size", "font-weight", "font-style"] },
   credit: { attrs: ["page"], kids: ["credit-type", "credit-words"] },
-  "credit-words": { attrs: ["default-x", "default-y", "justify", "halign", "font-family", "font-size", "font-weight"] },
+  "credit-words": { attrs: ["default-x", "default-y", "justify", "halign", "valign", "font-family", "font-size", "font-weight"] },
   "part-list": { kids: ["part-group", "score-part"] },
   "part-group": { attrs: ["type", "number"], kids: ["group-symbol", "group-name", "group-abbreviation", "group-barline"] },
   "score-part": { attrs: ["id"], kids: ["part-name", "part-abbreviation"] },
@@ -397,6 +397,7 @@ function writeCredit(o: Out, c: Credit): void {
   if (c.y !== undefined) attrs.push(`default-y="${c.y}"`);
   if (c.justify) attrs.push(`justify="${c.justify}"`);
   if (c.halign) attrs.push(`halign="${c.halign}"`);
+  if (c.valign) attrs.push(`valign="${c.valign}"`);
   if (c.fontFamily !== undefined) attrs.push(`font-family="${escapeAttr(c.fontFamily)}"`);
   if (c.fontSize !== undefined) attrs.push(`font-size="${c.fontSize}"`);
   if (c.fontWeight !== undefined) attrs.push(`font-weight="${escapeAttr(c.fontWeight)}"`);
