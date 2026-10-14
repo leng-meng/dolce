@@ -26,6 +26,7 @@ import { layoutStaff } from "../mixed/layout";
 import { layoutStaffPages, PAGE_HEIGHT_FALLBACK } from "../mixed/staffpages";
 import { isStaffLeaf, STAFF_CHORD, STAFF_SYSTEM, staffLeafKey, type StaffChordData, type StaffLeafData, type StaffSystemData } from "../mixed/prims";
 import { layoutOriginalDocument, type OriginalDocumentLayout } from "./original/compose";
+import { clearSongBreaks } from "../model/breaks";
 import type { PlacedPage } from "./original/place";
 import type { JianpuGrid } from "./original/metrics";
 import { cellOf, ScoreIndex, type Hit } from "./scoreindex";
@@ -82,6 +83,12 @@ export interface DocumentPaintRequest {
   readonly noReflow?: boolean;
   /** 展开档：`.jpwabc` 的 `.Layout` 分页描述（其他格式没有） */
   readonly breakDesc?: string | null;
+  /** 原样档的纸（pt），不给按样式表的纸。`snippet` 时只取宽、高随内容 */
+  readonly page?: { w: number; h: number };
+  /** 只排谱行、不放页眉页脚（帮助页的谱例片段） */
+  readonly snippet?: boolean;
+  /** 覆盖墨色（帮助页的谱例画在压暗的纸上） */
+  readonly ink?: number;
 }
 
 export type PaintRequest = JianpuPaintRequest | DocumentPaintRequest | StaffPaintRequest;
@@ -149,6 +156,24 @@ export function measureJianpu(
   res: PreparedResources,
 ): ReturnType<Layout["measureNatural"]> {
   return jianpuLayoutOf(cfg, res).measureNatural(score, width);
+}
+
+/** 自然量宽（原样文档引擎，乐句重排用）：清掉换行、整首不折，量第一首每个音（键为元素 id）的自然横向区间与版心宽。
+ *  `slide`：按展开档的画法量（数字共基线、增时线「-」字）。不改 `doc`。 */
+export function measureDocument(
+  doc: ScoreDoc, sheet: StyleSheet, width: number, slide = false,
+): { width: number; spans: Map<string | number, { x0: number; x1: number }> } {
+  const clone = structuredClone(doc);
+  for (const song of clone.songs) clearSongBreaks(song);
+  const r = layoutOriginalDocument(clone, {
+    style: jianpuStyleOf(sheet),
+    page: { width, height: width, continuous: true },
+    userMargins: pageMargins(sheet.page) !== undefined,
+    foot: null,
+    measure: true,
+    ...(slide ? { book: true } : {}),
+  });
+  return r.spans ?? { width: 0, spans: new Map() };
 }
 
 // ---------------------------------------------------------------- 排版器
@@ -338,12 +363,16 @@ export class ScorePainter {
     const r = layoutOriginalDocument(req.doc, {
       style: jianpuStyleOf(sheet),
       // 长图：宽与简谱引擎的长图同一张（500 首那张纸的宽），高由内容定
-      page: slide ?? (paper ? { width: paper.w, height: paper.h, continuous: false } : { width: LONG_IMAGE_WIDTH, height: LONG_IMAGE_WIDTH, continuous: true }),
+      page: slide ?? (req.page
+        ? { width: req.page.w, height: req.snippet ? req.page.w : req.page.h, continuous: !!req.snippet }
+        : paper ? { width: paper.w, height: paper.h, continuous: false } : { width: LONG_IMAGE_WIDTH, height: LONG_IMAGE_WIDTH, continuous: true }),
       userMargins: pageMargins(sheet.page) !== undefined,
       foot: (sheet.template?.regions?.["song-foot"] as Region | undefined) ?? null,
       noReflow: req.noReflow,
       expanded: req.view === "expanded",
       breakDesc: req.breakDesc ?? null,
+      ...(req.snippet ? { snippet: true } : {}),
+      ...(req.ink !== undefined ? { ink: req.ink } : {}),
     });
     const result: LayoutResult = {
       title: r.view.songs[0]?.metadata.titles[0] ?? "",
@@ -356,7 +385,7 @@ export class ScorePainter {
       hits: [],
       diagnostics: [],
       staffPlacements: [],
-      jianpuLineStarts: null,
+      jianpuLineStarts: r.lineStarts,
     };
     return () => {
       this.original = r;

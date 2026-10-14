@@ -775,7 +775,7 @@ function rowTuplets(measuresByRow: readonly (readonly Measure[])[], rows: readon
   return out;
 }
 
-function toPuSong(song: Song, index: number, rawLines: readonly string[]): SongView {
+function toPuSong(song: Song, index: number, rawLines: readonly string[], handPages: boolean): SongView {
   const perPart = song.parts.map((p) => splitSystems(p));
   /** 文本谱来源：一组不一定含全部声部，按 `print.system` 对回同一组；其余按行序号 */
   const bySystem = perPart.some((rows) => rows.some((r) => r.system !== undefined));
@@ -815,7 +815,8 @@ function toPuSong(song: Song, index: number, rawLines: readonly string[]): SongV
       const build = builds[pi]![r]!;
       const sr = perPart[pi]![r]!;
       const p = sr.cont ? undefined : sr.measures[0]?.print;
-      if (bySystem && p?.newPage) newPage = true;
+      // 换页：文本谱的 `[fenye]`、123 / ABC 手写的 `$$`。MusicXML 的 `new-page` 是原排版软件按它那张纸断的，不照搬
+      if ((bySystem || handPages) && p?.newPage) newPage = true;
       if (p?.texts) {
         texts = p.texts;
         textSources = p.textSources ?? [];
@@ -865,7 +866,7 @@ export function docView(doc: ScoreDoc): DocView {
   const view: DocView = {
     doc,
     // MusicXML 读进来的先投成简谱形状（长音拆增时线、减时线按 `<type>` 算、和弦补原文）
-    songs: doc.songs.map((s, i) => toPuSong(projectForJianpu(s), i, rawLines)),
+    songs: doc.songs.map((s, i) => toPuSong(projectForJianpu(s), i, rawLines, doc.sourceFormat === "123" || doc.sourceFormat === "abc")),
     idOf: new Map(),
     elementOf: new Map(),
     syllableOwner: new Map(),

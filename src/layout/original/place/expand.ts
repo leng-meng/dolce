@@ -194,6 +194,30 @@ function plainBarline(el: BarlineElement): BarlineElement {
   return { ...el, type: repeat ? "normal" : el.type, repeatForwardAfter: false };
 }
 
+/** `.jpwabc` 原样档：反复线画成普通线、不画房号（同简谱引擎原样档；`.jpwabc` 的反复只给试听与展开档用）。换下来的小节线记同一个 id */
+export function jpwOriginalView(view: DocView): DocView {
+  const idOf = view.idOf as Map<MusicElement, unknown>;
+  const row = (r: RowView): RowView => {
+    const elements = r.elements.map((el) => {
+      if (el.kind !== "barline") return el;
+      const out = plainBarline(el);
+      if (out !== el) {
+        const id = idOf.get(el);
+        if (id !== undefined) idOf.set(out, id);
+      }
+      return out;
+    });
+    return { ...r, elements, marks: r.marks.filter((mk) => mk.type !== "volta") };
+  };
+  return {
+    ...view,
+    songs: view.songs.map((song) => ({
+      ...song,
+      pages: song.pages.map((pg) => ({ ...pg, groups: pg.groups.map((g) => ({ ...g, voices: g.voices.map(row) })) })),
+    })),
+  };
+}
+
 /** 一遍里的符号区间 [a, b) 拼成一行行视图：记号截到行内（跨行的标续接），歌词只挂这一遍的那一行 */
 function rowOf(
   pass: Pass, a: number, b: number, rows: readonly RowView[], lyricsOf: readonly (readonly LyricLine[])[],

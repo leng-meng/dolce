@@ -33,7 +33,7 @@ import { paintPage, systemLeft } from "./page";
 import { footerSpan, layoutFooters } from "./footer";
 import { headerMeasurer, paintSlideLines } from "./header";
 import { placeHeader, placeSlideFooter, placeTitlePage } from "../place/header";
-import { expandView } from "../place/expand";
+import { expandView, jpwOriginalView } from "../place/expand";
 import { playDataOfSong } from "../../../model/playsong";
 import type { PlayItem } from "../../../score/playorder";
 
@@ -59,6 +59,10 @@ export interface OriginalDocumentConfig {
   readonly book?: boolean;
   /** 成书量宽：不折行，另给第一首的自然横向区间（`OriginalDocumentLayout.spans`，调用方先清掉换行） */
   readonly measure?: boolean;
+  /** 只排谱行：不放页眉、页脚，首组贴着上边距起（帮助页的谱例片段） */
+  readonly snippet?: boolean;
+  /** 覆盖墨色（帮助页的谱例画在压暗的纸上），缺省取尺子的 `page.color` */
+  readonly ink?: number;
 }
 
 /** 一份文档排好的原样页面与身份索引。 */
@@ -74,6 +78,9 @@ export interface OriginalDocumentLayout {
   readonly placed: PlacedScore;
   /** 展开档各首实际走的演唱顺序（`page-check` 的 P5 按它数遍数）；原样档为 null */
   readonly plans: ReadonlyArray<readonly PlayItem[] | null> | null;
+  /** 各行（每组第一个声部）首个音符的元素 id，按排出来的行序（展开档一个音每遍各出现一次，用的人自己去重）。
+   *  五线谱自动铺排拿它当优选断点（`App.jianpuLineStarts`） */
+  readonly lineStarts: ElementId[];
   /** `measure` 时：第一首各音（键为元素 id）的自然横向区间与版心宽 */
   readonly spans?: { width: number; spans: Map<string | number, { x0: number; x1: number }> };
 }
@@ -88,7 +95,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   if (cfg.leftIndent) m.page.margin.left += cfg.leftIndent;
   // 展开档、成书的谱页不叠页眉：首组贴着上边距起（同简谱引擎 `fromScore`）
   const slide = !!(cfg.expanded || cfg.book);
-  if (slide) m.page.firstSystemTop = 0;
+  if (slide || cfg.snippet) m.page.firstSystemTop = 0;
   // 展开档的演唱顺序：同简谱引擎展开档那一份（`forExpanded`：带歌词的声部在前、同号歌词顺延）
   const plays = cfg.expanded ? source.songs.map((_, i) => playDataOfSong(source, i, { forExpanded: true })) : null;
   const plans = plays ? plays.map((pd) => pd?.measures ?? null) : null;
@@ -100,14 +107,14 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     pageWidth: m.page.width,
     pageHeight: m.page.height,
     _pageShiftX: 0,
-    ink: style.page.color,
-    lyricInk: style.page.color,
-    foot: cfg.foot,
+    ink: cfg.ink ?? style.page.color,
+    lyricInk: cfg.ink ?? style.page.color,
+    foot: cfg.snippet ? null : cfg.foot,
     ...(slide ? { slide: true } : {}),
   };
   // 展开档的谱页不叠页眉（标题另起一页）
   const headMeasure = headerMeasurer(m);
-  c.heads = slide ? [] : input.songs.map((song) => placeHeader(song.metadata, m, headMeasure));
+  c.heads = slide || cfg.snippet ? [] : input.songs.map((song) => placeHeader(song.metadata, m, headMeasure));
   const headerBottoms = c.heads.map((h) => h.bottom);
   // 量具注入给排版（它不碰字体）。歌词量的是**画出来的**那串：与 paintSyllables 同一串挤压后的笔位，
   // 首尾留白的口径同简谱引擎的 `Lyric.headBlank / tailBlank`（横向避让的判据从那边整段搬来，见 place/spacing.ts）
@@ -172,7 +179,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
   // **源里的行放不下就整首重新断行**（用户定：原样档按排得下的位置断、中间不要短行）：断点写进文档克隆的换行位、
   // 整份重排一遍。元素 id 不变，编辑器的点选、高亮照旧对得上。多声部文本谱（各声部小节对不齐）`applyBreaks` 不重断
   // 展开档：按演唱顺序逐遍切出、逐行装满（已按版心宽断好，不再走窄纸重断）
-  const doc = plays ? expandView(input, plays, m, ink, cfg.breakDesc ?? null) : input;
+  const doc = plays ? expandView(input, plays, m, ink, cfg.breakDesc ?? null) : source.sourceFormat === "jpwabc" ? jpwOriginalView(input) : input;
   c.doc = doc;
   // 成书：只折放不下的那几行，折点原位记（小节中间折的是一行里一条小节线都没有的长行）
   if (!cfg.noReflow && !cfg.measure && !plans) {
@@ -251,6 +258,20 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     view: doc,
     placed,
     plans,
+    lineStarts: lineStartsOf(placed, doc.idOf),
     ...(cfg.measure && doc.songs[0] ? { spans: { width: contentWidth(m), spans: naturalSpans(doc.songs[0], doc.idOf, m, ink) } } : {}),
   };
+}
+
+/** 各行首个音符的元素 id（每组取第一个声部） */
+function lineStartsOf(placed: PlacedScore, idOf: ReadonlyMap<unknown, ElementId>): ElementId[] {
+  const out: ElementId[] = [];
+  for (const page of placed.pages) {
+    for (const g of page.groups) {
+      const v = g.voices[0];
+      const it = v?.items.find((x) => x.element.kind === "note" && idOf.has(x.element));
+      if (it) out.push(idOf.get(it.element)!);
+    }
+  }
+  return out;
 }
