@@ -931,7 +931,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     const breakDesc = f.getSection(LayoutSection)?.desc ?? null;
     this._breakDesc = breakDesc; // 导出 PPTX 时另排一遍要用同一份分页描述
     try {
-      if (this.layoutMode === "original" && oneEngineDev()) this.painter.loadSync({ view: "original", doc, style: this.styleOf("original") });
+      if (oneEngineDev()) this.painter.loadSync({ view: this.layoutMode, doc, style: this.styleOf(this.layoutMode), breakDesc });
       else this._layoutScore(score, breakDesc);
     } catch (e) {
       console.error("layout failed", e);
@@ -980,6 +980,13 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return true;
   }
 
+  /** 展开档交给原样文档引擎的那份文档：MusicXML 按声部面板换旋律声部与歌词来源（同 `puScore`，元素 id 不变）。 */
+  private _expandedDoc(doc: ScoreDoc): ScoreDoc {
+    if (this.docFormat !== "musicxml") return doc;
+    const lyr = this.lyricPart !== null ? withLyricsFrom(doc, this.lyricPart, this.melodyPart) : doc;
+    return withMelodyFirst(lyr, this.melodyPart);
+  }
+
   /** 原样档这一份 `ScoreDoc` 走不走简谱引擎布局：格式说走（`caps.originalLayout`），
    *  且投影出来只有一条旋律——引擎只排 `parts[0]`，多声部的曲子仍回落原样文档布局。 */
   private _originalOnJianpu(): boolean {
@@ -993,7 +1000,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
    *  交给引擎（与 `.jpwabc` 原样档同一套），文本谱与多声部走原样文档布局（印刷原版的观感）。都由同一个 `ScorePainter` 排。 */
   private _layoutScoreDoc(doc: ScoreDoc, what: string): boolean {
     try {
-      if (this.layoutMode === "expanded" || this._originalOnJianpu()) {
+      if (this.layoutMode === "expanded" && oneEngineDev()) {
+        this.painter.loadSync({ view: "expanded", doc: this._expandedDoc(doc), style: this.styleOf("expanded") });
+      } else if (this.layoutMode === "expanded" || this._originalOnJianpu()) {
         // 同一份文本只投影一次（puScore 有缓存）；点选与高亮按元素 id 认
         const score = this.puScore();
         if (!score) {

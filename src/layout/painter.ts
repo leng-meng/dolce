@@ -70,14 +70,17 @@ export interface StaffPaintRequest {
   readonly jianpuPart?: number;
 }
 
-/** 原样文档这一路（文本谱与多声部 123/ABC、MusicXML 的原样档）：整份 `ScoreDoc` 按源行排，印刷原版观感。 */
+/** 原样文档这一路（文本谱与多声部 123/ABC、MusicXML 的原样档）：整份 `ScoreDoc` 按源行排，印刷原版观感。
+ *  `expanded`：展开档（反复逐遍展开、一遍一页、投影片纸），开发开关下才发（子计划 5）。 */
 export interface DocumentPaintRequest {
-  readonly view: "original";
+  readonly view: "original" | "expanded";
   readonly doc: ScoreDoc;
   /** computed 样式表（原样档那份，与简谱引擎同一份）。null = print 主题出厂。 */
   readonly style: StyleSheet | null;
   /** 照文档里的换行排，不按窄纸重新断行（断点已由调用方写进文档时用）。 */
   readonly noReflow?: boolean;
+  /** 展开档：`.jpwabc` 的 `.Layout` 分页描述（其他格式没有） */
+  readonly breakDesc?: string | null;
 }
 
 export type PaintRequest = JianpuPaintRequest | DocumentPaintRequest | StaffPaintRequest;
@@ -157,7 +160,7 @@ interface StaffState {
 }
 
 const isStaffRequest = (r: PaintRequest): r is StaffPaintRequest => r.view === "staff" || r.view === "mixed";
-const isDocumentRequest = (r: PaintRequest): r is DocumentPaintRequest => r.view === "original" && "doc" in r;
+const isDocumentRequest = (r: PaintRequest): r is DocumentPaintRequest => (r.view === "original" || r.view === "expanded") && "doc" in r;
 
 /** 可视化编辑选中挂在音符上的子项的角色（就是身份标签的 kind，见 `identity.ts`）。 */
 export type VisualPartRole = "aug-dot" | "harmony" | "deco" | "annotation";
@@ -206,6 +209,11 @@ export class ScorePainter {
   private version = 0;
 
   constructor(readonly resources: PaintResources = PaintResources.shared()) {}
+
+  /** 当前结果是原样文档引擎排的（`layout` / `score` 那份简谱引擎结果此时是旧的）。 */
+  get fromDocument(): boolean {
+    return this.original !== null;
+  }
 
   /** 当前结果是哪一路画的。 */
   get renderer(): "jianpu" | "staff" | null {
@@ -311,10 +319,12 @@ export class ScorePainter {
   private _documentCommit(req: DocumentPaintRequest): () => void {
     const sheet = req.style ?? computeStyleForPaper([THEMES.print], { mode: "original", engine: "jianpu" });
     const paper = resolvePaper(sheet.page);
+    // 展开档：投影片纸（展开档样式的 `page.size`，同 `_jianpuCommit`）
+    const slide = req.view === "expanded" ? { width: sheet.page.size?.[0] ?? 960, height: sheet.page.size?.[1] ?? 540, continuous: false } : null;
     const r = layoutOriginalDocument(req.doc, {
       style: jianpuStyleOf(sheet),
       // 长图：宽与简谱引擎的长图同一张（500 首那张纸的宽），高由内容定
-      page: paper ? { width: paper.w, height: paper.h, continuous: false } : { width: LONG_IMAGE_WIDTH, height: LONG_IMAGE_WIDTH, continuous: true },
+      page: slide ?? (paper ? { width: paper.w, height: paper.h, continuous: false } : { width: LONG_IMAGE_WIDTH, height: LONG_IMAGE_WIDTH, continuous: true }),
       userMargins: pageMargins(sheet.page) !== undefined,
       foot: (sheet.template?.regions?.["song-foot"] as Region | undefined) ?? null,
       noReflow: req.noReflow,
@@ -335,7 +345,7 @@ export class ScorePainter {
     return () => {
       this.original = r;
       this.staff = null;
-      this.jianpuView = "original";
+      this.jianpuView = req.view;
       this.pageWidth = r.width;
       this.pageHeight = r.height;
       this.pageHeights = [];

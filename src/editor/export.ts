@@ -148,7 +148,7 @@ export async function exportPptx(app: App): Promise<void> {
  *  否则导出的投影片会带着原样档的字号与颜色。 */
 export function pptxPainter(app: App): ScorePainter {
   const cur = app.painter;
-  if (cur.renderer === "jianpu" && cur.jianpuView === "expanded") return cur;
+  if (cur.renderer === "jianpu" && cur.jianpuView === "expanded" && !cur.fromDocument) return cur;
   const score = app.adapter.caps.layout === "scoredoc" ? app.puScore(true) : cur.score;
   if (!score) throw new Error(t("export.noPuLines"));
   const p = new ScorePainter(cur.resources);
