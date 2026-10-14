@@ -144,6 +144,9 @@ export class VisualEditController {
   /** 点中的一处**原文里没有符号**的换行（文本谱另起一行 `Q:`）：选区表达不了它，另记一份；
    *  `sel` 是点中时的光标位置，选区一挪开就作废 */
   private pickedBreak: { after: ElementId; sel: number } | null = null;
+  /** 双击文字进了代码区改字（`handleDoubleClick` 置上；代码区失焦、在代码区按下鼠标即清）：
+   *  只有这时代码区的 Enter 才归 `textEnter`，直接在代码区打字时照常换行 */
+  private textEditing = false;
   /** 插入模式的「当前时值」：新插的音符用它 */
   curDur: NoteDuration = { halvings: 0, dots: 0 };
   /** 声部输入：插入模式新插的音落在第几声部（`.musicxml` 用；Ctrl+Alt+1–4） */
@@ -194,6 +197,14 @@ export class VisualEditController {
     }
     pane.addEventListener("focus", () => this.setFocus(true));
     pane.addEventListener("blur", () => this.setFocus(false));
+    // 改字会话：在代码区里按下鼠标（直接改代码）、焦点去了代码区以外，都算结束
+    const inCode = (t: EventTarget | null): boolean => t instanceof Element && !!t.closest(".cm-editor");
+    document.addEventListener("pointerdown", (ev) => {
+      if (inCode(ev.target)) this.textEditing = false;
+    }, true);
+    document.addEventListener("focusin", (ev) => {
+      if (!inCode(ev.target)) this.textEditing = false;
+    });
     // 点谱面就把焦点给谱面（SVG 里的点击不会自己聚焦到容器上）
     pane.addEventListener("pointerdown", () => {
       if (this.host.visualEnabled()) pane.focus({ preventScroll: true });
@@ -907,6 +918,7 @@ export class VisualEditController {
     const at = this.textCaretAt(entry, ev.clientX, ev.clientY);
     this.select(at, at);
     this.host.view.focus();
+    this.textEditing = true;
     return true;
   }
 
@@ -914,21 +926,21 @@ export class VisualEditController {
    *  歌词里在这个字的音处换行 / 换页（光标在字前 = 这个音之前，否则之后），按格式改原文，焦点回谱面；
    *  页眉字段里结束改字，回到谱面选中这个字段。光标不在文字里时返回 false，代码区照常插换行。 */
   textEnter(page: boolean): boolean {
-    if (!this.host.visualEnabled() || this.host.modelEditing()) return false;
+    if (!this.textEditing || !this.host.visualEnabled() || this.host.modelEditing()) return false;
     if (!this.host.syncFresh()) this.host.reloadNow();
     const sel = this.host.view.state.selection.main;
     if (!sel.empty) return false;
     const head = sel.head;
     const e = this.host.sync.ordered().find((x) => isText(x) && head >= x.from && head <= x.to);
     if (!e) return false;
+    this.textEditing = false;
     const pane = this.host.scorePane;
     if (e.kind === "header") {
       this.select(e.from, e.to);
       pane.focus({ preventScroll: true });
       return true;
     }
-    const span = this.host.sync.spanOfNote(e.id);
-    const note = span && this.navigable().find((x) => x.kind === "note" && x.from === span.from);
+    const note = this.entryOfElement(e.id);
     pane.focus({ preventScroll: true });
     if (!note) {
       this.host.setStatus(tr("vis.selectNote"));
@@ -1102,15 +1114,40 @@ export class VisualEditController {
     return out;
   }
 
-  /** `pos` 与 `dir` 那边相邻元素之间夹着的虚拟换行（插入光标贴着它：行首往前、行末往后）。 */
-  private virtualBreakBeside(pos: number, dir: -1 | 1): { b: BreakMark; nl: number } | null {
+  /** 插入光标贴着一处虚拟换行时（往前删在本行行首、往后删在本行行末），返回这处换行与它两边同一声线的元素。
+   *  按光标所在的声线看：多声部时换行符只挂在第一声部上（换的是整个系统），别的声部那一行的行首、行末也算贴着它；
+   *  原文顺序上的前一个元素可能是别的声部的，不能拿来比。 */
+  private virtualBreakBeside(pos: number, dir: -1 | 1): { b: BreakMark; nl: number; prev: SyncEntry; next: SyncEntry } | null {
+    const vbs = this.virtualBreaks();
+    const doc = this.host.syncDoc();
+    if (!vbs.length || !doc) return null;
     const nav = this.navigable();
-    if (dir < 0) {
-      const prev = [...nav].reverse().find((e) => e.to <= pos);
-      return prev ? this.virtualBreaks().find((v) => prev.to <= v.nl && v.nl < pos) ?? null : null;
-    }
-    const next = nav.find((e) => e.from >= pos);
-    return next ? this.virtualBreaks().find((v) => pos <= v.nl && v.nl < next.from) ?? null : null;
+    const text = this.host.view.state.doc;
+    const line = text.lineAt(pos);
+    const onLine = (e: SyncEntry): boolean => e.from >= line.from && e.to <= line.to;
+    const isNote = (e: SyncEntry): boolean => e.kind === "note" || e.kind === "sustain";
+    // 光标那一侧在本行不能再有元素
+    if (nav.some((e) => onLine(e) && (dir < 0 ? e.to <= pos : e.from >= pos))) return null;
+    // 光标另一侧本行紧挨着的那个音，与它在同一声线里隔着换行的邻居
+    const near = dir < 0 ? nav.find((e) => e.from >= pos && onLine(e) && isNote(e)) : [...nav].reverse().find((e) => e.to <= pos && onLine(e) && isNote(e));
+    if (!near) return null;
+    const ord = voiceOrdinal(doc, near.id);
+    const otherId = ord ? elementAtOrdinal(doc, ord.key, ord.k + (dir < 0 ? -1 : 1)) : null;
+    const other = otherId === null ? null : this.entryOfElement(otherId);
+    if (!other || text.lineAt(other.from).number === line.number) return null;
+    const [prev, next] = dir < 0 ? [other, near] : [near, other];
+    // prev 与 next 之间的那处：next 之前最后一处
+    const v = [...vbs].reverse().find((x) => x.nl < next.from);
+    if (!v) return null;
+    // ABC 各声部的代码行各管各的：只认挂换行的那条声线自己（别的声部那里删不了第一声部的代码行）
+    if (this.host.editDialect()?.lyricBlockByCodeLine && v.b.after !== prev.id) return null;
+    return { ...v, prev, next };
+  }
+
+  /** 一个元素（音符 / 休止）的索引条目。 */
+  private entryOfElement(id: ElementId): SyncEntry | null {
+    const span = this.host.sync.spanOfNote(id);
+    return span ? this.navigable().find((e) => e.kind === "note" && e.from === span.from) ?? null : null;
   }
 
   /** 选中一处虚拟换行：ABC 选中代码行末的换行符，文本谱光标落行末并记下「点中了这处换行」（与点谱面上的换行符同）。 */
@@ -1425,8 +1462,7 @@ export class VisualEditController {
       // 插入模式：光标跨过一个元素（连同音符的增时线一起跨）；跨过虚拟换行算一步（行末 → 下一行行首）
       const vb = this.virtualBreakBeside(sel.head, dir);
       if (vb) {
-        const at = dir > 0 ? nav.find((e) => e.from > vb.nl)?.from : [...nav].reverse().find((e) => e.to <= vb.nl)?.to;
-        if (at === undefined) return false;
+        const at = dir > 0 ? vb.next.from : this.groupEnd(vb.prev);
         this.select(at, at);
         return true;
       }
@@ -2025,13 +2061,18 @@ export class VisualEditController {
         this.host.setStatus(tr("vis.lineStart"));
         return true;
       }
-      // 重切行的补丁按整段前后差异算，光标映射过去落不准：按元素序号落到新起那一行的行首
-      const solid = (): SyncEntry[] => this.navigable().filter((e) => e.kind !== "break");
-      const k = solid().indexOf(prev);
+      // 重切行的补丁按整段前后差异算，光标映射过去落不准；重排后元素 id 也会变。
+      // 按「同一声线里的第几个元素」对回换行后的那个元素，落到它前面（小节末换行时小节线留在上一行，不能按原文顺序取下一个）
+      const doc0 = this.host.syncDoc();
+      const ord = doc0 ? voiceOrdinal(doc0, prev.id) : null;
       const before = c.state.doc.toString();
       this.relayoutBreak(c, prev.id, true, page);
-      const next = k >= 0 && this.host.view.state.doc.toString() !== before ? solid()[k + 1] : undefined;
-      if (next) this.select(next.from, next.from);
+      const doc1 = this.host.syncDoc();
+      if (ord && doc1 && this.host.view.state.doc.toString() !== before) {
+        const id = elementAtOrdinal(doc1, ord.key, ord.k + 1);
+        const span = id !== null ? this.host.sync.spanOfNote(id) : null;
+        if (span) this.select(span.from, span.from);
+      }
       return true;
     }
     return this.apply(insertBreak(c, pos, page));
@@ -2201,6 +2242,40 @@ export class VisualEditController {
 }
 
 /** 文字条目：歌词、页眉字段（单击选中、双击进插入模式） */
+/** 元素在它那条声线里的位置（第几首·声部·声线 + 第几个元素）：重切行前后靠它对回同一个元素。 */
+function voiceOrdinal(doc: ScoreDoc, id: ElementId): { key: string; k: number } | null {
+  for (const [si, song] of doc.songs.entries()) {
+    for (const [pi, part] of song.parts.entries()) {
+      const seen = new Map<number, number>();
+      for (const m of part.measures) {
+        for (const el of m.elements) {
+          const k = seen.get(el.voice) ?? 0;
+          seen.set(el.voice, k + 1);
+          if (el.id === id) return { key: `${si}:${pi}:${el.voice}`, k };
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/** `voiceOrdinal` 的反查。 */
+function elementAtOrdinal(doc: ScoreDoc, key: string, k: number): ElementId | null {
+  for (const [si, song] of doc.songs.entries()) {
+    for (const [pi, part] of song.parts.entries()) {
+      const seen = new Map<number, number>();
+      for (const m of part.measures) {
+        for (const el of m.elements) {
+          const n = seen.get(el.voice) ?? 0;
+          seen.set(el.voice, n + 1);
+          if (n === k && `${si}:${pi}:${el.voice}` === key) return el.id;
+        }
+      }
+    }
+  }
+  return null;
+}
+
 function isText(e: SyncEntry): boolean {
   return e.kind === "lyric" || e.kind === "header";
 }
