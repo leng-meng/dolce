@@ -95,6 +95,7 @@ export function layoutOriginalDocument(source: ScoreDoc, cfg: OriginalDocumentCo
     ink: style.page.color,
     lyricInk: style.page.color,
     foot: cfg.foot,
+    ...(cfg.expanded ? { slide: true } : {}),
   };
   // 展开档的谱页不叠页眉（标题另起一页）
   const headMeasure = headerMeasurer(m);

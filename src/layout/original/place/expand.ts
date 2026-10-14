@@ -176,6 +176,17 @@ function bare(el: MusicElement): MusicElement {
   return el;
 }
 
+/** 字前的印刷段号（MusicXML 把 `1.` 与字并成一个音节 `1.圣`）去掉：一遍只挂一段词，段号没有意义（同简谱引擎 `ignoreVerseNumber`）。
+ *  换下来的音节记同一个归属（`DocView.syllableOwner`） */
+function bareSyllable(syl: LyricSyllable, owners: Map<LyricSyllable, unknown>): LyricSyllable {
+  const m = /^[0-9.]+/.exec(syl.text);
+  if (!m || m[0].length === syl.text.length) return syl;
+  const out = { ...syl, text: syl.text.slice(m[0].length) };
+  const owner = owners.get(syl);
+  if (owner !== undefined) owners.set(out, owner);
+  return out;
+}
+
 /** 唱了不止一遍的小节（反复确实展开了）就不画反复记号：反复线画成普通线（同 `Line.load` 的 `unrolled`） */
 function plainBarline(el: BarlineElement): BarlineElement {
   const repeat = el.type === "repeat-start" || el.type === "repeat-end" || el.type === "repeat-both";
@@ -187,7 +198,7 @@ function plainBarline(el: BarlineElement): BarlineElement {
 function rowOf(
   pass: Pass, a: number, b: number, rows: readonly RowView[], lyricsOf: readonly (readonly LyricLine[])[],
   cursorOf: readonly (readonly number[])[], marks: readonly LogicalMark[], posOf: ReadonlyMap<string, number>,
-  unrolled: boolean, idOf: Map<MusicElement, unknown>,
+  unrolled: boolean, idOf: Map<MusicElement, unknown>, owners: Map<LyricSyllable, unknown>,
 ): RowView {
   const first = rows[pass.slots[a]!.row]!;
   const elements: MusicElement[] = [];
@@ -230,7 +241,7 @@ function rowOf(
     const line = lyricsOf[s.row]!.find((l) => l.verseFrom <= v && v <= l.verseTo);
     const syl = line?.syllables[cursorOf[s.row]![s.idx]!];
     if (syl && syl.text) any = true;
-    syllables.push(syl ?? { text: "", source: first.source });
+    syllables.push(syl ? bareSyllable(syl, owners) : { text: "", source: first.source });
   }
   const lyrics: LyricLine[] = any
     ? [{ verseFrom: pass.verses[a]!, verseTo: pass.verses[a]!, annotationGap: 20, syllables, source: first.source }]
@@ -398,6 +409,7 @@ function passesByDur(
 /** 展开档：一首曲子 → 逐遍展开、逐行装满的行视图（每遍一页起头） */
 export function expandSong(
   song: SongView, plan: readonly PlayItem[], m: JianpuGrid, ink: InkMeasurer, idOf: Map<MusicElement, unknown>,
+  owners: Map<LyricSyllable, unknown>,
   layout: { desc: string; simple: boolean } | null = null,
   /** 源里的换行断在行末那个符号之后（`.jpwabc`），否则断在那个小节末 */
   exactBreaks = false,
@@ -451,7 +463,7 @@ export function expandSong(
   for (const pass of passes) {
     const posOf = new Map<string, number>();
     pass.slots.forEach((s, i) => posOf.set(`${s.row}:${s.idx}`, i));
-    const whole = rowOf(pass, 0, pass.slots.length, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf);
+    const whole = rowOf(pass, 0, pass.slots.length, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners);
     const lines = fillLines(whole, pass.breaks, m, ink, width, meter);
     // 一遍一页起头；遍内源里的换页另起一页
     let groups: SystemView[] = [];
@@ -465,7 +477,7 @@ export function expandSong(
         index: groups.length,
         texts: [],
         system: system++,
-        voices: [rowOf(pass, l.start, end, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf)],
+        voices: [rowOf(pass, l.start, end, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners)],
       });
     });
     if (groups.length > 0) pages.push({ index: pages.length, groups });
@@ -485,5 +497,6 @@ export function expandView(
   const pd = plans[0];
   if (!song || !pd) return { ...view, songs: view.songs.slice(0, 1) };
   const layout = breakDesc ? { desc: breakDesc, simple: pd.isSimpple } : null;
-  return { ...view, songs: [expandSong(song, pd.measures, m, ink, idOf, layout, view.doc.sourceFormat === "jpwabc")] };
+  const owners = view.syllableOwner as Map<LyricSyllable, unknown>;
+  return { ...view, songs: [expandSong(song, pd.measures, m, ink, idOf, owners, layout, view.doc.sourceFormat === "jpwabc")] };
 }

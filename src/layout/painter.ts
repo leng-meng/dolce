@@ -221,6 +221,14 @@ export class ScorePainter {
     return this.original?.plans ?? null;
   }
 
+  /** 导出 PPTX 用的页面（`editor/pptx.ts::buildPptx`）：原样文档引擎排的就取它那一份，否则取简谱引擎的。 */
+  get pptxSource(): { pages: readonly Group[]; stackGap: number; pageWidth: number; pageHeight: number } {
+    if (this.original) {
+      return { pages: this.original.pages, stackGap: this.original.metrics.style.vertical.stackGap, pageWidth: this.pageWidth, pageHeight: this.pageHeight };
+    }
+    return { pages: this.layout.pages, stackGap: this.layout.options.stackGap, pageWidth: this.pageWidth, pageHeight: this.pageHeight };
+  }
+
   /** 当前结果是哪一路画的。 */
   get renderer(): "jianpu" | "staff" | null {
     return this.staff ? "staff" : this.result ? "jianpu" : null;

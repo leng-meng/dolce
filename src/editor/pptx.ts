@@ -403,22 +403,23 @@ function buildDeck(slides: string[], wEmu: number, hEmu: number): Zippable {
   return z;
 }
 
-/** buildPptx 只用到页面树与页面尺寸，简谱与文本谱两种排版器都满足。 */
+/** buildPptx 只用到页面树与页面尺寸，与哪个引擎排的无关（`ScorePainter.pptxSource`：简谱引擎或原样文档引擎那一份）。 */
 export interface PptxSource {
-  /** `options.stackGap`：附点离数字的那道空（engrave/stack.ts）；没有就取缺省。 */
-  layout: { pages: Group[]; options?: { stackGap: number } };
+  pages: readonly Group[];
+  /** 附点离数字的那道空（engrave/stack.ts）；没有就取缺省。 */
+  stackGap?: number;
   pageWidth: number;
   pageHeight: number;
 }
 
-export async function buildPptx(painter: PptxSource, bgColor = 0xffffffff): Promise<Uint8Array> {
+export async function buildPptx(src: PptxSource, bgColor = 0xffffffff): Promise<Uint8Array> {
   const font = await loadBravura();
-  const slides = painter.layout.pages.map((pg) => {
+  const slides = src.pages.map((pg) => {
     const shapes: Shape[] = [];
-    collectShapes(pg, font, shapes, painter.layout.options?.stackGap ?? STACK_GAP_DEFAULT);
+    collectShapes(pg, font, shapes, src.stackGap ?? STACK_GAP_DEFAULT);
     return slideXml(shapes, bgColor);
   });
-  const deck = buildDeck(slides, EMU(painter.pageWidth), EMU(painter.pageHeight));
+  const deck = buildDeck(slides, EMU(src.pageWidth), EMU(src.pageHeight));
   return zipSync(deck);
 }
 

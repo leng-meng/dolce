@@ -135,7 +135,7 @@ export async function exportMidi(app: App): Promise<void> {
 export async function exportPptx(app: App): Promise<void> {
   // 一律按**展开档**出片（两种格式同一条展开档排版）：屏幕在原样档也导得出 PPT 观感，
   // 切到展开档预览则是所见即所得。字号/纸张取展开档那一套设置。
-  const bytes = await buildPptx(pptxPainter(app), app.colorsOf("expanded").bg);
+  const bytes = await buildPptx(pptxPainter(app).pptxSource, app.colorsOf("expanded").bg);
   await saveBytes(
     bytes,
     `${baseName(app)}.pptx`,
@@ -148,16 +148,11 @@ export async function exportPptx(app: App): Promise<void> {
  *  否则导出的投影片会带着原样档的字号与颜色。 */
 export function pptxPainter(app: App): ScorePainter {
   const cur = app.painter;
-  if (cur.renderer === "jianpu" && cur.jianpuView === "expanded" && !cur.fromDocument) return cur;
-  const score = app.adapter.caps.layout === "scoredoc" ? app.puScore(true) : cur.score;
-  if (!score) throw new Error(t("export.noPuLines"));
+  if (cur.renderer === "jianpu" && cur.jianpuView === "expanded") return cur;
+  const req = app.expandedRequest();
+  if (!req) throw new Error(t("export.noPuLines"));
   const p = new ScorePainter(cur.resources);
-  p.loadSync({
-    view: "expanded",
-    score,
-    breakDesc: app.adapter.caps.layout === "scoredoc" ? null : app.breakDesc,
-    style: app.styleOf("expanded"),
-  });
+  p.loadSync(req);
   return p;
 }
 

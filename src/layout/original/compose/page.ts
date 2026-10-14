@@ -1,6 +1,6 @@
 // 一页：谱组、声部、连谱号的绘制。
 import { Font } from "../../font";
-import { BeamLine, Group } from "../../pageitem";
+import { BeamLine, Group, type JpNumber } from "../../pageitem";
 import { sustainDash } from "../../../engrave/dash";
 import { beamY } from "../../../engrave/stack";
 import { syllableRun } from "../../../engrave/syllable";
@@ -8,7 +8,7 @@ import type { ElementId } from "../../../model/doc";
 import { addBarlineOwner } from "../../identity";
 import type { PlacedGroup, PlacedPage, PlacedVoice } from "../place/model";
 import { wordsLead } from "../place/vertical";
-import { type OriginalCtx, text } from "./ctx";
+import { type OriginalCtx, digitItem, digitOrigin, text } from "./ctx";
 import { paintHeader } from "./header";
 import { paintBrace } from "./brace";
 import { paintLayer, paintMark } from "./marks";
@@ -213,6 +213,8 @@ export function paintVoice(c: OriginalCtx,
    *  增时线不改它——模型里「小节线前面那个元素」指的是和弦，不是挂在它上面的增时线。 */
   let prevNoteId: ElementId | undefined;
   const passes = passesOfRow.get(voice.voice);
+  /** 各音符的数字（行内 x）：减时线认两端的数字，PPTX 按目标字体的数字宽把线头接回去（`pptx.ts` 读 `BeamLine.leftNum/rightNum`） */
+  const nums: Array<{ x: number; num: JpNumber }> = [];
 
   for (const it of voice.items) {
     c.pass = passes?.[it.srcIndex];
@@ -230,7 +232,8 @@ export function paintVoice(c: OriginalCtx,
     if (it.element.kind === "sustain") {
       // 增时线：数字字体的「-」（engrave/dash.ts，与混排、简谱引擎同一个字形）。
       // 数字是按墨迹居中于 baseline 画的，增时线的墨心也落在同一条中线上
-      const line = sustainDash(x, base, { font: c.digitFont, color: c.ink });
+      // 展开档画成数字字体的「-」字（同简谱引擎 `JpNumber("-")`；PPTX 里换目标字体的「-」）
+      const line = c.slide ? dashDigit(c, x, base) : sustainDash(x, base, { font: c.digitFont, color: c.ink });
       root.add(line);
       // 增时线有自己的 id（`Chord.sustains[]` 各带一个），可视化编辑按它点选这一条
       const sid = c.doc?.idOf.get(it.element);
@@ -240,7 +243,8 @@ export function paintVoice(c: OriginalCtx,
       paintSyllables(c, root, it, x, voice, lyricRight);
       continue;
     }
-    paintNote(c, root, it, x, base);
+    const num = paintNote(c, root, it, x, base);
+    if (num) nums.push({ x: it.x, num });
     prevNoteId = c.doc?.idOf.get(it.element) ?? prevNoteId;
     paintSyllables(c, root, it, x, voice, lyricRight);
   }
@@ -249,7 +253,8 @@ export function paintVoice(c: OriginalCtx,
   // 减时线
   for (const u of voice.underlines) {
     const y = baseline + (u.dy ?? 0) + beamY(m.ink.noteHeight / 2, u.level, m.ink.stack);
-    root.add(new BeamLine(u.level, left + u.x0, left + u.x1, y, m.style.stroke.beam, c.ink));
+    const under = nums.filter((n) => n.x >= u.x0 - 0.5 && n.x <= u.x1 + 0.5);
+    root.add(new BeamLine(u.level, left + u.x0, left + u.x1, y, m.style.stroke.beam, c.ink, under[0]?.num ?? null, under[under.length - 1]?.num ?? null));
   }
 
   paintLyricAnnotations(c, root, voice, left);
@@ -259,4 +264,10 @@ export function paintVoice(c: OriginalCtx,
   for (const mk of voice.marks) paintMark(c, root, mk, left, baseline + (mk.dy ?? 0));
   // 临时伴奏 / 临时多声部：主旋律上方的小字号行
   for (const layer of voice.layers) paintLayer(c, root, layer, left, baseline, pageIndex);
+}
+
+/** 展开档的增时线：数字字体的「-」，按墨迹横向居中、与数字同一条基线（`digitOrigin`）。 */
+function dashDigit(c: OriginalCtx, x: number, base: number): JpNumber {
+  const { dx, dy } = digitOrigin(c, "-");
+  return digitItem("-", x + dx, base + dy, c.digitFont, c.ink);
 }

@@ -8,6 +8,7 @@ import { EQ_PAD_EM } from "../../../engrave/spacing";
 import { emptyMetadata, type Meter } from "../../../pu/ast";
 import { timeSigRule, type HeaderMeasurer, type HeaderTextRole, type PlacedHeader, type PlacedHeaderLine } from "../place/header";
 import { type OriginalCtx, text } from "./ctx";
+import { textItem } from "../../../engrave/prims";
 
 /** 页眉各角色的字（`scale` 是窄纸缩排倍率，只作用于标题、副标题、经文、署名）。 */
 export function headerRoleFont(m: JianpuGrid, role: HeaderTextRole, scale = 1): Font {
@@ -64,7 +65,8 @@ export function headerMeasurer(m: JianpuGrid): HeaderMeasurer {
 export function paintSlideLines(c: OriginalCtx, root: Group, lines: readonly PlacedHeaderLine[], tag: boolean): void {
   const anchor = { left: 0, center: c.pageWidth / 2, right: c.pageWidth };
   for (const l of lines) {
-    const t = text(l.text, anchor[l.anchor] + l.dx, l.baseline, headerRoleFont(c.metrics, l.role), c.ink);
+    // 不带逐字笔位（同简谱引擎的标题页、页脚）：PPTX 见到逐字笔位会拆成逐字文本框，页码「1/4」就散成三个框
+    const t = textItem(l.text, headerRoleFont(c.metrics, l.role), c.ink, anchor[l.anchor] + l.dx, l.baseline, false);
     if (tag) t.classes.add("hdr");
     root.add(t);
   }

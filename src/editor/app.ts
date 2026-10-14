@@ -10,7 +10,7 @@ import { applyBreaks } from "../model/breaks";
 import type { JScore } from "../layout/input";
 import { clearBreaks } from "../layout/input";
 import { JpwFile, LayoutSection } from "../jpword/jpwfile";
-import { measureJianpu, PaintResources, ScorePainter, type JianpuPaintRequest } from "../layout/painter";
+import { measureJianpu, PaintResources, ScorePainter, type JianpuPaintRequest, type SyncPaintRequest } from "../layout/painter";
 import { toPt } from "../layout/result";
 import { computeStyle, sanitizeLayer, upsertRule, type StyleRule } from "../style/cascade";
 import type { Length } from "../style/units";
@@ -978,6 +978,21 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     // 解析告警不拦排版，但要让用户看得见（谱面往往仍然是对的）
     this._reportDiagnostics(diagLabel, doc.diagnostics);
     return true;
+  }
+
+  /** 展开档的排版请求（导出 PPTX 在别的档另排一份用，`export.ts::pptxPainter`）：开发开关下交给原样文档引擎，否则投影成简谱引擎输入。
+   *  没有曲行时返回 null。 */
+  expandedRequest(): SyncPaintRequest | null {
+    const style = this.styleOf("expanded");
+    if (oneEngineDev()) {
+      const src = this.docFormat === "jpwabc" ? this._jpwDoc : this.currentScoreDoc();
+      if (!src) return null;
+      const breakDesc = this.adapter.caps.layout === "scoredoc" ? null : this._breakDesc;
+      return { view: "expanded", doc: this.docFormat === "jpwabc" ? src : this._expandedDoc(src), style, breakDesc };
+    }
+    const score = this.adapter.caps.layout === "scoredoc" ? this.puScore(true) : this.painter.score;
+    if (!score) return null;
+    return { view: "expanded", score, breakDesc: this.adapter.caps.layout === "scoredoc" ? null : this._breakDesc, style };
   }
 
   /** 展开档交给原样文档引擎的那份文档：MusicXML 按声部面板换旋律声部与歌词来源（同 `puScore`，元素 id 不变）。 */

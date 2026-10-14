@@ -11,6 +11,7 @@ import { breathPath } from "../../../engrave/breath";
 import type { PlacedItem, PlacedText } from "../place/model";
 import { graceLayout, noteBeams } from "../place/vertical";
 import { type OriginalCtx, digitItem, digitOrigin, dot, octaveDot, rect, stroke, text } from "./ctx";
+import { musicText } from "../../../engrave/prims";
 
 /** 音符/增时线上方的和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）。位置照定位端（`PlacedText`）。 */
 function paintChord(c: OriginalCtx, g: Group, t: PlacedText, x: number, baseline: number): void {
@@ -37,8 +38,13 @@ export function paintBand(c: OriginalCtx, g: Group, el: MusicElement, kinds?: Re
       paintChord(c, g, t, x, y);
       continue;
     }
-    const family = t.face === "music" ? "Bravura" : t.face === "lyric" ? m.style.font.lyric.family : m.style.font.text.family;
-    const tf = text(t.text, x, y, new Font(family, t.size), c.ink);
+    // SMuFL 字形（奏法、力度、跳转字形）挂 `smufl`（`musicText`）：PPTX 按它转曲、成书按它落乐谱字体（同简谱引擎的 `SmuflText`）
+    const family = t.face === "lyric" ? m.style.font.lyric.family : m.style.font.text.family;
+    const tf = t.face === "music" ? musicText(t.text, new Font("Bravura", t.size), c.ink) : text(t.text, x, y, new Font(family, t.size), c.ink);
+    if (t.face === "music") {
+      tf.x = x;
+      tf.y = y;
+    }
     if (t.xs) tf.charXs = t.xs; // 段落词按标点挤压后的笔位画（量宽同一份，`sectionWordRun`）
     if (t.kind === "section-word") {
       tf.classes.add("annotation"); // 可视化编辑认挂载记号用（`notePartEls`）
@@ -58,7 +64,7 @@ export function paintNote(c: OriginalCtx,
   it: PlacedItem,
   x: number,
   baseline: number,
-): void {
+): JpNumber | null {
   const note = it.element as NoteElement;
   const m = c.metrics;
   const g = new Group();
@@ -120,6 +126,7 @@ export function paintNote(c: OriginalCtx,
   root.add(g);
   const id = c.doc?.idOf.get(note);
   if (id !== undefined) g.ident = { kind: "note", id, ...(c.pass !== undefined ? { pass: c.pass } : {}) };
+  return num;
 }
 
 /**
