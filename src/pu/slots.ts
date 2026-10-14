@@ -453,8 +453,10 @@ function segmentMarks(marks: readonly Mark[], rows: readonly RowBuild[], rowIdx:
  * 曲中换拍号（123 / MusicXML 记在小节的 `attrs.time` 上）→ 前一小节右线上的临时拍号（文本谱 `"p:3/4"` 的口径，
  * 原样文档照它在线后印拍号）。文本谱来源的小节线本来就带着（`Barline.time`），不重复。
  */
-function carryToPrevBarline(measures: readonly Measure[], rows: readonly RowBuild[]): void {
-  let cur: { beats: number; beatType: number } | undefined;
+function carryToPrevBarline(measures: readonly Measure[], rows: readonly RowBuild[], songTime?: { beats: number; beatType: number }): void {
+  // 起头的拍号：首小节没写 `attrs.time` 的（123 / ABC 的 `M:` 只记在曲头 `Song.time`）从曲头起比，
+  // 否则曲中第一次换拍号认不出来（单声部全特性 `|] [M:3/4]` 那条线后的 3/4 原先没印）
+  let cur: { beats: number; beatType: number } | undefined = songTime ? { beats: songTime.beats, beatType: songTime.beatType } : undefined;
   const prevBar = (i: number): BarlineElement | undefined => {
     const prev = measures[i - 1];
     for (const row of rows) {
@@ -783,7 +785,7 @@ function toPuSong(song: Song, index: number, rawLines: readonly string[]): SongV
   };
   // 各声部的全部行先建好——跨行记号要看别的行有没有端点
   const builds = perPart.map((rows) => rows.map((row) => buildRow(row.measures, row.ranges)));
-  perPart.forEach((rows, pi) => carryToPrevBarline(rows.flatMap((r) => r.measures), builds[pi]!));
+  perPart.forEach((rows, pi) => carryToPrevBarline(rows.flatMap((r) => r.measures), builds[pi]!, song.time));
   // MusicXML 来源的渐强渐弱只有 direction（`Mark` 在写出时才投成 direction，读回不还原）：按起止配成 Mark
   const hasWedgeMarks = song.marks.some((m) => m.type === "wedge");
   const wedgeMarks = builds.map((rows) => (hasWedgeMarks ? [] : directionWedgeMarks(rows)));
