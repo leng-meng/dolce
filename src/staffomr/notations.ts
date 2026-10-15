@@ -220,8 +220,13 @@ export function findTuplets(pg: SPage, beams: BeamShape[], stems: StemInfo[], no
 /** 三连音是「n 个音占 n-1 个音的时值」（3:2、6:4），按 musicxml 的惯例取最近的二次幂。 */
 export function applyTuplet(marked: Iterable<StaffNote>, n: number): void {
   const normal = n === 3 ? 2 : n === 6 ? 4 : n === 5 ? 4 : n === 7 ? 4 : n - 1;
-  for (const x of marked) {
-    x.tuplet = { actual: n, normal };
+  const list = [...marked];
+  // 起止落在组里最左、最右的音上；和弦各音 x 差不过半个符头，都算（写出时只写在和弦打头那个音上）
+  const lo = Math.min(...list.map((x) => x.x));
+  const hi = Math.max(...list.map((x) => x.x));
+  for (const x of list) {
+    const half = (x.sym.box.right - x.sym.box.left) / 2;
+    x.tuplet = { actual: n, normal, start: x.x - lo <= half, stop: hi - x.x <= half };
     x.duration = (x.duration * normal) / n;
   }
 }

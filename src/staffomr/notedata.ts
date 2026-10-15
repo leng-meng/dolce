@@ -787,8 +787,9 @@ export interface StaffNote {
   wedgeStart?: "crescendo" | "diminuendo";
   /** 松叶到这个音符**止**（`<wedge type="stop">`）。 */
   wedgeStop?: boolean;
-  /** 连音（三连音之类）：`actual` 个音占 `normal` 个音的时值。 */
-  tuplet?: { actual: number; normal: number };
+  /** 连音（三连音之类）：`actual` 个音占 `normal` 个音的时值。`start` / `stop`：这一组最左、最右的那个音（和弦各音都记），
+   *  MusicXML 的 `<tuplet>` 只在这两处写起止（`applyTuplet`）。 */
+  tuplet?: { actual: number; normal: number; start?: boolean; stop?: boolean };
   /**
    * **斜杠符头**（`noteheadSlash*`）：不是有音高的音符，而是「照这个节奏弹和弦」的记号。
    *

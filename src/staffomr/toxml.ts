@@ -375,7 +375,9 @@ function noteXmlRaw(n: StaffNote, dur: number, staffNo = 0, withVoice = false, v
   const slurPl = n.slurAbove === undefined ? "" : ` placement="${n.slurAbove ? "above" : "below"}"`;
   if (n.slurStart)
     for (const id of arcs(n.slurStartIds)) nots.push(`<slur type="start" number="${slurNo}"${arcAttr(id)}${n.slurDashed ? ` line-type="dashed"` : ""}${slurPl}/>`);
-  if (n.tuplet) nots.push(`<tuplet type="start"/>`);
+  // 连音组只在头尾两个音上写起止（和弦写在打头那个音上）；读入端按起止配对，只有 start 的会一路顶掉、整组丢
+  if (n.tuplet?.start && !n.chordExtra) nots.push(`<tuplet type="start"/>`);
+  if (n.tuplet?.stop && !n.chordExtra) nots.push(`<tuplet type="stop"/>`);
   // `<notations>` 里子元素有固定次序：tied / slur / tuplet / ornaments / articulations / fermata / arpeggiate
   const arts: string[] = [];
   const orns: string[] = [];
