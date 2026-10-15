@@ -267,6 +267,9 @@ export interface PlacedWord {
   note: StaffNote;
 }
 
+/** 页脚注的字样：脚注号 `*` 打头、「page 43」、版权、`Words:` / `Tune;`（OCR 常把冒号读成分号）、生卒年 */
+const FOOTNOTE_RE = /^\s*[*＊]|\bpage\s*\d|copyright|©|\b(?:words|tune|music)\s*[:;]|\d{4}\s*[-–—]\s*\d{4}/i;
+
 /**
  * 把缓存里的字行归位：定谱行（离哪行近）、定音符（字行左端右边最近的那个音）、落到 `StaffNote.words` / `metronome` 上。
  * 读出来的力度不在这里挂，交回去（`dynamics`）由调用方按力度那一路的判据补。
@@ -336,6 +339,8 @@ export function attachWordLines(
       continue;
     }
     if (skip.some((q) => inside(q, cx, cy))) continue;
+    // 页脚注不是文字指示（望十架 p1 末系统下「*Flute part is on page 43」挂成了钢琴上的文字）
+    if (FOOTNOTE_RE.test(text)) continue;
     if (chordPage) {
       // 和弦后面跟着文字的（`G7 cresc.`）：前头的和弦摘走，剩下的照文字走
       const toks = text.split(/\s+/).filter(Boolean);
@@ -395,9 +400,10 @@ export function attachWordLines(
     // 速度文字与节拍器同一行的（`Andante ♩=76`）写进同一个 `<direction>`（见 `staffomr/textanalyze.ts::attachDirectionTexts`）
     if (metro && isWord && text) {
       note.tempoText = text;
+      note.tempoSize = pg.inkTextSize?.(box, text) || box.h;
       words.push({ text, above, box, note });
     } else if (isWord && text) {
-      (note.words ??= []).push({ text, above });
+      (note.words ??= []).push({ text, above, size: pg.inkTextSize?.(box, text) || box.h });
       words.push({ text, above, box, note });
     }
   }

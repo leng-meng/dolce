@@ -80,6 +80,8 @@ export interface WordLine {
   y: number;
   w: number;
   h: number;
+  /** 字号（页面单位）：矢量路文字层给得出真实字号；位图路没有，按有效字高估（`headerCredits`） */
+  size?: number;
 }
 
 /** 页眉里值得留的行：有汉字，或有两个以上拉丁字母，或是生卒年（署名下一行单印的「1795-1848」）；页码、噪点、单个字母不要。 */
@@ -93,6 +95,8 @@ export interface HeaderCredit {
   type?: "title" | "subtitle" | "composer" | "lyricist" | "rights";
   justify: "left" | "center" | "right";
   box: Rect;
+  /** 字号（页面单位，位图路是有效字高、要乘 `SPage.textEm`） */
+  size: number;
 }
 
 /**
@@ -135,7 +139,8 @@ export function headerCredits(lines: readonly WordLine[], strip: { box: Rect }):
                 ? "lyricist"
                 : "composer";
     const box = { x: strip.box.x + l.x, y: strip.box.y + l.y, w: l.w, h: l.h };
-    return splitHeaderText(l.t).map((text) => ({ text, type, justify, box }));
+    const size = l.size ?? effH(l);
+    return splitHeaderText(l.t).map((text) => ({ text, type, justify, box, size }));
   });
 }
 /** 版权声明（「copyright: public domain …」「© 1923 …」「版权所有」）：`<credit-type>rights</credit-type>`。 */

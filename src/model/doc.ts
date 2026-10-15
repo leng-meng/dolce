@@ -269,6 +269,8 @@ export interface Harmony {
   degrees?: { value: number; alter: number; type: "add" | "alter" | "subtract" }[];
   /** 整段和弦只有文字、解析不出结构时的原文兜底（识别结果常是这种） */
   text?: string;
+  /** [五线谱] 字号（pt，`<root-step font-size>`；识别结果照原谱量的） */
+  fontSize?: number;
   /** `<offset>`：相对所修饰音符起点的 divisions（增时线上的和弦由 `xmlproject.ts` 填） */
   offset?: number;
   /** [五线谱] `<kind use-symbols>` / `<kind parentheses-degrees>` */

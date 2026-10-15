@@ -265,6 +265,8 @@ function readHarmony(el: Element): Harmony {
     kind: kindEl?.textContent ?? "",
   };
   if (rootEl && alterLeft(rootEl, "root-alter")) h.root.alterLeft = true;
+  const fs = rootEl ? attrNum(child(rootEl, "root-step") ?? rootEl, "font-size") : undefined;
+  if (fs !== undefined && fs > 0) h.fontSize = fs;
   const kt = kindEl?.getAttribute("text");
   // `text=""` 是「不印 kind 后缀」，与缺省不同（混排按 null / "" 分），空串也要留
   if (kt !== null && kt !== undefined) h.kindText = kt;

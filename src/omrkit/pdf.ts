@@ -38,13 +38,19 @@ export async function pageImageObj(page: any, arg: unknown): Promise<any> {
 /** 本页面积最大的一张图：`area(obj)` 给出可用图对象的面积，不可用返回 null；面积相同取先画的。没有返回 null。 */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function largestPageImage(page: any, OPS: any, area: (obj: any) => number | null): Promise<any> {
+  return (await largestPageImageAt(page, OPS, area))?.obj ?? null;
+}
+
+/** 同 `largestPageImage`，连同画它时的变换矩阵（图的单位正方形 → 页面用户空间，PDF 点、y 向上）。 */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function largestPageImageAt(page: any, OPS: any, area: (obj: any) => number | null): Promise<{ obj: any; ctm: Mat } | null> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let best: { obj: any; area: number } | null = null;
-  for (const { arg } of await pageImageOps(page, OPS)) {
+  let best: { obj: any; ctm: Mat; area: number } | null = null;
+  for (const { arg, ctm } of await pageImageOps(page, OPS)) {
     const obj = await pageImageObj(page, arg);
     const a = obj ? area(obj) : null;
     if (a === null) continue;
-    if (!best || a > best.area) best = { obj, area: a };
+    if (!best || a > best.area) best = { obj, ctm, area: a };
   }
-  return best?.obj ?? null;
+  return best ? { obj: best.obj, ctm: best.ctm } : null;
 }

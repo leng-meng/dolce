@@ -130,7 +130,7 @@ export function vectorPageCredits(pg: SPage): HeaderCredit[] {
   const SKIP = ["Lyric", "Tempo", "Instrument", "Expression", "MeasureNumber"] as const;
   const objs = pg.objs.filter((o) => o.run && !o.symbols.length && !SKIP.some((t) => o.hasTag(t)) && o.box.bottom <= top - sp);
   // 拼行：纵向中线相差不到半个字高、横向间隙不到一个字高
-  const lines: { t: string; box: { left: number; right: number; top: number; bottom: number } }[] = [];
+  const lines: { t: string; box: { left: number; right: number; top: number; bottom: number }; size: number }[] = [];
   for (const o of [...objs].sort((a, b) => a.box.left - b.box.left)) {
     const s = o.run!.glyphs.map((g) => g.unicode).join("");
     if (!s.trim()) continue;
@@ -139,13 +139,14 @@ export function vectorPageCredits(pg: SPage): HeaderCredit[] {
     const l = lines.find((q) => Math.abs((q.box.top + q.box.bottom) / 2 - cy) <= h * 0.5 && o.box.left - q.box.right <= h && o.box.left >= q.box.left);
     if (l) {
       l.t += s;
+      l.size = Math.max(l.size, o.run!.sizeDev);
       l.box = { left: l.box.left, right: Math.max(l.box.right, o.box.right), top: Math.min(l.box.top, o.box.top), bottom: Math.max(l.box.bottom, o.box.bottom) };
-    } else lines.push({ t: s, box: { ...o.box } });
+    } else lines.push({ t: s, box: { ...o.box }, size: o.run!.sizeDev });
   }
   // ToUnicode 常把汉字映到**康熙部首 / 部首补充**区（「第448⾸」「⽼师」「使⽤」，U+2E80–U+2FDF），只把这一段折回正常汉字（NFKC），
   // 全角括号之类别的字符不动
   const fold = (t: string) => t.replace(/[\u2e80-\u2fdf]/g, (c) => c.normalize("NFKC"));
-  const toLine = (l: (typeof lines)[number], x0: number, y0: number): WordLine => ({ t: fold(l.t).replace(/\s+/g, " ").trim(), x: l.box.left - x0, y: l.box.top - y0, w: l.box.right - l.box.left, h: l.box.bottom - l.box.top });
+  const toLine = (l: (typeof lines)[number], x0: number, y0: number): WordLine => ({ t: fold(l.t).replace(/\s+/g, " ").trim(), x: l.box.left - x0, y: l.box.top - y0, w: l.box.right - l.box.left, h: l.box.bottom - l.box.top, size: l.size });
   const head = lines.filter((l) => l.box.bottom <= top);
   const strip = { w: pg.width, h: top, data: new Uint8Array(0), box: { x: 0, y: 0, w: pg.width, h: top } };
   const out = headerCredits(head.map((l) => toLine(l, 0, 0)), strip);

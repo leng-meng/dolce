@@ -327,7 +327,9 @@ export function liftHarmonies(notes: StaffNote[], sp: number): void {
     }
     if (!top) continue;
     top.chord = n.chord;
+    top.chordSize = n.chordSize;
     n.chord = undefined;
+    n.chordSize = undefined;
   }
 }
 

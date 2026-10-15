@@ -1212,6 +1212,12 @@ function printInput(p: NonNullable<Measure["print"]>): PrintInput {
   };
 }
 
+/** 谱里有源谱真实排出的行：第一声部有带 `<system-layout>` 的 `new-system` / `new-page`（识别结果照原谱写的，`staffomr/toxml.ts::sourceLayout`）。
+ *  简谱视图、123/ABC 写出的换行不带它，那些仍是优选断点。 */
+function hasSourceBreaks(song: Song): boolean {
+  return (song.parts[0]?.measures ?? []).some((m) => m.print && (m.print.newSystem || m.print.newPage) && !!printLayout(m.print)?.systemLayout);
+}
+
 function layoutInputOf(song: Song): LayoutInput {
   return song.parts.map((part) =>
     part.measures.map((m) => ({
@@ -1323,6 +1329,10 @@ export function layoutStaff(doc: ScoreDoc, options: MixedOptions): StaffLayout {
       resized = true;
     }
   }
+  // 谱里给了和弦字号（识别结果照原谱量的）：取中位数，压过样式缺省（同 `<lyric-font>`，曲内覆盖层优先于主题）
+  const harmPt = song.parts.flatMap((p) => p.measures.flatMap((m) => m.elements.flatMap((e) => ("harmony" in e && e.harmony ? [e.harmony, ...("laterHarmonies" in e ? e.laterHarmonies ?? [] : [])] : []))))
+    .map((h) => h.fontSize).filter((v): v is number => !!v).sort((a, b) => a - b);
+  if (harmPt.length) score.options.harmonySize = harmPt[harmPt.length >> 1]!;
   if (options.lyricPt && options.lyricPt > 0) {
     score.defaults.lyricFont = score.defaults.lyricFont.makeWithSize(options.lyricPt / score.scaling);
   }
@@ -1363,6 +1373,7 @@ export function layoutStaff(doc: ScoreDoc, options: MixedOptions): StaffLayout {
 
   // 换了纸，谱里按原纸算好的版面坐标就对不上了：整份按新纸自动铺排
   score.autoLayout = overridePage || resized || !hasEmbeddedLayout(song);
+  score.keepBreaks = score.autoLayout && !overridePage && !resized && hasSourceBreaks(song);
 
   const numMeasures = song.parts[0]?.measures.length ?? 0;
   for (let i = 0; i < numMeasures; i++) {

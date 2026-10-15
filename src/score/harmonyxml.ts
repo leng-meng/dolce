@@ -9,12 +9,14 @@ import { chordStepAlter } from "./harmonyparse";
 const alterOf = (acc: string): number => (acc === "#" || acc === "♯" ? 1 : acc === "b" || acc === "♭" ? -1 : 0);
 
 /** `"C♯m"` → `<harmony>`。解析不出根音就退回 `<direction><words>`（至少把字面留在谱上）。
- *  offset 为**本音符时值内的 divisions 数**：和弦印在两音符之间的拍点上时用它表达，0/缺省即正对。 */
-export function harmonyXml(chord: string, offset = 0): string {
+ *  offset 为**本音符时值内的 divisions 数**：和弦印在两音符之间的拍点上时用它表达，0/缺省即正对。
+ *  `fontSize`（pt）写在 `<root-step font-size>` 上（识别结果照原谱的字号）。 */
+export function harmonyXml(chord: string, offset = 0, fontSize?: number): string {
   const src = chord.trim();
   const root = chordStepAlter(src);
+  const fs = fontSize ? ` font-size="${fontSize}"` : "";
   if (!root) {
-    return `<direction placement="above"><direction-type><words>${escapeXml(chord)}</words>` +
+    return `<direction placement="above"><direction-type><words${fs}>${escapeXml(chord)}</words>` +
       `</direction-type></direction>`;
   }
   let rest = src.slice(root.len);
@@ -25,7 +27,7 @@ export function harmonyXml(chord: string, offset = 0): string {
     rest = rest.slice(0, slash);
   }
   const kind = kindOf(rest);
-  let xml = `<harmony><root><root-step>${root.step}</root-step>` + alterXml("root-alter", root) +
+  let xml = `<harmony><root><root-step${fs}>${root.step}</root-step>` + alterXml("root-alter", root) +
     `</root><kind text="${escapeAttr(rest)}">${kind}</kind>`;
   const b = chordStepAlter(bass);
   if (b) xml += `<bass><bass-step>${b.step}</bass-step>` + alterXml("bass-alter", b) + `</bass>`;

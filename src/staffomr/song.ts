@@ -9,7 +9,7 @@ import type { StaffGlyphLookup } from "./staffglyphs";
 import type { TextGlyphLookup } from "./textglyphs";
 import { recognizeStaffPage, vectorPageCredits } from "./pagerun";
 import { buildScore } from "./score";
-import { scoreToMusicXml } from "./toxml";
+import { pageTextPt, scoreToMusicXml } from "./toxml";
 import type { StaffNote } from "./notedata";
 import type { Staff } from "./model";
 
@@ -110,7 +110,7 @@ export async function recognizeStaffDoc(
   }
   const notesOf = (st: Staff): StaffNote[] => notesByStaff.get(st) ?? [];
   // 页眉页脚只取曲首那一页（同位图路 `rasteromr/song.ts`）
-  const credits = entries.length ? vectorPageCredits(entries[0].page).map(({ text, type, justify }) => ({ text, type, justify })) : [];
+  const credits = entries.length ? vectorPageCredits(entries[0].page).map(({ text, type, justify, size, box }) => ({ text, type, justify, box, size: pageTextPt(entries[0]!.page, size) })) : [];
   const title = opts.title ?? credits.find((c) => c.type === "title")?.text;
   const xmlOpts = { title, credits, ...(opts.noteIds ? { noteId: (n: StaffNote) => n.omrId } : {}) };
   const musicxml = scoreToMusicXml(score, notesOf, xmlOpts);

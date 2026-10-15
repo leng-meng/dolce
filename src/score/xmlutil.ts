@@ -72,6 +72,7 @@ export function workXml(title: string | undefined | null): string {
 export function wrapPartwise(parts: {
   work?: string;
   identification?: string;
+  defaults?: string;
   credits?: string;
   partList: string;
   body: string;
@@ -79,7 +80,7 @@ export function wrapPartwise(parts: {
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE score-partwise PUBLIC "-//Recordare//DTD MusicXML 3.0 Partwise//EN" "http://www.musicxml.org/dtds/partwise.dtd">
 <score-partwise version="3.0">
-${parts.work ?? ""}${parts.identification ?? ""}${parts.credits ?? ""}<part-list>${parts.partList}</part-list>
+${parts.work ?? ""}${parts.identification ?? ""}${parts.defaults ?? ""}${parts.credits ?? ""}<part-list>${parts.partList}</part-list>
 ${parts.body}
 </score-partwise>`;
 }

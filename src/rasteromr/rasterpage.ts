@@ -26,7 +26,7 @@ import { descreenMorph, dropSpecks, fillPinholes, halftoneRatio, pinholeRatio, H
 import { estimateUnit, findStaffLines, groupStaves } from "./staffline";
 import { median } from "../omrkit/geom";
 import { sauvola as sauvolaInto, toGray } from "../omrkit/preprocess";
-import { largestPageImage } from "../omrkit/pdf";
+import { largestPageImageAt } from "../omrkit/pdf";
 
 /** 一页取到的位图，连同它在页面坐标里的位置（识别坐标 ↔ 页面坐标要用）。 */
 export interface RasterPage {
@@ -61,6 +61,8 @@ export interface RasterPage {
   /** 页面尺寸（PDF 点）。 */
   pageWidth: number;
   pageHeight: number;
+  /** 这张图在页面上的位置（PDF 点，左上为原点、y 向下）。写源谱版面时把位图坐标折回页面（`SPage.ptPerUnit` / `originPt`） */
+  imageRect: { x: number; y: number; w: number; h: number };
 }
 
 /** 墨迹占比超过这个数就判定极性反了。整页乐谱实测约一成，留足余量。 */
@@ -72,8 +74,9 @@ const INK_FLIP_RATIO = 0.5;
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function rasterizePage(page: any, OPS: any): Promise<RasterPage | null> {
-  const best = await largestPageImage(page, OPS, (o) => (o.data && o.width && o.height ? o.width * o.height : null));
-  if (!best) return null;
+  const found = await largestPageImageAt(page, OPS, (o) => (o.data && o.width && o.height ? o.width * o.height : null));
+  if (!found) return null;
+  const best = found.obj;
 
   const w: number = best.width;
   const h: number = best.height;
@@ -192,7 +195,7 @@ export async function rasterizePage(page: any, OPS: any): Promise<RasterPage | n
   if (halftone == null) halftone = cleanTexture(bin, false);
 
   const vp = page.getViewport({ scale: 1 });
-  return { bin, kind, halftone: halftone ?? 0, faint, gray, lyricGray, scale: vp.width / bin.w, pageWidth: vp.width, pageHeight: vp.height };
+  return { bin, kind, halftone: halftone ?? 0, faint, gray, lyricGray, scale: vp.width / bin.w, pageWidth: vp.width, pageHeight: vp.height, imageRect: imageRectOf(found.ctm, page.view, vp.width, vp.height) };
 }
 
 /**
@@ -613,3 +616,14 @@ export function binToPgm(bin: Binary): Uint8Array {
 // 重跑歌词与标签缓存之后实测：扫描件音符 54.43% → **53.35%**、音级 56.43% → 55.35%、
 // 歌词 42.91% → 39.01%，只有小节自检 31.00% → 31.58% 略涨。笔画收细了，
 // 但符头也跟着缩，尺寸闸那一头丢的比擦线那一头赚的多。
+
+/** 图的变换矩阵（单位正方形 → 用户空间，y 向上）→ 页面上的矩形（左上为原点、y 向下）。矩阵退化时当整页 */
+function imageRectOf(ctm: readonly number[], view: readonly number[] | undefined, pw: number, ph: number): RasterPage["imageRect"] {
+  const [a, b, c, d, e, f] = ctm as [number, number, number, number, number, number];
+  const xs = [e, a + e, c + e, a + c + e];
+  const ys = [f, b + f, d + f, b + d + f];
+  const x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(...ys), y1 = Math.max(...ys);
+  if (!(x1 - x0 > 1 && y1 - y0 > 1)) return { x: 0, y: 0, w: pw, h: ph };
+  const vx = view?.[0] ?? 0, vTop = view?.[3] ?? ph;
+  return { x: x0 - vx, y: vTop - y1, w: x1 - x0, h: y1 - y0 };
+}

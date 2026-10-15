@@ -74,7 +74,10 @@ function adopt(to: StaffNote, from: StaffNote): void {
     if (to.lyrics?.some((m) => m.verse === l.verse)) continue;
     (to.lyrics ??= []).push(l);
   }
-  if (!to.chord && from.chord) to.chord = from.chord;
+  if (!to.chord && from.chord) {
+    to.chord = from.chord;
+    to.chordSize = from.chordSize;
+  }
 }
 
 const mode = (xs: number[]) => {

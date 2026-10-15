@@ -420,7 +420,7 @@ function harmonyXml(o: Out, h: Harmony, cx: Ctx): void {
   }
   o.open("harmony", posAttrs(cx.layout?.pos.get(h)) + (h.staff !== undefined ? ` staff="${h.staff}"` : ""), surfaceOf(h));
   o.open("root");
-  o.text("root-step", h.root.step);
+  o.text("root-step", h.root.step, h.fontSize ? ` font-size="${h.fontSize}"` : "");
   if (h.root.alter) o.text("root-alter", h.root.alter, h.root.alterLeft ? ' location="left"' : "");
   o.close();
   const kindAttrs =

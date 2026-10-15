@@ -9,7 +9,7 @@ import { Fraction } from "../common/fraction";
 import { Matrix33 } from "../common/geom";
 import { Font } from "../layout/font";
 import { Group, TextFrame } from "../layout/pageitem";
-import { harmonyBand, LCR, StaffLayout, Notation, ScoreCredit, Sys, type MeasureText, type TextBlock } from "./model";
+import { harmonyBand, LCR, SKYLINE_BIN, StaffLayout, Notation, ScoreCredit, Sys, type MeasureText, type TextBlock } from "./model";
 import { drawSystem, endingPlace, harmonyWidthOf } from "./render";
 
 // -----------------------------------------------------------------------
@@ -175,6 +175,10 @@ const TITLE_OFFSET = 170; // hh(150) + 20
 const TITLE_GAP = 30;
 /** 页眉墨迹底到首行谱内容（和弦、高音、符干）顶的最小净空 */
 const HEADER_GAP = 12;
+/** 源谱版面档：上下两个系统按轮廓判碰后至少留的空（tenths，同谱表之间的 `AUTO_STAFF_GAP`）。按整块框比的 `FRAME_GAP` 要松些 */
+const SOURCE_SYSTEM_GAP = 12;
+/** 源谱版面档：没有页眉的页，首个系统最高上探到离纸边这么远（pt，5mm；同识别写出的最小页边距） */
+const SOURCE_MIN_TOP_PT = (5 * 72) / 25.4;
 
 interface FrameItem {
   system: Sys;
@@ -232,6 +236,119 @@ function flowLayout(items: FrameItem[], ph: number): LayoutFrame[] {
   return result;
 }
 
+/** 一个系统的横向轮廓（各可见谱表 `SysStaff.skyline` 并起来）：首谱表顶线为 0、向下为正，`top` 是伸上去的高（正数）、
+ *  `bot` 是伸下去的深；`x0` 是它在版心里起头的那一段（行首缩进不同的系统按版心对齐） */
+function systemSkyline(sys: Sys): { top: number[]; bot: number[]; x0: number } {
+  let top: number[] = [];
+  let bot: number[] = [];
+  sys.staves.forEach((st, k) => {
+    if (!st.staffVisible) return;
+    const sk = st.skyline(sys);
+    const y = sys.ypos(k);
+    if (!top.length) {
+      top = sk.above.map(() => -Infinity);
+      bot = sk.below.map(() => -Infinity);
+    }
+    sk.above.forEach((v, b) => { top[b] = Math.max(top[b]!, v - y); });
+    sk.below.forEach((v, b) => { bot[b] = Math.max(bot[b]!, y + v); });
+  });
+  return { top, bot, x0: Math.round(sys.leftMargin / SKYLINE_BIN) };
+}
+
+/** 上下两个系统首谱表顶线之间至少多远才不相碰：逐段取上系统伸下去的与下系统伸上来的之和，留 `SOURCE_SYSTEM_GAP` */
+function systemGap(a: Sys, b: Sys): number {
+  const pa = systemSkyline(a);
+  const pb = systemSkyline(b);
+  let need = -Infinity;
+  for (let k = 0; k < pa.bot.length; k++) {
+    const j = k + pa.x0 - pb.x0;
+    if (j >= 0 && j < pb.top.length) need = Math.max(need, pa.bot[k]! + pb.top[j]!);
+  }
+  // 横向一段都不重叠（行很短）：按整行最深对最高
+  if (need === -Infinity) need = Math.max(...pa.bot) + Math.max(...pb.top);
+  return need + SOURCE_SYSTEM_GAP;
+}
+
+/**
+ * 源谱版面档（`score.keepBreaks`）的装页：页照原谱分（`score.pages` 由 `new-page` 建），各系统尽量落在原谱的位置
+ * （`sys.distance`：`updateLayoutByPrint` 折好的首谱表顶线离上边距的距离），只在会与上一系统相碰时往下让。
+ * 相碰按**横向轮廓**判（`systemGap`）：原谱上下两个系统是咬合着排的（上一行的低音与下一行的高音错开），拿整块框比
+ * 满页的原谱一页就排不下。
+ * 一页排不下：按比例压**各系统多出不碰距离的那截**（页首那截压到页首能到的最高处）与**系统内各谱表距离多出不碰距离的那截**
+ * （`SysStaff.minDistance`）；压到底仍排不下才把末行挪到下一页，挪下去的行不再有原位，与下一页的行一起照同一规则排。
+ * 上边距是按识别出的墨迹框量的（弧、符杠不在里面），原谱页首那一行的弧与高音常伸进这片地方：
+ * 没有页眉的页，首个系统可以上探到离纸边 `SOURCE_MIN_TOP` 为止。
+ */
+function sourceFlow(score: StaffLayout, items: FrameItem[], ph: number): LayoutFrame[] {
+  const rise = Math.max(0, score.defaults.topMargin - SOURCE_MIN_TOP_PT / score.scaling);
+  const result: LayoutFrame[] = items.map((it) => ({ height: it.height, ypos: 0, newPage: false }));
+  const index = new Map(items.map((it, i) => [it.system, i]));
+  const pages = score.pages.map((pg) => pg.systems.map((sys) => index.get(sys)!).filter((i) => i !== undefined));
+  /** 原位：首谱表顶线离上边距多远；挪过页的没有 */
+  const want = items.map((it) => it.system.distance);
+  const moved = new Set<number>();
+  /** 系统内可压的谱表（首个可见谱表之后的）与各自可压的量 */
+  const slack = (i: number) => items[i]!.system.staves.filter((st, k) => k > 0 && st.staffVisible && st.distance > st.minDistance);
+  const staffExcess = (i: number) => slack(i).reduce((a, st) => a + st.distance - st.minDistance, 0);
+  /** 首谱表顶线最高能到哪（页首：框顶不高过 `lo`，首页还要让开页眉 `musicYOffset`） */
+  const floorOf = (i: number, lo: number) => lo + items[i]!.topY + items[i]!.musicYOffset;
+  const refresh = (i: number) => {
+    const it = items[i]!;
+    const [top, bot] = it.system.getYBound();
+    it.topY = top;
+    it.bottomY = bot;
+    it.height = top - bot + it.musicYOffset;
+    result[i]!.height = it.height;
+  };
+  let carry: number[] = [];
+  for (let p = 0; p < pages.length || carry.length; p++) {
+    const list = [...carry, ...(pages[p] ?? [])];
+    carry = [];
+    if (!list.length) continue;
+    const lo = items[list[0]!]!.credits.length ? 0 : -rise;
+    for (;;) {
+      const gaps = list.map((i, k) => (k === 0 ? 0 : systemGap(items[list[k - 1]!]!.system, items[i]!.system)));
+      // 照原位、只往下让
+      const ls: number[] = [];
+      list.forEach((i, k) => {
+        const floor = k === 0 ? floorOf(i, lo) : ls[k - 1]! + gaps[k]!;
+        ls.push(Math.max(moved.has(i) ? floor : want[i]!, floor));
+      });
+      const lastI = list[list.length - 1]!;
+      const over = ls[ls.length - 1]! - items[lastI]!.bottomY - ph;
+      if (over > 0) {
+        const gapExcess = ls.map((l, k) => l - (k === 0 ? floorOf(list[0]!, lo) : ls[k - 1]! + gaps[k]!));
+        const total = gapExcess.reduce((a, b) => a + b, 0) + list.reduce((a, i) => a + staffExcess(i), 0);
+        if (total < over && list.length > 1) {
+          const last = list.pop()!;
+          moved.add(last);
+          carry.unshift(last);
+          continue;
+        }
+        const keep = total > 0 ? Math.max(0, 1 - over / total) : 0;
+        for (const i of list) {
+          const sts = slack(i);
+          if (!sts.length) continue;
+          for (const st of sts) st.distance = st.minDistance + (st.distance - st.minDistance) * keep;
+          refresh(i);
+        }
+        list.forEach((i, k) => {
+          ls[k] = k === 0
+            ? floorOf(i, lo) + gapExcess[0]! * keep
+            : ls[k - 1]! + systemGap(items[list[k - 1]!]!.system, items[i]!.system) + gapExcess[k]! * keep;
+        });
+      }
+      list.forEach((i, k) => {
+        const it = items[i]!;
+        result[i]!.ypos = ls[k]! - it.topY - it.musicYOffset;
+        result[i]!.newPage = k === 0;
+      });
+      break;
+    }
+  }
+  return result;
+}
+
 interface HeadLine { tf: TextFrame; x: number; y: number; inkTop: number; inkBottom: number }
 
 /** 一页的页眉（credit）逐行排好：落笔点与墨迹上下沿（SVG 自上而下，tenths） */
@@ -266,7 +383,8 @@ function headerLines(
     const justify = cr.justify === LCR.Right ? "right" : cr.justify === LCR.Center ? "center" : "left";
     const role = headerRoleOfCredit(cr.type ?? undefined, justify, maxCreditSize > 0 && cr.fontSize === maxCreditSize);
     const hf = role ? score.options.headerFonts[role] : undefined;
-    const fntSz = hf?.size ? hf.size / score.scaling : cr.fontSize > 0 ? cr.fontSize / score.scaling : 20;
+    // 源谱版面档：页眉的字号是照原图量的（识别结果），以它为准
+    const fntSz = score.keepBreaks && cr.fontSize > 0 ? cr.fontSize / score.scaling : hf?.size ? hf.size / score.scaling : cr.fontSize > 0 ? cr.fontSize / score.scaling : 20;
     const base = new Font(cr.family ?? (cr.fontSize > 0 ? score.defaults.lyricFont.family : "PingFang SC"), fntSz, cr.bold ?? false);
     const font = headerRoleFont(hf, fntSz, base);
     const anchorX = cr.x > 0 ? cr.x : pageWidthTenths / 2;
@@ -373,9 +491,12 @@ export function layoutStaffPages(score: StaffLayout, showJianpuLayer: boolean, j
     // 自动铺排的标题块由 autoLayoutHeader 从上往下堆，词曲行多了会高过缺省的 TITLE_OFFSET：按最低那行让开
     const d = score.defaults;
     const lowest = Math.min(...items[0].credits.map((c) => c.y));
-    let offset = score.autoLayout && items[0].credits.length
-      ? Math.max(TITLE_OFFSET, d.pageHeight - lowest - d.topMargin + TITLE_GAP)
-      : TITLE_OFFSET;
+    // 源谱版面档：首行照原位（`sourceFlow`），这里只管让开页眉墨迹（下面 `HEADER_GAP` 那一条），不留固定的标题高
+    let offset = score.keepBreaks
+      ? 0
+      : score.autoLayout && items[0].credits.length
+        ? Math.max(TITLE_OFFSET, d.pageHeight - lowest - d.topMargin + TITLE_GAP)
+        : TITLE_OFFSET;
     // 带坐标的页眉也不得压到首行（和弦、高音）：页眉墨迹底下留一道空（005 的作曲行压在首行和弦上）
     const heads = headerLines(score, items[0].credits, d.topMargin, d.pageHeight ?? PAGE_HEIGHT_FALLBACK, d.pageWidth ?? 1200);
     if (heads.length) offset = Math.max(offset, Math.max(...heads.map((h) => h.y + h.inkBottom)) - d.topMargin + HEADER_GAP);
@@ -384,7 +505,9 @@ export function layoutStaffPages(score: StaffLayout, showJianpuLayer: boolean, j
   }
   const d = score.defaults;
   let pageHeight = d.pageHeight ?? PAGE_HEIGHT_FALLBACK;
-  const layout = flowLayout(items, score.longImage ? Infinity : pageHeight - d.topMargin - d.bottomMargin);
+  const layout = score.keepBreaks
+    ? sourceFlow(score, items, pageHeight - d.topMargin - d.bottomMargin)
+    : flowLayout(items, score.longImage ? Infinity : pageHeight - d.topMargin - d.bottomMargin);
   if (score.longImage) {
     // 长图：整首一页，页高 = 内容底 + 上下边距。credit 的 y 从页底量，页高变了整体跟着挪，离页顶的距离不变
     const last = layout[layout.length - 1];

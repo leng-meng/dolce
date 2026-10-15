@@ -6,7 +6,7 @@ import { barlineXml, escapeXml, scorePartXml, workXml, wrapPartwise } from "../s
 import { harmonyXml } from "../score/harmonyxml";
 import type { StaffNote } from "./notedata";
 import { clefFor, fifthsAt, timeSignatures, type StaffContext } from "./notedata";
-import { Bar, type Staff } from "./model";
+import { Bar, type SPage, type Staff } from "./model";
 import type { StaffScore } from "./score";
 
 /** 一行谱在一页上的识别结果，拼成一首曲子要按「系统顺序」把这些串起来。 */
@@ -23,12 +23,41 @@ export interface StaffXmlOptions {
   partId?: string;
   /** 给 `<note>` 写 `id`（编辑器的识别对照按它把模型里的音对回源图坐标）；返回 undefined 不写 */
   noteId?: (n: StaffNote) => string | undefined;
-  /** 页眉各条（位图路 OCR 读出的标题、词曲作者），写成曲首页的 `<credit>` */
-  credits?: { text: string; type?: string; justify?: string }[];
+  /** 页眉各条（位图路 OCR 读出的标题、词曲作者），写成曲首页的 `<credit>`；`size` 是字号（pt），
+   *  `box` 是它在首个系统那一页上的位置（页面单位），写源谱版面时折成 `default-x` / `default-y` */
+  credits?: { text: string; type?: string; justify?: string; size?: number; box?: { x: number; y: number; w: number; h: number } }[];
+  /** 写源谱版面（`<defaults>` 的纸与谱表大小、各系统首小节的 `<print>`），缺省写。见 `sourceLayout` */
+  layout?: boolean;
 }
 
 /** 本次写出的 `noteId`（`scoreToMusicXml` 进出时设、清；写出是同步的） */
 let currentNoteId: StaffXmlOptions["noteId"] | null = null;
+
+/** A4 纸宽（pt）：页面尺寸不可信的页（图片）按页宽 = 它折算 */
+const A4_WIDTH_PT = (210 * 72) / 25.4;
+
+/** 页面坐标一个单位合多少 pt：尺寸不可信的页（图片）按页宽 = A4 宽折 */
+function ptPerUnit(pg: SPage): number {
+  return pg.sizeKnown ? pg.ptPerUnit : A4_WIDTH_PT / pg.width;
+}
+
+/** 字号取到半点：识别量出来的高本来就只有这个精度，写多了只是噪声 */
+const roundPt = (pt: number) => Math.round(pt * 2) / 2;
+
+/** 某页上量出来的字号（页面单位）→ pt（取到半点）。页眉各条在 `song.ts` 里先折好 */
+export function pageTextPt(pg: SPage, size: number): number {
+  return roundPt(size * ptPerUnit(pg) * pg.textEm);
+}
+
+/** 记在音符上的字号（页面单位）→ pt；量不到返回 undefined */
+function textPt(n: StaffNote, size: number | undefined): number | undefined {
+  const pg = n.staff?.page;
+  if (!size || !(size > 0) || !pg) return undefined;
+  const pt = pageTextPt(pg, size);
+  return pt > 0 ? pt : undefined;
+}
+
+const fontAttr = (pt: number | undefined) => (pt ? ` font-size="${pt}"` : "");
 
 const TYPE_OF: [number, string][] = [
   [2, "breve"],
@@ -223,23 +252,23 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
         }
       }
       // `<harmony>` 与 `<direction>` 都排在它们所属的 `<note>` **之前**（MusicXML 规定）
-      if (n.chord) body += harmonyXml(n.chord);
+      if (n.chord) body += harmonyXml(n.chord, 0, textPt(n, n.chordSize));
       // 音内换和弦：偏移取整到拍（二分及更长的音按四分、短音按八分），谱面上和弦不会落在拍子中间
       for (const h of n.chordLater ?? []) {
         const grid = n.duration >= 0.5 ? 0.25 : 0.125;
         const off = Math.round((n.duration * h.frac) / grid) * grid;
-        if (off > 0 && off < n.duration) body += harmonyXml(h.text, ticks(off));
+        if (off > 0 && off < n.duration) body += harmonyXml(h.text, ticks(off), textPt(n, h.size));
       }
       // 速度文字与节拍器印在一条上的（`Andante ♩ = c. 76`）合进同一个 `<direction>`：先文字、后节拍器，一个对象
       if (n.metronome || n.tempoText) {
         const m = n.metronome;
         // 文字后面接节拍器时末尾留一个空格（`Andante ♩ = c. 76`），不然排出来文字与音符字形贴在一起
-        const words = n.tempoText ? `<direction-type><words>${escapeXml(m ? `${n.tempoText.trimEnd()} ` : n.tempoText)}</words></direction-type>` : "";
+        const words = n.tempoText ? `<direction-type><words${fontAttr(textPt(n, n.tempoSize))}>${escapeXml(m ? `${n.tempoText.trimEnd()} ` : n.tempoText)}</words></direction-type>` : "";
         const metro = m ? `<direction-type><metronome><beat-unit>${m.unit}</beat-unit><per-minute>${escapeXml(m.text ?? String(m.bpm))}</per-minute></metronome></direction-type>` : "";
         body += `<direction placement="above">${words}${metro}${dirStaff}${m ? `<sound tempo="${m.bpm}"/>` : ""}</direction>`;
       }
       for (const w of n.words ?? [])
-        body += `<direction placement="${w.above ? "above" : "below"}"><direction-type><words>${escapeXml(w.text)}</words></direction-type>${dirStaff}</direction>`;
+        body += `<direction placement="${w.above ? "above" : "below"}"><direction-type><words${fontAttr(textPt(n, w.size))}>${escapeXml(w.text)}</words></direction-type>${dirStaff}</direction>`;
       if (n.dynamic)
         body += `<direction placement="below"><direction-type><dynamics><${n.dynamic}/></dynamics></direction-type>${dirStaff}</direction>`;
       // 松叶：**止排在起之前**——同一个音符上前一条松叶收尾、下一条起头是常事，
@@ -569,6 +598,8 @@ function scoreToMusicXmlRaw(
 
   const partList: string[] = [];
   const bodies: string[] = [];
+  const layout = opts.layout === false ? null : sourceLayout(score);
+  const defaults = (layout?.defaults ?? "") + fontDefaults(score, notesOf);
   score.parts.forEach((part, pi) => {
     const id = `P${pi + 1}`;
     // 方括号分组：组首声部之前起、组尾声部之后收（`<part-group>` 夹在 `<score-part>` 之间，number 按组编）
@@ -599,7 +630,7 @@ function scoreToMusicXmlRaw(
      * 头一个隐藏小节写 `<staff-details print-object="no"/>`，重新露面时写回 `yes`。
      * `sysOfBar` 记 -1：隐藏的系统不算这个声部「出现过」，接跨行弧时跳过它（见 `renumberSlurs`）。
      */
-    const hiddenSystem = (entry: (typeof score.systems)[number]): string => {
+    const hiddenSystem = (entry: (typeof score.systems)[number], si: number): string => {
       const ref = entry.sys.staves.find((st) => st.bars.length);
       if (!ref) return "";
       const barCount = Math.max(...entry.sys.staves.map((st) => st.bars.length));
@@ -649,7 +680,7 @@ function scoreToMusicXmlRaw(
           if (k) notes += `<backup><duration>${dur}</duration></backup>`;
           notes += `<note><rest measure="yes"/><duration>${dur}</duration><voice>${k * 4 + 1}</voice>${nStaves > 1 ? `<staff>${k + 1}</staff>` : ""}</note>`;
         }
-        out += `<measure number="${measureNo}">${attrs ? `<attributes>${attrs}</attributes>` : ""}${notes}</measure>`;
+        out += `<measure number="${measureNo}">${bi === 0 && layout ? layout.print(si, pi) : ""}${attrs ? `<attributes>${attrs}</attributes>` : ""}${notes}</measure>`;
       }
       return out;
     };
@@ -659,7 +690,7 @@ function scoreToMusicXmlRaw(
       const staves = part.scoreStaves.map((ss) => ss.staves[si]);
       const lead = staves.find((x) => x) ?? null;
       if (!lead) {
-        body += hiddenSystem(entry);
+        body += hiddenSystem(entry, si);
         return;
       }
       const barCount = Math.max(...staves.map((st) => st?.bars.length ?? 0));
@@ -708,6 +739,7 @@ function scoreToMusicXmlRaw(
         // 被系统换行劈开的小节的后半截：系统里任一行谱配得上就算（一行认漏了音、凑不满，别的行照样配得上，232 主也爱我歌）
         const splitTail = entry.sys.staves.some((st) => st.bars[bi]?.splitTail);
         body += `<measure number="${measureNo}"${splitTail ? ' implicit="yes"' : ""}>`;
+        if (bi === 0 && layout) body += layout.print(si, pi);
         if (attrs) body += `<attributes>${attrs}</attributes>`;
         if (bar0)
         body += barlineXml("left", {
@@ -750,15 +782,148 @@ function scoreToMusicXmlRaw(
 
   return wrapPartwise({
     work: workXml(opts.title),
-    credits: creditsXml(opts.credits),
+    ...(defaults ? { defaults: `<defaults>${defaults}</defaults>` } : {}),
+    credits: creditsXml(opts.credits, layout),
     partList: partList.join(""),
     body: bodies.join("\n"),
   });
 }
 
+/** 页边距至少这么多（pt，5mm）：墨迹贴边的扫描件量出来的边距是零 */
+const MIN_PAGE_MARGIN_PT = (5 * 72) / 25.4;
+
+/** 源谱版面：`<defaults>` 与各系统首小节的 `<print>`。 */
+interface SourceLayout {
+  /** `<defaults>` 里的 `<scaling>` 与 `<page-layout>` */
+  defaults: string;
+  /** 首个系统那一页上的一个框 → credit 的落点（tenths：`default-x` 按对齐取左缘 / 中线 / 右缘，`default-y` 是框底离页底） */
+  creditPos(box: { x: number; y: number; w: number; h: number }, justify?: string): { x: number; y: number };
+  /** 第 `si` 个系统、第 `pi` 个声部首小节的 `<print>` */
+  print(si: number, pi: number): string;
+}
+
+/**
+ * **识别结果照原谱的分行、分页、纸张与谱表大小排**（排版端见 `mixed/layoutpass.ts` 的源谱版面档）：
+ * scaling 取全曲谱表高的中位数（tenths 40 = 谱表高）；纸取首页，左右边距取各系统谱表左右缘的最外值，
+ * 上边距取各页墨迹顶的最小值、下边距取最小值；每个系统首小节写 `new-system` / `new-page`、系统左右缩进、
+ * 离上一系统（页首：离上边距）与各谱表离上一谱表的距离。横向与纵向的实际间距仍由引擎自己算、只撑不压。
+ * `<system-layout>` 只写在第一声部：排版端认它当「源谱真实排出的行」（与简谱视图写出的优选断点区分）。
+ */
+function sourceLayout(score: StaffScore): SourceLayout | null {
+  if (!score.systems.length) return null;
+  // 页面坐标 → 点：尺寸不可信的页（图片）按页宽 = A4 宽折，原点 0
+  const ppu = ptPerUnit;
+  const ox = (pg: SPage) => (pg.sizeKnown ? pg.originPt.x : 0);
+  const oy = (pg: SPage) => (pg.sizeKnown ? pg.originPt.y : 0);
+  const X = (pg: SPage, x: number) => ox(pg) + x * ppu(pg);
+  const Y = (pg: SPage, y: number) => oy(pg) + y * ppu(pg);
+  const pageW = (pg: SPage) => (pg.sizeKnown && pg.sizePt ? pg.sizePt.w : pg.width * ppu(pg));
+  const pageH = (pg: SPage) => (pg.sizeKnown && pg.sizePt ? pg.sizePt.h : pg.height * ppu(pg));
+  const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[xs.length >> 1]!;
+  const heights = score.systems.flatMap(({ page, sys }) =>
+    sys.staves.filter((st) => st.lineYs.length === 5 && st.box.bottom > st.box.top).map((st) => (st.box.bottom - st.box.top) * ppu(page)),
+  );
+  if (!heights.length) return null;
+  const staffPt = median(heights);
+  const t = (pt: number) => Math.round((pt * 40) / staffPt);
+  const first = score.systems[0]!.page;
+
+  const ordered = score.systems.map(({ sys }) => [...sys.staves].sort((a, b) => a.box.top - b.box.top));
+  // 引擎按声部次序自上而下叠谱表（声部次序是识别定的，未必与原图上下一致）：谱表距离按这个次序取「上一谱表」，
+  // 与原图上下颠倒的（量出负数）用本谱相邻谱表距离的中位数
+  const drawOrder = score.systems.map((_, si) =>
+    score.parts.flatMap((part) => part.scoreStaves.map((ss) => ss.staves[si]).filter((st): st is Staff => !!st)),
+  );
+  const gaps = score.systems.flatMap(({ page }, si) =>
+    ordered[si]!.slice(1).map((st, k) => (st.box.top - ordered[si]![k]!.box.bottom) * ppu(page)),
+  ).filter((g) => g > 0);
+  const typicalGap = gaps.length ? median(gaps) : staffPt * 2;
+  const sysL = score.systems.map(({ page }, si) => X(page, Math.min(...ordered[si]!.map((st) => st.box.left))));
+  const sysR = score.systems.map(({ page }, si) => X(page, Math.max(...ordered[si]!.map((st) => st.box.right))));
+  const left = Math.max(0, Math.min(...sysL));
+  const right = Math.max(0, Math.min(...score.systems.map(({ page }, si) => pageW(page) - sysR[si]!)));
+  // 上边距：各页墨迹顶的最小值。下边距一律取最小值：末行的歌词本就印在最低谱表线以下，
+  // 识别侧没有可靠的歌词墨迹框，量「最低谱表线到页底」会把末行的歌词当成出界（引擎不画页脚，用不着那片地方）
+  const inkTops: number[] = [];
+  for (const pg of new Set(score.systems.map((e) => e.page))) {
+    const ys = [...pg.objs.map((o) => o.box.top), ...pg.staves.map((st) => st.box.top)];
+    if (ys.length) inkTops.push(Y(pg, Math.min(...ys)));
+  }
+  const top = Math.max(MIN_PAGE_MARGIN_PT, inkTops.length ? Math.min(...inkTops) : 0);
+  const bottom = MIN_PAGE_MARGIN_PT;
+  const mm = Math.round(((staffPt * 25.4) / 72) * 100) / 100;
+  const defaults =
+    `<scaling><millimeters>${mm}</millimeters><tenths>40</tenths></scaling>` +
+    `<page-layout><page-height>${t(pageH(first))}</page-height><page-width>${t(pageW(first))}</page-width>` +
+    `<page-margins type="both"><left-margin>${t(left)}</left-margin><right-margin>${t(right)}</right-margin>` +
+    `<top-margin>${t(top)}</top-margin><bottom-margin>${t(bottom)}</bottom-margin></page-margins></page-layout>`;
+
+  return {
+    defaults,
+    creditPos(box, justify) {
+      const x = justify === "right" ? box.x + box.w : justify === "center" ? box.x + box.w / 2 : box.x;
+      return { x: t(X(first, x)), y: t(pageH(first) - Y(first, box.y + box.h)) };
+    },
+    print(si, pi) {
+      const e = score.systems[si]!;
+      const k = ppu(e.page);
+      const prev = si > 0 ? score.systems[si - 1]! : null;
+      const pageStart = !prev || prev.page !== e.page;
+      const attr = !prev ? "" : pageStart ? ' new-page="yes"' : ' new-system="yes"';
+      const staves = ordered[si]!;
+      let xml = "";
+      if (pi === 0) {
+        const lm = t(sysL[si]! - left);
+        const rm = t(pageW(e.page) - right - sysR[si]!);
+        const dist = pageStart
+          ? `<top-system-distance>${t(Y(e.page, staves[0]!.box.top) - top)}</top-system-distance>`
+          : `<system-distance>${t((staves[0]!.box.top - Math.max(...ordered[si - 1]!.map((st) => st.box.bottom))) * k)}</system-distance>`;
+        xml += `<system-layout><system-margins><left-margin>${Math.max(0, lm)}</left-margin><right-margin>${Math.max(0, rm)}</right-margin></system-margins>${dist}</system-layout>`;
+      }
+      const inOrder = drawOrder[si]!;
+      score.parts[pi]!.scoreStaves.forEach((ss, n) => {
+        const st = ss.staves[si];
+        const at = st ? inOrder.indexOf(st) : -1;
+        if (at <= 0) return;
+        const gap = st!.box.top - inOrder[at - 1]!.box.bottom;
+        xml += `<staff-layout number="${n + 1}"><staff-distance>${t(gap > 0 ? gap * k : typicalGap)}</staff-distance></staff-layout>`;
+      });
+      return `<print${attr}>${xml}</print>`;
+    },
+  };
+}
+
+/**
+ * 歌词与文字指示的字号：全曲各字量出来的字号取中位数，写成 `<word-font>` / `<lyric-font>`（逐字写会把量的噪声也带进去；
+ * 文字指示另在各自的 `<words font-size>` 上写，速度记号常比表情记号大）。
+ */
+function fontDefaults(score: StaffScore, notesOf: (staff: Staff) => StaffNote[]): string {
+  const lyric: number[] = [];
+  const word: number[] = [];
+  for (const { sys } of score.systems)
+    for (const st of sys.staves)
+      for (const n of notesOf(st)) {
+        for (const l of n.lyrics ?? []) {
+          const pt = textPt(n, l.size);
+          if (pt) lyric.push(pt);
+        }
+        for (const w of n.words ?? []) {
+          const pt = textPt(n, w.size);
+          if (pt) word.push(pt);
+        }
+      }
+  const median = (xs: number[]) => [...xs].sort((a, b) => a - b)[xs.length >> 1]!;
+  return (word.length ? `<word-font font-size="${median(word)}"/>` : "") + (lyric.length ? `<lyric-font font-size="${median(lyric)}"/>` : "");
+}
+
 /** 页眉 → `<credit page="1">`，一条一个。 */
-function creditsXml(credits: StaffXmlOptions["credits"]): string {
+function creditsXml(credits: StaffXmlOptions["credits"], layout?: SourceLayout | null): string {
   return (credits ?? [])
-    .map((c) => `<credit page="1">${c.type ? `<credit-type>${escapeXml(c.type)}</credit-type>` : ""}<credit-words${c.justify ? ` justify="${c.justify}"` : ""}>${escapeXml(c.text)}</credit-words></credit>`)
+    .map((c) => {
+      // 写源谱版面时照原图的位置（框底对齐：OCR 的框底比字的基线更稳）
+      const pos = layout && c.box ? layout.creditPos(c.box, c.justify) : null;
+      const at = pos ? ` default-x="${pos.x}" default-y="${pos.y}" valign="bottom"` : "";
+      return `<credit page="1">${c.type ? `<credit-type>${escapeXml(c.type)}</credit-type>` : ""}<credit-words${at}${c.justify ? ` justify="${c.justify}"` : ""}${fontAttr(c.size ? roundPt(c.size) : undefined)}>${escapeXml(c.text)}</credit-words></credit>`;
+    })
     .join("");
 }

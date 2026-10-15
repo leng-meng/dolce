@@ -2452,6 +2452,9 @@ function cubicMinY(p0: number, p1: number, p2: number, p3: number): number {
 }
 
 /** 和弦符号画出来的上下沿，相对 `HarmonyLayout.y`（向上为正）：`drawHarmony` 把基线放在 `y − descent`。 */
+/** 谱表横向轮廓的分段宽（tenths，约一个符头） */
+export const SKYLINE_BIN = 8;
+
 export function harmonyBand(score: StaffLayout): [number, number] {
   const eng = score.options;
   const m = new Font(eng.wordFont, eng.harmonySize / score.scaling).metrics;
@@ -2466,6 +2469,8 @@ function cubicMaxY(p0: number, p1: number, p2: number, p3: number): number {
 export class SysStaff {
   partStaff: PartStaff;
   distance = 0;
+  /** 与上一可见谱表不相碰的最小距离（自动铺排 `layoutpass.ts::autoStaffDistances` 量的）；源谱版面档一页排不下时压到它为止 */
+  minDistance = 0;
   staffLines = 5;
   staffScale = 1;
   staffVisible = true;
@@ -2645,11 +2650,14 @@ export class SysStaff {
       ...pt.tied.filter((t) => t.startNote?.staff === sub).map((t) => tiedEnds(sys, eng, t, Notation.Normal)),
       ...pt.slurs.filter((sl) => sl.startNote?.staff === sub).map((sl) => slurEnds(sys, eng, sl, Notation.Normal)),
     ];
+    // 弧的坐标按声部第一谱表量（`slurTiedPos` 加了 `staffY`）：第二谱表起要折回本谱表（钢琴低音谱表的弧从前被当成在谱表下方
+    // 一整个谱表距离处，谱表间距撑开两三倍）
+    const off = sub ? pt.measures[sys.firstMeasure]?.staffY(sub) ?? 0 : 0;
     for (const e of arcs) {
       if (!e) continue;
       const [a, b] = arcExtent(e);
-      if (e.above) top = Math.min(top, a - 2);
-      else bot = Math.max(bot, b + 2);
+      if (e.above) top = Math.min(top, a - off - 2);
+      else bot = Math.max(bot, b - off + 2);
     }
     const fsScale = eng.musicFont.size / 40;
     for (const t of pt.tuplets) {
@@ -2661,6 +2669,100 @@ export class SysStaff {
       else bot = Math.max(bot, (ly + ry) / 2 + half);
     }
     return [top, bot];
+  }
+
+  /**
+   * 本谱表在这一行的**横向轮廓**：按 `SKYLINE_BIN` 宽分段，每段记墨迹伸到谱表顶线以上多高（`above`，≥0）、
+   * 以下多深（`below`，≥ 谱表高）。源谱版面档定谱表距离用（`layoutpass.ts::autoStaffDistances`）：上一行的低音与
+   * 下一行的高音错开在不同 x 上时（钢琴右手朝下的符干、左手的高音），整行最低点对整行最高点要白白多留一大截。
+   * 认的东西与 `getYBound` / `autoExtent` 同一份；横向位置拿不准的（文字指示、和弦）按所在小节整宽算。
+   */
+  skyline(sys: Sys): { above: number[]; below: number[] } {
+    const eng = sys.score.options;
+    const pt = this.part();
+    const sub = this.partStaff.subIndex;
+    const four = new Fraction(4);
+    const width = sys.measures.reduce((a, m) => a + m.width, 0);
+    const n = Math.max(1, Math.ceil(width / SKYLINE_BIN));
+    const above = new Array<number>(n).fill(0);
+    const below = new Array<number>(n).fill(this.height());
+    // y 为 cy 口径（向下为正、顶线 0）
+    const put = (x0: number, x1: number, top: number, bot: number) => {
+      const b0 = Math.max(0, Math.floor(x0 / SKYLINE_BIN));
+      const b1 = Math.min(n - 1, Math.floor(x1 / SKYLINE_BIN));
+      for (let b = b0; b <= b1; b++) {
+        above[b] = Math.max(above[b]!, -top);
+        below[b] = Math.max(below[b]!, bot);
+      }
+    };
+    const band = harmonyBand(sys.score)[0];
+    const meta = eng.meta;
+    for (const mif of sys.measures) {
+      const md = pt.measures[mif.index];
+      if (!md) continue;
+      const x0 = mif.xpos();
+      const x1 = x0 + mif.width;
+      for (const ch of md.chords) {
+        if (ch.rest || ch.notes[0]?.staff !== sub) continue;
+        let hi = Infinity;
+        let lo = -Infinity;
+        for (const nt of ch.notes) {
+          hi = Math.min(hi, nt.cy() - 6);
+          lo = Math.max(lo, nt.cy() + 6);
+        }
+        if (fLt(ch.noteType, four)) {
+          if (ch.stemUp) hi = Math.min(hi, ch.tailY(true));
+          else lo = Math.max(lo, ch.tailY(false));
+        }
+        if (ch.hasNotation(true)) hi -= 20;
+        if (ch.hasNotation(false)) lo += 20;
+        const x = x0 + ch.notes[0]!.x;
+        // 临时记号在符头左边，符尾在右边：左让一个半符头、右让一个
+        put(x - 18, x + 14, hi, lo);
+      }
+      for (const lrc of md.lyrics) {
+        if (lrc.staff !== sub || lrc.x < 0) continue;
+        const cx = x0 + lrc.x + lrc.xOffset;
+        put(cx - lrc.width / 2 - 2, cx + lrc.width / 2 + 2, 40, -lrc.y + 10);
+      }
+      for (const t of md.textBlocks) {
+        if (t.staff !== sub) continue;
+        const h = tightLineHeights(t, meta, eng.musicFont.size, eng.textLineHeightBySize);
+        if (!h.length) continue;
+        const hh = h.reduce((a, b) => a + b, 0);
+        // 文字块的横坐标：`updateDataXPos` 之前是相对拍位的偏移，之后已加上拍位
+        const tx = x0 + t.x + (t.relative && !sys.score.dataXPlaced ? mif.getEntPos(t.offset) : 0);
+        put(tx - 2, tx + t.width() + 2, -(t.y + h[0]!), -(t.y - hh));
+      }
+      for (const h of md.harmonies) put(x0, x1, -(h.y + band), 40);
+    }
+    const off = sub ? pt.measures[sys.firstMeasure]?.staffY(sub) ?? 0 : 0;
+    const arcs = [
+      ...pt.tied.filter((t) => t.startNote?.staff === sub).map((t) => tiedEnds(sys, eng, t, Notation.Normal)),
+      // 跨谱表的弧（两端不在同一谱表：钢琴左手琶音连进右手谱表）两端跟着谱表走，不是谱表之间要让开的东西
+      ...pt.slurs.filter((sl) => sl.startNote?.staff === sub && (!sl.endNote || sl.endNote.staff === sub)).map((sl) => slurEnds(sys, eng, sl, Notation.Normal)),
+    ];
+    for (const e of arcs) {
+      if (!e) continue;
+      const [a, b] = arcExtent(e);
+      put(Math.min(e.plx, e.prx), Math.max(e.plx, e.prx), e.above ? a - off - 2 : 40, e.above ? 0 : b - off + 2);
+    }
+    for (const w of pt.wedges) {
+      if (w.staff !== sub || (!sys.contains(w.startTick) && !sys.contains(w.endTick))) continue;
+      const xs = sys.measures.filter((m) => m === w.startMeasure || m === w.endMeasure || (fGt(m.offset, w.startTick) && fLt(m.offset, w.endTick)));
+      if (!xs.length) continue;
+      put(xs[0]!.xpos(), xs[xs.length - 1]!.xpos() + xs[xs.length - 1]!.width, w.ypos - 9.5, w.ypos + 9.5);
+    }
+    const fsScale = eng.musicFont.size / 40;
+    for (const t of pt.tuplets) {
+      if (t.startNote?.staff !== sub || !sys.contains(t.startTick) || !sys.contains(t.endTick)) continue;
+      const [ly, ry] = t.staffEnds();
+      const g0 = Tuplet.makeNumber(t.timeModification.denominator)[0] ?? "";
+      const half = (smuflTop(eng.meta, g0) - smuflBottom(eng.meta, g0)) * fsScale / 2 + 2;
+      const y = (ly + ry) / 2;
+      put(0, width, t.above ? y - half : 40, t.above ? 0 : y + half);
+    }
+    return { above, below };
   }
 
   /** SysStaff::getYBound（model.cpp:2745）。返回 [top, bot]（top 为上方延伸量，向上为正）。
@@ -3119,11 +3221,18 @@ export class StaffLayout {
   credits: ScoreCredit[] = [];
   /** 原谱不带版面坐标、由 `layoutpass.ts` 自动铺排（文本格式派生、识别出的）。纵向避让那几条只对它开 */
   autoLayout = false;
+  /**
+   * 自动铺排但**照原谱分行分页**（识别结果：谱里有带 `<system-layout>` 的 `new-system` / `new-page`，纸与谱表大小没被设置换掉）。
+   * 横向、纵向间距仍自动算，只是行与页不重排（`layoutpass.ts` 源谱版面档、`staffpages.ts::sourceFlow`）。
+   */
+  keepBreaks = false;
   /** 没写朝向的圆滑线、没有多声部/和弦可依的延音线一律画在音符上方（让开下面的歌词）：自动铺排的谱，以及本应用导出的谱
    *  （读回来要与导出前一样）。别的谱照 musicpp：圆滑线缺省在下、延音线与符干反向。 */
   get arcsAbove(): boolean {
     return this.autoLayout || this.encoder === Encoder.Dolce;
   }
+  /** `layoutpass.ts::updateDataXPos` 跑过了（文字块的 x 已加上拍位） */
+  dataXPlaced = false;
   /** 长图：不分页，页高由内容定（排版时 `defaults.pageHeight` 只是名义值，装页后 `painter.ts` 换成实际高） */
   longImage = false;
 

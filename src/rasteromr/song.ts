@@ -14,7 +14,7 @@ import type { Rect } from "../omrkit/types";
 import { markSplitBars } from "../staffomr/notedata";
 import { buildScore } from "../staffomr/score";
 import type { StaffReviewResult, StaffReviewStats } from "../staffomr/review";
-import { scoreToMusicXml } from "../staffomr/toxml";
+import { pageTextPt, scoreToMusicXml } from "../staffomr/toxml";
 import type { SPage, Staff } from "../staffomr/model";
 import type { LyricLine } from "../staffomr/textanalyze";
 import type { StaffNote } from "../staffomr/notedata";
@@ -74,6 +74,7 @@ export async function recognizeRasterSong(
   let done = 0;
   /** 曲首页（第一页有谱的）的页眉 */
   let header: HeaderCredit[] | null = null;
+  let headerPage: SPage | null = null;
   /** 整页文字框：离线给的缓存，在线识别时逐页现检补进来 */
   const pageTexts = opts.pageTexts ?? new Map<string, Rect[]>();
   for (const [si, { pdf, OPS }] of sources.entries()) {
@@ -88,7 +89,10 @@ export async function recognizeRasterSong(
         carryTime = r.carryTime;
         carryKey = r.carryKey;
         if (r.hasStaff) {
-          if (wantHeader) header = r.header;
+          if (wantHeader) {
+            header = r.header;
+            headerPage = r.page;
+          }
           // 页眉带近乎半页像素，读完就不留
           r.headerStrips = [];
           stats.pages++;
@@ -139,7 +143,7 @@ export async function recognizeRasterSong(
   // 拉丁段挪到全曲中文段后面（页内先占位，见 `lyricpost.ts::settleLyricVerses`）
   settleLyricVerses([...notesByStaff.values()].flat());
   let score = buildScore(entries, { lyricsBelow });
-  const credits = (header ?? []).map(({ text, type, justify }) => ({ text, type, justify }));
+  const credits = (header ?? []).map(({ text, type, justify, size, box }) => ({ text, type, justify, box, ...(headerPage ? { size: pageTextPt(headerPage, size) } : {}) }));
   // 没给标题（编辑器里打开的图、PDF）就拿页眉的头一个标题
   const title = opts.title ?? credits.find((c) => c.type === "title")?.text;
   const xml = scoreToMusicXml(score, notesOf, { title, credits, ...(noteId ? { noteId } : {}) });

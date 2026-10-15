@@ -718,6 +718,58 @@ export function stripWithout(strip: LyricStrip, spans: [number, number][]): Lyri
   return { ...strip, cells: strip.cells.filter((c) => !spans.some(([a, b]) => (c.x0 + c.x1) / 2 >= a - pad && (c.x0 + c.x1) / 2 <= b + pad)) };
 }
 
+/** 字母之间的缝不到这么多（字高的倍数）就并成一个词块 */
+const LAYOUT_LETTER_GAP = 0.25;
+/** 词块窄于这么多（字高）的不算词（连字符、标点） */
+const LAYOUT_MIN_WORD = 0.5;
+/** 词距中位数不到这么多（字高）是排印词距（成段的文字）；到 `LAYOUT_LYRIC_GAP` 以上是按音符拉开的 */
+const LAYOUT_PROSE_GAP = 0.7;
+const LAYOUT_LYRIC_GAP = 0.9;
+/** 对得上音的词块占这么多以上算「对齐音符」 */
+const LAYOUT_ALIGN_MIN = 0.5;
+/** 判得了的最少词块数 */
+const LAYOUT_MIN_WORDS = 3;
+
+/**
+ * 一行拉丁字**按排法**是歌词还是文字：歌词是逐音节排在音符下面的——音节之间按音符拉开（词距宽、长短不一），
+ * 每个音节中心贴着一个音、底下只罩着一两个音；成段的文字（脚注、版权、说明）是排印词距，词块中心与音符不相干、
+ * 一个长词能罩住好几个音。两样都像文字才判文字，两样都像歌词才判歌词，其余返回 null 交给别的判据（连字符、字样）。
+ * `noteXs`：这一行上方那行谱的各音中心 x（页面坐标）；`space`：线距。
+ */
+export function lyricLayoutVerdict(strip: LyricStrip, noteXs: readonly number[], space: number): "lyric" | "text" | null {
+  const sx = strip.box.w / strip.w;
+  const ch = strip.charH / sx; // 条内像素
+  if (!(ch > 0)) return null;
+  const col = new Uint8Array(strip.w);
+  for (let y = 0; y < strip.h; y++) for (let x = 0; x < strip.w; x++) if (strip.data[y * strip.w + x]) col[x] = 1;
+  // 墨迹列连成词块：字母间的小缝并掉
+  const runs: [number, number][] = [];
+  for (let x = 0; x < strip.w; x++) {
+    if (!col[x]) continue;
+    const last = runs[runs.length - 1];
+    if (last && x - last[1] <= ch * LAYOUT_LETTER_GAP) last[1] = x + 1;
+    else runs.push([x, x + 1]);
+  }
+  const words = runs.filter(([a, b]) => b - a >= ch * LAYOUT_MIN_WORD);
+  if (words.length < LAYOUT_MIN_WORDS) return null;
+  const gaps = words.slice(1).map((w, k) => (w[0] - words[k]![1]) / ch).sort((a, b) => a - b);
+  const medGap = gaps[gaps.length >> 1]!;
+  const xs = [...noteXs].sort((a, b) => a - b);
+  let aligned = 0;
+  for (const [a, b] of words) {
+    const x0 = strip.box.x + a * sx, x1 = strip.box.x + b * sx, cx = (x0 + x1) / 2;
+    const near = xs.some((x) => Math.abs(x - cx) <= Math.max(space * 1.2, (x1 - x0) * 0.3));
+    // 罩着的音（相隔半格以内的算一列）
+    let cols = 0, prev = -Infinity;
+    for (const x of xs) if (x >= x0 - space * 0.5 && x <= x1 + space * 0.5 && x - prev > space * 0.5) (cols++, (prev = x));
+    if (near && cols <= 2) aligned++;
+  }
+  const frac = xs.length ? aligned / words.length : 0;
+  if (medGap < LAYOUT_PROSE_GAP && frac < LAYOUT_ALIGN_MIN) return "text";
+  if (medGap >= LAYOUT_LYRIC_GAP && frac >= LAYOUT_ALIGN_MIN) return "lyric";
+  return null;
+}
+
 /**
  * 拉丁行：OCR 字符 → 逐字符的盒（页面坐标），**词间的空格按间距补出来**。
  *

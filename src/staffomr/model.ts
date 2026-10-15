@@ -122,6 +122,8 @@ export class PObj {
   readonly run: VecTextRun | null;
   /** 文字对象拆出来的符号（`initSymbols`）。 */
   symbols: Sym[] = [];
+  /** 记字号用的字高（页面单位，同 `SPage.textEm` 口径）；没给取 `run.sizeDev`。位图路的 `sizeDev` 是框高、另有判据在用，不改它 */
+  textSize?: number;
   private tags = new Set<Tag>();
 
   constructor(id: number, path: VecObj | null, run: VecTextRun | null) {
@@ -504,6 +506,27 @@ export class SPage {
   get space(): number {
     return this.barlineHeight / 4;
   }
+
+  /**
+   * 页面坐标 → PDF 页面点（左上原点、y 向下）：`pt = originPt + 坐标 × ptPerUnit`。写源谱版面（`toxml.ts::sourceLayout`）用。
+   * 矢量路坐标本来就是点（1、原点 0）；位图路是内嵌图的像素，按图在页上的位置折（`RasterPage.imageRect`）。
+   */
+  ptPerUnit = 1;
+  originPt = { x: 0, y: 0 };
+  /** 页面尺寸（点）；null = 就是 `width` × `height` 个单位。 */
+  sizePt: { w: number; h: number } | null = null;
+  /**
+   * 页面的物理尺寸可信不可信：图片封成的单页 PDF 一像素算一点（`jpegToPdf`），页宽几千点毫无意义，
+   * 这种页写版面时按「页宽 = A4 宽」折算（比例不变）。
+   */
+  sizeKnown = true;
+  /**
+   * 量出来的文字高（`PObj.run.sizeDev`、各处记的 `size`）× 它 = 字号。矢量路记的就是字号（1）；
+   * 位图路记的是墨迹高 / 文字框高，汉字墨迹约占字号的八成五（`rasteromr/recognize.ts` 设）。
+   */
+  textEm = 1;
+  /** 位图路：量框里文字的墨迹高（与 `textEm` 同口径，`rasteromr/textsize.ts`）。OCR 的框带留白，记字号用它不用框高 */
+  inkTextSize?: (box: { x: number; y: number; w: number; h: number }, text: string) => number;
 
   constructor(index: number, width: number, height: number) {
     this.index = index;

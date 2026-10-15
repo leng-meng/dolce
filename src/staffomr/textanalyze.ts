@@ -21,6 +21,8 @@ export function objText(o: PObj): string {
 interface TextPiece {
   text: string;
   box: Box;
+  /** 字号（页面单位；矢量路是真实字号，位图路是量出来的字高，见 `SPage.textEm`） */
+  size: number;
   chars: { c: string; right: number }[];
 }
 
@@ -34,7 +36,7 @@ function glyphPieces(o: PObj, gap: number): TextPiece[] {
   if (!run || run.font.startsWith("#")) {
     const t = objText(o);
     // 拿不到逐字位置：第一个字右缘记成盒左缘、其余记成无穷远，升降号就照旧插在第一个字母后面
-    return [{ text: t, box: { ...o.box }, chars: [...t].map((c, i) => ({ c, right: i ? Infinity : o.box.left })) }];
+    return [{ text: t, box: { ...o.box }, size: o.textSize ?? o.run?.sizeDev ?? o.box.bottom - o.box.top, chars: [...t].map((c, i) => ({ c, right: i ? Infinity : o.box.left })) }];
   }
   const out: TextPiece[] = [];
   let cur: TextPiece | null = null;
@@ -45,7 +47,7 @@ function glyphPieces(o: PObj, gap: number): TextPiece[] {
     const top = Math.min(g.bbox.y, g.bbox.y + g.bbox.h);
     const bottom = Math.max(g.bbox.y, g.bbox.y + g.bbox.h);
     if (!cur || left - cur.box.right > gap) {
-      cur = { text: "", box: { left, right, top, bottom }, chars: [] };
+      cur = { text: "", box: { left, right, top, bottom }, size: o.textSize ?? o.run?.sizeDev ?? bottom - top, chars: [] };
       out.push(cur);
     }
     cur.text += g.unicode;
@@ -817,9 +819,10 @@ interface NoteLike {
   rest: boolean;
   x: number;
   voice?: number;
-  lyrics?: { verse: number; text: string; hyphen: boolean; cont: boolean }[];
+  lyrics?: { verse: number; text: string; hyphen: boolean; cont: boolean; size?: number }[];
   chord?: string;
-  chordLater?: { text: string; frac: number }[];
+  chordSize?: number;
+  chordLater?: { text: string; frac: number; size?: number }[];
 }
 
 /**
@@ -842,7 +845,7 @@ export function attachLyrics(notes: NoteLike[], lines: LyricLine[], sameCol = 0)
       for (let j = ni + 1; j < cand.length && cand[j].x - syl.cx <= Math.abs(cand[ni].x - syl.cx); j++)
         if (Math.abs(cand[j].x - syl.cx) < Math.abs(cand[ni].x - syl.cx)) ni = j;
       const n = cand[ni];
-      (n.lyrics ??= []).push({ verse: line.verse, text: syl.text, hyphen: syl.hyphen, cont });
+      (n.lyrics ??= []).push({ verse: line.verse, text: syl.text, hyphen: syl.hyphen, cont, ...(syl.sizeDev > 0 ? { size: syl.sizeDev } : {}) });
       cont = syl.hyphen;
       // 同一列（x 差不到 `sameCol`）的其余和弦成员一并跳过：一个和弦只挂一个音节。
       // 位图路才传（0.3 个线距）：只挪一个音，下一个音节常落到同一和弦的另一个成员上，
@@ -891,6 +894,7 @@ export function attachHarmonies(pg: SPage, notes: NoteLike[], harmonies: PObj[],
       // 而同一行里相邻的两个和弦间隔十格开外，不会误并。
       if (merge && last && o.box.left - last.box.right < 2 * sp) {
         last.text += t;
+        last.size = Math.max(last.size, o.size);
         last.chars.push(...o.chars);
         last.box = {
           left: last.box.left,
@@ -899,7 +903,7 @@ export function attachHarmonies(pg: SPage, notes: NoteLike[], harmonies: PObj[],
           bottom: Math.max(last.box.bottom, o.box.bottom),
         };
       } else {
-        last = { text: t, box: { ...o.box }, chars: o.chars.slice() };
+        last = { text: t, box: { ...o.box }, size: o.size, chars: o.chars.slice() };
         groups.push(last);
       }
     }
@@ -948,6 +952,7 @@ export function attachHarmonies(pg: SPage, notes: NoteLike[], harmonies: PObj[],
     const best = cands.find((n) => !n.chord);
     if (best) {
       best.chord = text;
+      if (g.size > 0) best.chordSize = g.size;
       continue;
     }
     // **长音中途换和弦**（牵我的手 Bass 全音符上 `F♯m … F♯7`、`B sus4 … B`）：附近没有空着的音，
@@ -963,7 +968,7 @@ export function attachHarmonies(pg: SPage, notes: NoteLike[], harmonies: PObj[],
     const end = row.find((n) => n.x > host.x + sp * 0.5)?.x ?? bar.right;
     const frac = (g.box.left - host.x) / Math.max(end - host.x, sp);
     if (frac <= 0 || frac >= 1) continue;
-    (host.chordLater ??= []).push({ text, frac });
+    (host.chordLater ??= []).push({ text, frac, ...(g.size > 0 ? { size: g.size } : {}) });
   }
 }
 
@@ -989,7 +994,7 @@ const TEMPO_JOIN_GAP = 3;
  */
 export function attachDirectionTexts(
   pg: SPage,
-  notes: { staff: Staff; x: number; chordExtra?: boolean; grace?: boolean; words?: { text: string; above: boolean }[]; metronome?: StaffNote["metronome"]; tempoText?: string }[],
+  notes: { staff: Staff; x: number; chordExtra?: boolean; grace?: boolean; words?: { text: string; above: boolean; size?: number }[]; metronome?: StaffNote["metronome"]; tempoText?: string; tempoSize?: number }[],
   text: TextAnalysis,
 ): void {
   const sp = pg.normalStaffSpace || pg.space;
@@ -1015,6 +1020,7 @@ export function attachDirectionTexts(
     };
     const cx = (box.left + box.right) / 2;
     const cy = (box.top + box.bottom) / 2;
+    const size = Math.max(...objs.map((o) => o.textSize ?? o.run?.sizeDev ?? 0));
     let stf: Staff | undefined;
     let bd = Infinity;
     for (const st of pg.staves) {
@@ -1032,9 +1038,12 @@ export function attachDirectionTexts(
       const bpm = Number(metro[3]);
       note.metronome = { unit: METRO_UNIT[metro[1] ?? "q"] ?? "quarter", bpm, ...(metro[2] ? { text: `c. ${bpm}` } : {}) };
       const words = s.slice(0, metro.index).trim();
-      if (words) note.tempoText = words;
+      if (words) {
+        note.tempoText = words;
+        if (size > 0) note.tempoSize = size;
+      }
       continue;
     }
-    (note.words ??= []).push({ text: s, above: cy < (stf.box.top + stf.box.bottom) / 2 });
+    (note.words ??= []).push({ text: s, above: cy < (stf.box.top + stf.box.bottom) / 2, ...(size > 0 ? { size } : {}) });
   }
 }
