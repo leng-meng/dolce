@@ -12,7 +12,7 @@ import {
   isEditError, type JumpKind, locate, mergeMeasures, midiOf, type ChordPos, type EditHooks, type InsertAnchor, type ModelEdit, posOf,
   removeChordNote, scaleDuration, setBarKind, setBreakBefore, setDegree, setKeyAt, setTempoAt, setTimeAt, shiftOctave, splitMeasure,
   pasteClip, type ClipItem, setDirectionText, toggleTuplet, setHarmony, setLyric, shiftSemitones, transposeScore, stepDegree, stepSemitone, setStep, degreeOfStep, anchorFifths, toggleAccidental, toggleDeco, toggleDot, toggleEnding, toggleJump, toggleSlur, toggleTie,
-  type DecoKind, deleteDirection, removeNotation, insertPitch, newDurationOf, dirPartner, moveDirection, moveHarmony, moveMarkEnd, type MovedMark, rereadKeyAt, setClefAt, shiftLyrics, toggleGrace, toggleWedge,
+  type DecoKind, deleteDirection, removeNotation, insertPitch, newDurationOf, dirPartner, moveDirection, moveHarmony, moveMarkEnd, type MovedMark, rereadKeyAt, setClefAt, shiftLyrics, toggleGrace, toggleOctaveShift, toggleWedge,
 } from "../../model/edit";
 import { parseClefInput, parseKeyInput, parseTempoInput, parseTimeInput } from "./measureinput";
 import { dropEmbeddedLayout, forgetNoteLayout } from "../../model/xmlsurface";
@@ -553,6 +553,12 @@ export function runModelAction(ctx: ModelActionCtx, a: VisualAction, key: string
       const l = ids();
       if (l.length < 2) return status(ctx, tr("ve.wedgeTwo"));
       return commit(ctx, (doc) => toggleWedge(doc, l[0]!, l[l.length - 1]!, a.id === "wedge.cresc" ? "crescendo" : "diminuendo"));
+    }
+    case "ottava.up":
+    case "ottava.down": {
+      const l = ids();
+      if (l.length < 2) return status(ctx, tr("ve.ottavaTwo"));
+      return commit(ctx, (doc) => toggleOctaveShift(doc, l[0]!, l[l.length - 1]!, a.id === "ottava.up" ? "8va" : "8vb"));
     }
     case "grace.toggle": return need((doc, l) => toggleGrace(doc, l, HOOKS));
     case "meas.keyReread":

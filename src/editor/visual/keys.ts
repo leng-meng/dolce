@@ -147,6 +147,8 @@ const RAW_ACTIONS: readonly Omit<VisualAction, "label" | "help">[] = [
   { id: "deco.turn", group: "mark", keys: [], keyText: "", modes: ["edit"] },
   { id: "wedge.cresc", group: "mark", keys: [], keyText: "", modes: ["edit"] },
   { id: "wedge.dim", group: "mark", keys: [], keyText: "", modes: ["edit"] },
+  { id: "ottava.up", group: "mark", keys: [], keyText: "", modes: ["edit"] },
+  { id: "ottava.down", group: "mark", keys: [], keyText: "", modes: ["edit"] },
   { id: "grace.toggle", group: "note", keys: [], keyText: "", modes: ["edit"] },
   { id: "chord.add", group: "note",
     keys: ["1", "2", "3", "4", "5", "6", "7"].map((d) => ({ key: d, code: `Digit${d}`, alt: true })), keyText: "Alt+1–7",

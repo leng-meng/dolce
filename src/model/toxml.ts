@@ -146,7 +146,7 @@ const OWNS: Readonly<Record<string, { attrs?: readonly string[]; kids?: readonly
   metronome: { kids: ["beat-unit", "beat-unit-dot", "per-minute"] },
   bracket: { attrs: ["type", "line-end", "line-type"] },
   pedal: { attrs: ["type", "line"] },
-  "octave-shift": { attrs: ["type"] },
+  "octave-shift": { attrs: ["type", "size"] },
   sound: { attrs: ["dacapo", "dalsegno", "fine", "segno", "coda", "tocoda", "tempo"] },
   barline: { attrs: ["location"], kids: ["bar-style", "ending", "repeat"] },
   ending: { attrs: ["number", "type", "print-object"], same: { "print-object": "yes" } },
@@ -646,10 +646,16 @@ function directionPartXml(o: Out, dir: DirectionPart, sur: Element | undefined, 
       if (dir.spanType) o.leaf("bracket", ` type="${dir.spanType}" line-end="down" line-type="solid"`, sur);
       else o.leaf("bracket", "", sur);
       break;
-    case "pedal":
-    case "octave-shift": {
+    case "pedal": {
       const line = dir.line !== undefined ? ` line="${dir.line ? "yes" : "no"}"` : "";
       o.leaf(dir.type, ` type="${dir.spanType ?? "start"}"${line}${pos}`, sur);
+      break;
+    }
+    case "octave-shift": {
+      // MusicXML 的 octave-shift 没有 start：起点写 up / down（读入没记方向的按 8va）
+      const ty = dir.spanType === "stop" || dir.spanType === "continue" ? dir.spanType : dir.shift?.dir ?? "down";
+      const size = dir.spanType === "stop" || dir.spanType === "continue" ? "" : ` size="${dir.shift?.size ?? 8}"`;
+      o.leaf(dir.type, ` type="${ty}"${size}${pos}`, sur);
       break;
     }
     default:

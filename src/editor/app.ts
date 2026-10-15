@@ -1146,6 +1146,13 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return this.painter.entryEl(id, 0);
   }
 
+  chordEls(id: ElementId): SVGGraphicsElement[] {
+    const staff = this.mode === "recognize" ? this.omr.chordHits(id) : null;
+    if (staff?.length) return staff;
+    const one = this.noteEl(id);
+    return one ? [one] : [];
+  }
+
   // 五线谱 / 混排上：附点、增时线不是单独的图元（附点是符头旁的点、增时线并进时值），小节线与弧走带身份的叶子
   augDotEls(id: ElementId): SVGGraphicsElement[] {
     return this.mode !== "jp" ? [] : this.painter.partEls(id, "aug-dot");
@@ -2049,8 +2056,11 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   /**
    * 五线谱识别产物落地：与打开 `.musicxml` 同一个模式（无代码区、谱面由 XML 出），默认进混排。
    * 五线谱识别的产物带和弦、多声部、slur，`.jpwabc` 装不下，所以不再转简谱文本。
+   * `rebuild`：同一次识别按新关联 / 系统切分重建的那份——只重认弱起，声部静音独奏照旧（此前落地漏了这一步，弱起一直按开机那份示例谱认）。
    */
-  adoptStaffXml(xml: string): boolean {
+  adoptStaffXml(xml: string, rebuild = false): boolean {
+    if (rebuild) this.visual.documentLoaded();
+    else this._documentLoaded();
     this._setDocFormat("musicxml");
     if (!this.mixed._setMixedXml(xml)) return false;
     this._setMixedAvailable(true);

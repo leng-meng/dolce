@@ -1950,6 +1950,76 @@ export function toggleWedge(doc: ScoreDoc, firstId: ElementId, lastId: ElementId
   return { select: [a.chord, b.chord] };
 }
 
+/** 八度线（`<octave-shift>`）挪的八度数：8va / 15ma 实际比记谱高（down），8vb / 15mb 低（up）。 */
+function octaveOf(d: Direction): number {
+  const n = (d.shift?.size ?? 8) >= 15 ? 2 : 1;
+  return d.shift?.dir === "up" ? -n : n;
+}
+
+/** 方向记号在小节里的游标（divisions）。 */
+function dirOnset(m: Measure, d: Direction): number {
+  return d.onset ?? defaultOnsetBefore(m, d.afterElements ?? 0);
+}
+
+/** 谱表 `staff` 上 `[from, to)`（小节下标 + 小节内游标）里的音实际音高挪 `oct` 个八度（符头不动）。 */
+function shiftOctaveSpan(part: Part, staff: number, from: [number, number], to: [number, number], oct: number): void {
+  for (let mi = from[0]; mi <= to[0] && mi < part.measures.length; mi++) {
+    const m = part.measures[mi]!;
+    const on = onsets(m);
+    for (const e of m.elements) {
+      if (e.kind !== "chord" || (e.staff ?? 1) !== staff) continue;
+      const t = on.get(e) ?? 0;
+      if ((mi === from[0] && t < from[1]) || (mi === to[0] && t >= to[1])) continue;
+      for (const n of e.notes) if (n.pitch) n.pitch = { ...n.pitch, octave: n.pitch.octave + oct };
+    }
+  }
+}
+
+/** 一对八度线起止（`start`、`stop` 是那两条 direction 的位置）去掉前，范围里的音挪回记谱那个八度。 */
+function undoOctaveShift(part: Part, start: DirRef, stop: DirRef): void {
+  const ms = part.measures[start.mi]!, me = part.measures[stop.mi]!;
+  const d = ms.directions![start.index]!;
+  shiftOctaveSpan(part, d.staff ?? 1, [start.mi, dirOnset(ms, d)], [stop.mi, dirOnset(me, me.directions![stop.index]!)], -octaveOf(d));
+}
+
+/**
+ * 选中的头尾两个音之间加 / 去一条八度线（`8va` 印在上方、`8vb` 在下方）。**符头留在谱面原位**：
+ * 加 8va 等于说这段实际高一个八度，范围里本谱表的音音高跟着挪（识谱漏了八度线时就是这样纠正）；去掉时挪回。
+ */
+export function toggleOctaveShift(doc: ScoreDoc, firstId: ElementId, lastId: ElementId, kind: "8va" | "8vb"): ModelEdit {
+  const a = locate(doc, firstId);
+  const b = locate(doc, lastId);
+  if (!a || !b) return { error: tr("me.noNote") };
+  if (a.pi !== b.pi || !before(a, b)) return { error: tr("ve.slurTwo") };
+  const staff = a.chord.staff ?? 1;
+  // 第二声线等写了 onset 的和弦：起点照它的游标（不是前一个元素的终点）
+  const at = onsets(a.measure).get(a.chord) ?? defaultOnsetBefore(a.measure, a.index);
+  const ci = a.measure.directions?.findIndex((d) => d.type === "octave-shift" && d.spanType !== "stop" && (d.staff ?? 1) === staff && dirOnset(a.measure, d) === at) ?? -1;
+  if (ci >= 0) {
+    const r: DirRef = { si: a.si, pi: a.pi, mi: a.mi, index: ci };
+    const cur = a.measure.directions![ci]!;
+    const pair = dirPartner(doc, r);
+    if (pair) undoOctaveShift(a.part, r, pair);
+    const stop = pair ? a.part.measures[pair.mi]!.directions![pair.index]! : null;
+    for (const m of a.part.measures) {
+      if (!m.directions?.some((d) => d === cur || d === stop)) continue;
+      m.directions = m.directions.filter((d) => d !== cur && d !== stop);
+      if (!m.directions.length) delete m.directions;
+    }
+    if ((cur.shift?.dir === "up") === (kind === "8vb")) return { select: [a.chord, b.chord] };
+  }
+  const placement = kind === "8va" ? "above" : "below";
+  const start: Direction = { type: "octave-shift", spanType: "start", shift: { dir: kind === "8va" ? "down" : "up", size: 8 }, afterElements: a.index, placement, staff };
+  const stop: Direction = { type: "octave-shift", spanType: "stop", afterElements: b.index + 1, placement, staff };
+  if (at !== defaultOnsetBefore(a.measure, a.index)) start.onset = at;
+  const endAt = (onsets(b.measure).get(b.chord) ?? 0) + b.chord.duration.divisions;
+  if (endAt !== defaultOnsetBefore(b.measure, b.index + 1)) stop.onset = endAt;
+  (a.measure.directions ??= []).push(start);
+  (b.measure.directions ??= []).push(stop);
+  shiftOctaveSpan(a.part, staff, [a.mi, at], [b.mi, endAt], octaveOf(start));
+  return { select: [a.chord, b.chord] };
+}
+
 /** 渐强渐弱、踏板、八度线的起点 / 终点各是一条 `<direction>`：给一条，找配对的另一条（同声部、同类、按先后最近的那条）。 */
 export function dirPartner(doc: ScoreDoc, r: DirRef): DirRef | null {
   const part = doc.songs[r.si]?.parts[r.pi];
@@ -2000,6 +2070,11 @@ export function deleteDirection(doc: ScoreDoc, r: DirRef): ModelEdit {
   const an = dirAnchor(doc, r);
   if (!an) return { error: tr("me.noMark") };
   const pair = dirPartner(doc, r);
+  // 删八度线：符头不动，范围里的音挪回记谱那个八度（同 `toggleOctaveShift` 去掉时）
+  if (an.dir.type === "octave-shift" && pair) {
+    const [s, e] = an.dir.spanType === "stop" ? [pair, r] : [r, pair];
+    undoOctaveShift(an.loc.part, s, e);
+  }
   const gone = [an.dir, ...(pair ? [doc.songs[pair.si]!.parts[pair.pi]!.measures[pair.mi]!.directions![pair.index]!] : [])];
   for (const m of an.loc.part.measures) {
     if (!m.directions?.some((d) => gone.includes(d))) continue;

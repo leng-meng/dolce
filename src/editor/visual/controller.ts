@@ -58,6 +58,8 @@ export interface VisualHost {
   entryEl(entry: SyncEntry): SVGGraphicsElement | null;
   /** 音符在谱面上的 `<g>` */
   noteEl(id: ElementId): SVGGraphicsElement | null;
+  /** 和弦里每个音各自的图元（五线谱对照视图一个音一个框）；缺省只有 `noteEl` 那一个 */
+  chordEls?(id: ElementId): SVGGraphicsElement[];
   /** 文字条目（歌词、页眉字段）在谱面上的 `<g>`：页眉的多行署名、调号拍号一组不止一个 */
   textEls(entry: SyncEntry): SVGGraphicsElement[];
   /** 音符的附点在谱面上的 `<g>`（每个点一个；可单独点选） */
@@ -115,8 +117,8 @@ function textsOf(el: Element): SVGTextElement[] {
 /** 方向键能停的条目：音符、增时线、小节线、原文里有符号的换行 */
 const NAVIGABLE = new Set<SyncEntry["kind"]>(["note", "sustain", "barline", "break"]);
 
-/** 只有 `.musicxml`（改模型那一路）做得了的：简谱各格式没有谱号、渐强渐弱与这几种奏法装饰的写法 */
-const XML_ONLY = new Set(["meas.clef", "meas.clefReread", "wedge.cresc", "wedge.dim", "grace.toggle",
+/** 只有 `.musicxml`（改模型那一路）做得了的：简谱各格式没有谱号、渐强渐弱、八度线与这几种奏法装饰的写法 */
+const XML_ONLY = new Set(["meas.clef", "meas.clefReread", "wedge.cresc", "wedge.dim", "ottava.up", "ottava.down", "grace.toggle",
   "deco.staccato", "deco.tenuto", "deco.marcato", "deco.staccatissimo", "deco.fermataInv", "deco.trill", "deco.mordent", "deco.turn"]);
 
 export class VisualEditController {
@@ -462,8 +464,13 @@ export class VisualEditController {
     for (const issue of issues) {
       const boxes: { svg: SVGSVGElement; box: Box }[] = [];
       for (const id of issue.ids) {
-        const el = this.host.noteEl(id);
-        const hit = el && this.elBox(el);
+        // 整个和弦框进来（只框第一个音，差额标签就抬到和弦上音的音名上去了）
+        const one = this.host.noteEl(id);
+        let hit: { svg: SVGSVGElement; box: Box } | null = null;
+        for (const el of this.host.chordEls?.(id) ?? (one ? [one] : [])) {
+          const h = this.elBox(el);
+          if (h) hit = hit && hit.svg === h.svg ? { svg: hit.svg, box: union(hit.box, h.box) } : hit ?? h;
+        }
         if (!hit) continue;
         const same = boxes.find((b) => b.svg === hit.svg && sameRow(b.box, hit.box));
         if (same) same.box = union(same.box, hit.box);
@@ -1595,7 +1602,7 @@ export class VisualEditController {
           if (v !== null) this.measureText("meas.key", v);
         });
         return true;
-      case "meas.clef": case "meas.clefReread": case "wedge.cresc": case "wedge.dim": case "grace.toggle":
+      case "meas.clef": case "meas.clefReread": case "wedge.cresc": case "wedge.dim": case "ottava.up": case "ottava.down": case "grace.toggle":
       case "deco.staccato": case "deco.tenuto": case "deco.marcato": case "deco.staccatissimo": case "deco.fermataInv":
       case "deco.trill": case "deco.mordent": case "deco.turn":
         this.host.setStatus(tr("ve.onlyXml"));

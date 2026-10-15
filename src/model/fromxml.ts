@@ -519,6 +519,7 @@ function readDirectionPart(first: Element): DirectionPart {
     case "octave-shift": {
       const t = first.getAttribute("type");
       d.spanType = t === "stop" ? "stop" : t === "continue" ? "continue" : "start";
+      if (first.tagName === "octave-shift" && (t === "up" || t === "down")) d.shift = { dir: t, size: Number(first.getAttribute("size")) || 8 };
       if (first.tagName === "pedal" && first.getAttribute("line") !== null) d.line = first.getAttribute("line") === "yes";
       break;
     }

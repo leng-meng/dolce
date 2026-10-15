@@ -635,6 +635,8 @@ export interface Direction {
   spanType?: "start" | "stop" | "continue";
   /** `<wedge type>`：crescendo / diminuendo */
   wedgeType?: "crescendo" | "diminuendo";
+  /** `<octave-shift>` 起点的 `type` 与 `size`：down = 记谱比实际低（8va，印在谱上方）、up = 8vb；size 8 / 15 */
+  shift?: { dir: "up" | "down"; size: number };
   /** 上方还是下方 */
   placement?: "above" | "below";
   /** `<sound>` 的播放语义：dacapo / dalsegno / fine / segno / coda / tempo */
@@ -653,7 +655,7 @@ export interface Direction {
 /** `Direction.more` 的一项：`<direction-type>` 下的一个子元素。 */
 export type DirectionPart = Pick<
   Direction,
-  "type" | "text" | "tempo" | "spanType" | "wedgeType" | "line"
+  "type" | "text" | "tempo" | "spanType" | "wedgeType" | "line" | "shift"
 >;
 
 /** `<print>`：版面指示。123 的 `$`（换行）/ `$$`（换页）落在这里。

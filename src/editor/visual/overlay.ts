@@ -257,7 +257,11 @@ export function drawBlock(svg: SVGSVGElement, box: Box): void {
 
 /** 拍数对不上的小节：淡红底，悬停显示说明；右上角标差额（`tag`，如 `−♩`）。 */
 function drawBeatIssue(svg: SVGSVGElement, box: Box, title: string, tag?: string): void {
-  const pad = box.h * 0.2;
+  // 五线谱对照视图：框的是整个和弦（几个音上下摞），留白、字号按一个音的命中框量，不按整框高
+  const staffRec = svg.classList.contains("omr-staff-recognize");
+  const hit = staffRec ? svg.querySelector<SVGRectElement>(".omr-hits rect[data-kind=note]") : null;
+  const u = hit ? Number(hit.getAttribute("height")) || box.h : box.h;
+  const pad = u * 0.2;
   const r = el("rect", {
     class: "vis-beat",
     x: box.x - pad, y: box.y - pad, width: box.w + pad * 2, height: box.h + pad * 2, rx: pad,
@@ -269,7 +273,9 @@ function drawBeatIssue(svg: SVGSVGElement, box: Box, title: string, tag?: string
   const layer = layerOf(svg);
   layer.insertBefore(r, layer.firstChild);
   if (tag) {
-    const tx = el("text", { class: "vis-beat-tag", x: box.x + box.w + pad, y: box.y - pad * 1.2, "text-anchor": "end", "font-size": box.h * 0.55 });
+    // 对照视图的音名标在符头正上方（`rasteromr/overlay.ts`）：差额再抬过它，不压字
+    const lift = staffRec ? u * 0.75 : 0;
+    const tx = el("text", { class: "vis-beat-tag", x: box.x + box.w + pad, y: box.y - pad * 1.2 - lift, "text-anchor": "end", "font-size": u * 0.55 });
     tx.textContent = tag;
     layer.appendChild(tx);
   }

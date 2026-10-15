@@ -2064,6 +2064,14 @@ export class PedalLine extends SpanObj {
   ypos = 0;
 }
 
+/** 八度线（`<octave-shift>`）：`above` = 8va / 15ma 印在谱上方，否则 8vb / 15mb 印在下方。 */
+export class OctaveLine extends SpanObj {
+  startMeasure!: MeasureLayout;
+  endMeasure!: MeasureLayout;
+  staff = 0;
+  size = 8;
+}
+
 /** 琶音（model.hpp:435 Arpeggiate）：同一 offset 上的一组音符。 */
 export class Arpeggiate {
   notes: NoteLayout[] = [];
@@ -2092,6 +2100,7 @@ export class PartLayout {
   endings: Ending[] = [];
   wedges: Wedge[] = [];
   pedalLines: PedalLine[] = [];
+  octaveLines: OctaveLine[] = [];
   lrcExtends: LrcExtend[] = [];
 
   /** 没写朝向的弧画在音符上方让开下面的歌词：`StaffLayout.arcsAbove` 的谱，且本声部有歌词。
@@ -2140,6 +2149,12 @@ export class PartLayout {
     const s = new PedalLine();
     s.part = this;
     this.pedalLines.push(s);
+    return s;
+  }
+  newOctaveLine(): OctaveLine {
+    const s = new OctaveLine();
+    s.part = this;
+    this.octaveLines.push(s);
     return s;
   }
   newLrcExtend(): LrcExtend {

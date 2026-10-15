@@ -164,6 +164,11 @@ class DocPartLoader {
   forcedStem = new Set<ChordLayout>();
   /** 当前小节的 divisions 与简谱叠层的旋律（和弦 → 印的那个音） */
   curDiv = 1;
+  /** 八度线覆盖的范围（`[from, to)`：小节下标 + 小节内 divisions）与那段音记谱要挪几度（8va 记谱低一个八度 = −7） */
+  octaveSpans: { staff: number; from: [number, number]; to: [number, number]; steps: number }[] = [];
+  /** 正在读的和弦记谱挪几度（`octaveSpans` 查出来的） */
+  octaveSteps = 0;
+  octavePts: { mif: MeasureLayout; tick: Fraction; staff: number; stop: boolean; shift?: { dir: "up" | "down"; size: number } }[] = [];
   melody = new Map<DocChord, DocNote | null>();
 
   tieStarts: TieRef[] = [];
@@ -229,6 +234,7 @@ class DocPartLoader {
     // 绝对 tick 必须在 loadMeasure 之前就设到 mif.offset，否则 processAttributes 记录的
     // clef/key/time 变化全落在 tick 0、互相覆盖（对齐 musicpp parser.cpp:1291，offset 在
     // loadAttributes 之前赋值）。finishMixedScore 的全局 offset pass 会再统一一次（多声部规范化）。
+    this.scanOctaveSpans();
     let div = 1;
     let runTick = new Fraction(0);
     for (let mid = 0; mid < this.src.measures.length; mid++) {
@@ -236,7 +242,7 @@ class DocPartLoader {
       const mif = this.score.measures[mid];
       if (!mif) continue;
       mif.offset = runTick;
-      div = this.loadMeasure(m, mif, div);
+      div = this.loadMeasure(m, mif, div, mid);
       runTick = runTick.plus(mif.dur);
     }
 
@@ -251,6 +257,7 @@ class DocPartLoader {
     this.processEnding();
     this.pairWedges();
     this.pairPedals();
+    this.pairOctaves();
     this.processLrcExtend();
     this.part.guessTiedPlacement();
     // 只留旋律放在**最后**（util/pao.cpp:1003：load 整条跑完才 removeNoneMelody）：
@@ -300,7 +307,39 @@ class DocPartLoader {
     this.formatBeams();
   }
 
-  private loadMeasure(m: Measure, mif: MeasureLayout, prevDiv: number): number {
+  /**
+   * 八度线（`<octave-shift>`）覆盖哪些音：MusicXML 的 `<pitch>` 是实际音高，8va 底下的音**记谱**要低一个八度
+   * （15ma 两个），排版按记谱位置放符头。起止按谱表配对，止点之前（不含）的音都算在里面。
+   */
+  private scanOctaveSpans(): void {
+    const open = new Map<number, { from: [number, number]; steps: number }>();
+    this.src.measures.forEach((m, mi) => {
+      const dirs = (m.directions ?? []).filter((d) => d.type === "octave-shift");
+      if (!dirs.length) return;
+      const { endAfter } = measureTiming(m);
+      const at = (d: Direction): number => d.onset ?? endAfter[Math.min(d.afterElements ?? 0, m.elements.length)]!;
+      // 同一处先收后起（一段收尾、下一段紧接着开始）
+      for (const d of [...dirs].sort((a, b) => at(a) - at(b) || (a.spanType === "stop" ? -1 : 0) - (b.spanType === "stop" ? -1 : 0))) {
+        const staff = d.staff ?? 1;
+        if (d.spanType === "stop") {
+          const o = open.get(staff);
+          if (o) this.octaveSpans.push({ staff, from: o.from, to: [mi, at(d)], steps: o.steps });
+          open.delete(staff);
+        } else if (d.spanType !== "continue") {
+          const oct = (d.shift?.size ?? 8) >= 15 ? 14 : 7;
+          open.set(staff, { from: [mi, at(d)], steps: d.shift?.dir === "up" ? oct : -oct });
+        }
+      }
+    });
+  }
+
+  private octaveStepsAt(staff: number, mi: number, on: number): number {
+    const le = (a: [number, number], b: [number, number]): boolean => a[0] < b[0] || (a[0] === b[0] && a[1] <= b[1]);
+    const s = this.octaveSpans.find((x) => x.staff === staff && le(x.from, [mi, on]) && !le(x.to, [mi, on]));
+    return s?.steps ?? 0;
+  }
+
+  private loadMeasure(m: Measure, mif: MeasureLayout, prevDiv: number, mid: number): number {
     let div = prevDiv;
     const dv = m.attrs?.divisions;
     if (dv !== undefined && dv > 0) div = dv;
@@ -345,6 +384,7 @@ class DocPartLoader {
           if (h) this.processHarmony(h, md, tickOf(h.onset ?? on).plus(harmonyDelta(h)));
         }
         const tick = tickOf(on);
+        this.octaveSteps = this.octaveSpans.length ? this.octaveStepsAt(el.staff ?? 1, mid, on) : 0;
         let ch: ChordLayout | null = null;
         if (el.notes.length === 0) ch = this.processNote(el, null, 0, md, tick, ch);
         el.notes.forEach((n, k) => {
@@ -438,7 +478,7 @@ class DocPartLoader {
     nt.jpMelody = top !== undefined && (note === null || note === top);
 
     const pitch = note?.pitch;
-    if (!ch.rest && pitch) nt.writtenPitch = pitch.octave * 7 + (STEP_DIATONIC[pitch.step] ?? 0) + this.transposeSteps;
+    if (!ch.rest && pitch) nt.writtenPitch = pitch.octave * 7 + (STEP_DIATONIC[pitch.step] ?? 0) + this.transposeSteps + this.octaveSteps;
     nt.x = xmlPos(note ?? src)?.defaultX ?? -1;
 
     const stem = noteStem(note);
@@ -754,6 +794,10 @@ class DocPartLoader {
         case "pedal":
           this.collectPedal(item, md, tick, blk.staff);
           break;
+        case "octave-shift":
+          if (item.spanType === "stop" || item.spanType === "start")
+            this.octavePts.push({ mif: md.measureInfo, tick: md.measureInfo.offset.plus(tick), staff: blk.staff, stop: item.spanType === "stop", ...(item.shift ? { shift: item.shift } : {}) });
+          break;
       }
     }
     // Sibelius 右对齐文本以右边缘为锚点（parser.cpp::parse 尾部 isSib 分支）。
@@ -817,6 +861,25 @@ class DocPartLoader {
           start = p;
         }
       }
+    }
+  }
+
+  /** 八度线端点按谱表、先后配对成 OctaveLine。 */
+  private pairOctaves(): void {
+    const pts = [...this.octavePts].sort((a, b) => a.staff - b.staff || a.tick.compareTo(b.tick) || (a.stop ? -1 : 0) - (b.stop ? -1 : 0));
+    let start: (typeof pts)[number] | null = null;
+    for (const p of pts) {
+      if (!p.stop) { start = p; continue; }
+      if (!start || start.staff !== p.staff) continue;
+      const ln = this.part.newOctaveLine();
+      ln.staff = p.staff;
+      ln.above = start.shift?.dir !== "up";
+      ln.size = start.shift?.size ?? 8;
+      ln.startTick = start.tick;
+      ln.endTick = p.tick;
+      ln.startMeasure = start.mif;
+      ln.endMeasure = p.mif;
+      start = null;
     }
   }
 

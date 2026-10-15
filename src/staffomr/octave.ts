@@ -69,7 +69,7 @@ function isDashedSeg(s: Seg): boolean {
 /**
  * 八度移位落到音符上：记号覆盖范围内、且在它下方（8va）或上方（8vb）那行谱的音符
  * 整体移一个八度。**MusicXML 的 `<pitch>` 要的是实际音高**，所以这里直接改音符的八度，
- * 另在 `<direction>` 里出 `<octave-shift>`（由 `toxml.ts` 写）。
+ * 八度线本身还没写进 `<direction>`（`notedata.ts` 的 `octaveShift` 只记了一笔，没有写出端用它）：识别结果按实际音高、不带 8va，见 dev 待办。
  */
 export function applyOctaveShifts(shifts: OctaveShift[], notes: StaffNote[], sp: number): void {
   for (const sh of shifts) {

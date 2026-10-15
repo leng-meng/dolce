@@ -73,7 +73,7 @@ export interface OmrHost {
    * 不走 `importOmrDoc`：五线谱的和弦、多声部、slur 在 `.jpwabc` 与旧简谱引擎里装不下。
    * 返回 false 表示简谱那一侧转不出来（不影响混排预览）。
    */
-  adoptStaffXml(xml: string): boolean;
+  adoptStaffXml(xml: string, rebuild?: boolean): boolean;
   /** 简谱识别产物落地：识别直出的模型与它写成的 123 核对文本。 */
   importOmrDoc(doc: ScoreDoc, text: string): void;
   /** 识别产物有无变了：同步排版档按钮（简谱识别期间不露「五线谱」「混排」两档）。 */
@@ -1392,7 +1392,7 @@ export class OmrController implements FormatSource {
     const base = xml;
     const replay = edits && edits.chords.size + edits.deleted.size ? await this.replayStaffEdits(xml, edits) : null;
     if (replay) xml = replay.xml;
-    this.host.adoptStaffXml(xml);
+    this.host.adoptStaffXml(xml, true);
     // 「改过」照重建出来的样子比（回放上去的手改照样标改过）
     this.staffEmitted = base;
     this.staffBase = null;
@@ -1509,6 +1509,16 @@ export class OmrController implements FormatSource {
   }
 
   /** 索引条目 → 核对视图上的命中框：音符按框序（新插的按元素 id）、歌词按框序与段、页眉另认（`headerHits`）。 */
+  /** 五线谱对照：和弦里每个音的命中框（`hitFor` 只给第一个音的）；不是五线谱会话返回 null */
+  chordHits(id: ElementId): SVGGraphicsElement[] | null {
+    if (!this.staffResult) return null;
+    const pane = document.getElementById("score-pane");
+    const ids = [...this.staffNoteOfOmr].filter(([, v]) => v.chord === id).map(([k]) => k);
+    const els = ids.flatMap((o) => [...(pane?.querySelectorAll<SVGRectElement>(`.omr-hits rect[data-omr="${o}"]`) ?? [])]);
+    const ins = pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-id="${id}"]`);
+    return ins ? [...els, ins] : els;
+  }
+
   hitFor(kind: "note" | "lyric", id: ElementId, verse = 0): SVGGraphicsElement | null {
     const pane = document.getElementById("score-pane");
     if (this.staffResult) {

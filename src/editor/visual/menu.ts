@@ -89,6 +89,7 @@ const SHORT: Record<string, string> = {
   "deco.staccato": "\u2022", "deco.tenuto": "\u2012", "deco.marcato": "^", "deco.staccatissimo": "\u25BE",
   "deco.fermataInv": "\u{1D111}", "deco.trill": "tr", "deco.mordent": "\u223F", "deco.turn": "\u223D",
   "wedge.cresc": "\u{1D192}", "wedge.dim": "\u{1D193}", // 𝆒 𝆓
+  "ottava.up": "8va", "ottava.down": "8vb",
   "grace.toggle": "\u266A\u0338", // ♪̸
   "meas.keyReread": "1=\u21BB", "meas.clef": "\u{1D11E}", "meas.clefReread": "\u{1D11E}\u21BB",
   "view.formatMarks": "\u00B6", // ¶

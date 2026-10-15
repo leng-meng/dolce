@@ -13,7 +13,7 @@
 //     首尾相加凑满一小节时末小节一并放过。**只在调用方认它是弱起时放过**（`opts.pickup`）：
 //     识别不知道原谱，一律认；编辑器只认打开时首小节就不满的（改谱删掉首小节的音得报出来）；
 //   - 相邻两个都不满的小节相加恰好一小节（小节中间的反复记号把一小节劈成两半，诗歌谱里很常见）；
-//   - MusicXML 标了 `implicit` 的小节；
+//   - MusicXML 标了 `implicit` 的小节（连同它前面那个与它凑满一小节的不满小节）；
 //   - 没有拍号（散板）的整首不查。
 
 import type { ElementId, Measure, ScoreDoc, SourceSpan, Time } from "./doc";
@@ -90,9 +90,10 @@ export function checkMeasureDurations(doc: ScoreDoc, opts: BeatCheckOptions = {}
       if (pickup && n >= 2 && !ok[0] && short(0) && short(n - 1) && fills(0, n - 1)) ok[0] = ok[n - 1] = true;
       // 首小节单独弱起、末小节是满的：诗歌谱里也常见，首小节不满一律放过
       if (pickup && n >= 2 && !ok[0] && short(0)) ok[0] = true;
-      // 相邻两个不满的相加一小节（反复记号劈开的小节）
+      // 相邻两个不满的相加一小节（反复记号劈开的小节）。后一个标了 `implicit` 的已经放过了，照样能替前一个凑满
+      // （赞美诗乐句中间劈开的小节：前半 4 拍收句、后半 2 拍 implicit 起下一句）
       for (let i = 0; i + 1 < n; i++) {
-        if (!ok[i] && !ok[i + 1] && short(i) && short(i + 1) && fills(i, i + 1)) ok[i] = ok[i + 1] = true;
+        if (!ok[i] && (!ok[i + 1] || !!rows[i + 1]!.m.implicit) && short(i) && short(i + 1) && fills(i, i + 1)) ok[i] = ok[i + 1] = true;
       }
       // 临时多声部：各分支与主分支等长才算过（这一小节本身满不满由下面那套规则裁决）
       rows.forEach((r, measureIndex) => {
