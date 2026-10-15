@@ -300,6 +300,8 @@ export interface Lyric {
   numberText?: string;
   /** [五线谱] `<lyric name>` */
   name?: string;
+  /** [五线谱] `<lyric placement>`：`above` = 这一行词印在谱表上方（合唱谱两声部共用一行谱，上声部的词印在谱表上方） */
+  placement?: "above" | "below";
   /** `<elision>`：一音多字的连接（123 的 `{多字}` / ABC 的 `~`） */
   elision?: string;
   /** 副歌：这一行词被多遍共用（`Lyric.refrain` 的对应物） */

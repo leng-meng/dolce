@@ -833,6 +833,8 @@ interface NoteLike {
  */
 export function attachLyrics(notes: NoteLike[], lines: LyricLine[], sameCol = 0): void {
   for (const line of lines) {
+    // 行顶高过谱表顶线：词印在谱表上方（望十架 p3 独唱 / 女低共用一行谱，独唱的词在谱表上方、女低的在下方）
+    const above = line.top < line.staff.box.top;
     const cand = notes.filter((n) => n.staff === line.staff && !n.rest && (!line.voice || (line.voice === 1) === (n.voice === 1))).sort((a, b) => a.x - b.x);
     if (!cand.length) continue;
     let ni = 0;
@@ -845,7 +847,7 @@ export function attachLyrics(notes: NoteLike[], lines: LyricLine[], sameCol = 0)
       for (let j = ni + 1; j < cand.length && cand[j].x - syl.cx <= Math.abs(cand[ni].x - syl.cx); j++)
         if (Math.abs(cand[j].x - syl.cx) < Math.abs(cand[ni].x - syl.cx)) ni = j;
       const n = cand[ni];
-      (n.lyrics ??= []).push({ verse: line.verse, text: syl.text, hyphen: syl.hyphen, cont, ...(syl.sizeDev > 0 ? { size: syl.sizeDev } : {}) });
+      (n.lyrics ??= []).push({ verse: line.verse, text: syl.text, hyphen: syl.hyphen, cont, ...(syl.sizeDev > 0 ? { size: syl.sizeDev } : {}), ...(above ? { above } : {}) });
       cont = syl.hyphen;
       // 同一列（x 差不到 `sameCol`）的其余和弦成员一并跳过：一个和弦只挂一个音节。
       // 位图路才传（0.3 个线距）：只挪一个音，下一个音节常落到同一和弦的另一个成员上，

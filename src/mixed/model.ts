@@ -200,7 +200,7 @@ export function smuflBottom(fm: MetaData, glyph: string): number {
  * （smuflTop/Bottom 以 em=musicEm 为基准，再按字号缩放），文本按字体 ascent/descent。
  * 修正 TextBlock.height() 用 Bravura 字体度量导致力度/节拍记号虚高、撑大谱表间距的问题。
  */
-function tightLineHeights(t: TextBlock, meta: MetaData, musicEm: number, textBySize = false): number[] {
+export function tightLineHeights(t: TextBlock, meta: MetaData, musicEm: number, textBySize = false): number[] {
   const h: number[] = [];
   let lineH = 0;
   for (const it of t.data) {
@@ -1003,6 +1003,10 @@ export class LyricLayout {
   }
   get name(): string {
     return this.src.name ?? "";
+  }
+  /** 印在谱表上方（`<lyric placement="above">`）：自动铺排时摞在谱表最高处之上（`layoutpass.ts::autoPlaceLyricsY`） */
+  get above(): boolean {
+    return this.src.placement === "above";
   }
   /** 印在首字前的段落号（`1.圣` 的 `1.`）与去掉它的正文 */
   private get split(): { prefix: string; text: string } {
@@ -2680,8 +2684,9 @@ export class SysStaff {
    * 以下多深（`below`，≥ 谱表高）。源谱版面档定谱表距离用（`layoutpass.ts::autoStaffDistances`）：上一行的低音与
    * 下一行的高音错开在不同 x 上时（钢琴右手朝下的符干、左手的高音），整行最低点对整行最高点要白白多留一大截。
    * 认的东西与 `getYBound` / `autoExtent` 同一份；横向位置拿不准的（文字指示、和弦）按所在小节整宽算。
+   * `notesOnly`：只量音符、弧、连音数字（不量歌词、文字、和弦）——谱表上方的文字按它贴（`staffpages.ts::placePartAboveStaff`）。
    */
-  skyline(sys: Sys): { above: number[]; below: number[] } {
+  skyline(sys: Sys, notesOnly = false): { above: number[]; below: number[] } {
     const eng = sys.score.options;
     const pt = this.part();
     const sub = this.partStaff.subIndex;
@@ -2724,10 +2729,13 @@ export class SysStaff {
         // 临时记号在符头左边，符尾在右边：左让一个半符头、右让一个
         put(x - 18, x + 14, hi, lo);
       }
+      if (notesOnly) continue;
       for (const lrc of md.lyrics) {
         if (lrc.staff !== sub || lrc.x < 0) continue;
         const cx = x0 + lrc.x + lrc.xOffset;
-        put(cx - lrc.width / 2 - 2, cx + lrc.width / 2 + 2, 40, -lrc.y + 10);
+        // 谱表上方的词（`lrc.y` 是基线、向上为正）：字顶约在基线上一个字号
+        if (lrc.y > 0) put(cx - lrc.width / 2 - 2, cx + lrc.width / 2 + 2, -(lrc.y + lrc.font.size), 40);
+        else put(cx - lrc.width / 2 - 2, cx + lrc.width / 2 + 2, 40, -lrc.y + 10);
       }
       for (const t of md.textBlocks) {
         if (t.staff !== sub) continue;
@@ -2813,6 +2821,11 @@ export class SysStaff {
         if (y > maxY) maxY = y;
       }
       for (const lrc of mea.lyrics) {
+        // 谱表上方的词往上撑
+        if (lrc.y > 0) {
+          if (lrc.y + lrc.font.size > maxY) maxY = lrc.y + lrc.font.size;
+          continue;
+        }
         const y = lrc.y - 10;
         if (y < minY) minY = y;
       }

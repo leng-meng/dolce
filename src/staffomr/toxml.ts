@@ -523,9 +523,9 @@ export function renumberSlurs(body: string, sysOfBar?: number[]): string {
   return out.replace(/<notations><\/notations>/g, "");
 }
 
-function lyricXml(l: { verse: number; text: string; hyphen: boolean; cont: boolean; extend?: boolean }): string {
+function lyricXml(l: { verse: number; text: string; hyphen: boolean; cont: boolean; extend?: boolean; above?: boolean }): string {
   const syllabic = l.cont ? (l.hyphen ? "middle" : "end") : l.hyphen ? "begin" : "single";
-  return `<lyric number="${l.verse}"><syllabic>${syllabic}</syllabic><text>${escapeXml(l.text)}</text>${l.extend ? '<extend type="start"/>' : ""}</lyric>`;
+  return `<lyric number="${l.verse}"${l.above ? ' placement="above"' : ""}><syllabic>${syllabic}</syllabic><text>${escapeXml(l.text)}</text>${l.extend ? '<extend type="start"/>' : ""}</lyric>`;
 }
 
 function accidentalName(alter: number): string {

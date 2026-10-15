@@ -307,6 +307,8 @@ function readLyrics(noteEl: Element): Lyric[] {
     if (n !== null && !/^\d+$/.test(n)) lr.numberText = n;
     const name = l.getAttribute("name");
     if (name !== null) lr.name = name;
+    const pl = l.getAttribute("placement");
+    if (pl === "above" || pl === "below") lr.placement = pl;
     const syl = childText(l, "syllabic");
     if (syl) lr.syllabic = syl as Lyric["syllabic"];
     const ext = child(l, "extend");

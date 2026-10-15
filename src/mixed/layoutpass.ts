@@ -29,6 +29,7 @@ import {
   smuflBottom,
   smuflTop,
   tiedEnds,
+  tightLineHeights,
 } from "./model";
 
 // ---------------- Note type ----------------
@@ -622,7 +623,8 @@ function autoPlaceWedges(score: StaffLayout): void {
       if (!w.autoY || w.staff !== 0) continue;
       const sys = score.systems.find((s) => s.contains(w.startTick));
       if (!sys) continue;
-      w.ypos = systemLowest(score, sys, false) + AUTO_WEDGE_GAP + WEDGE_HALF;
+      // 只看本声部：`systemLowest` 的坐标相对各声部自己的第一谱表，并上别的声部（长笛下面钢琴左手的低音）松叶就沉到下一行谱上
+      w.ypos = systemLowest(score, sys, false, [part]) + AUTO_WEDGE_GAP + WEDGE_HALF;
     }
   }
 }
@@ -643,11 +645,27 @@ function autoPlaceLyricsY(score: StaffLayout): void {
         list.push(lrc);
         byStaff.set(lrc.staff, list);
       }
-      for (const [staff, lyrics] of byStaff) {
+      for (const [staff, all] of byStaff) {
+        const lyrics = all.filter((l) => !l.above);
+        const above = all.filter((l) => l.above);
+        // 本谱表这一行有印在上方的词（两声部共用一行谱、上声部的词在谱表上方）：下方各段从最小的段号起排，
+        // 不给分去上方的段号空出行
+        const nums = (ls: LyricLayout[]) => [...new Set(ls.map((l) => Math.max(0, (parseInt(l.num, 10) || 1) - 1)))].sort((a, b) => a - b);
+        const skip = above.length ? (nums(lyrics)[0] ?? 0) : 0;
         const base = Math.max(systemLowest(score, sys, true, [part], staff) + AUTO_LYRIC_GAP, 40 + staffGap) + ascent;
         for (const lrc of lyrics) {
-          const verse = Math.max(0, (parseInt(lrc.num, 10) || 1) - 1);
+          const verse = Math.max(0, (parseInt(lrc.num, 10) || 1) - 1) - skip;
           lrc.y = -(base + verse * row);
+        }
+        if (!above.length) continue;
+        // 上方各段：段号小的在上，最大的那段贴着谱表最高处（音符、符干、上方的弧）；`lrc.y` 是基线、向上为正
+        const st = sys.staves.find((s) => s.part() === part && s.partStaff.subIndex === staff);
+        const top = Math.min(st ? st.autoExtent(sys)[0] : 0, -staffGap);
+        const order = nums(above);
+        const descent = font.metrics.descent;
+        for (const lrc of above) {
+          const k = order.length - 1 - order.indexOf(Math.max(0, (parseInt(lrc.num, 10) || 1) - 1));
+          lrc.y = -top + AUTO_LYRIC_GAP + descent + k * row;
         }
       }
     }
@@ -665,7 +683,8 @@ function clearLyricsBelowNotes(score: StaffLayout): void {
   for (const sys of score.systems) {
     for (const part of score.parts) {
       // 只挪第一谱表的：`systemLowest` 量的是第一谱表，别的谱表的歌词坐标相对它自己的谱表
-      const lyrics = systemLyrics(score, sys, [part]).filter((l) => l.staff === 0);
+      // 谱表上方的词（`placement="above"`、正的 default-y）不跟着往下让
+      const lyrics = systemLyrics(score, sys, [part]).filter((l) => l.staff === 0 && l.y <= 0);
       if (lyrics.length === 0) continue;
       // 首行歌词字顶（cy 向下为正；lrc.y 是负的，越负越往下）
       let top = Infinity;
@@ -776,7 +795,18 @@ function placeDynamicsBelow(score: StaffLayout): void {
         const md = part.measures[mif.index];
         if (!md) continue;
         for (const t of md.textBlocks) {
-          if (!t.autoY || t.src?.placement !== "below" || t.src.type !== "dynamics") continue;
+          if (!t.autoY || t.src?.placement !== "below") continue;
+          if (t.src.type === "words") {
+            // 文字记号（「(+ Bass)」）：放在这一谱表下方最低处之下，有歌词就在末行歌词之下
+            const eng = score.options;
+            const h = tightLineHeights(t, eng.meta, eng.musicFont.size, eng.textLineHeightBySize);
+            if (!h.length) continue;
+            const lyr = systemLyrics(score, sys, [part]).filter((l) => l.staff === t.staff && l.y < 0 && !l.empty);
+            const low = Math.max(systemLowest(score, sys, true, [part], t.staff), ...lyr.map((l) => -l.y + l.font.metrics.descent));
+            t.y = -(low + DYNAMIC_BELOW_GAP) - h[0]!;
+            continue;
+          }
+          if (t.src.type !== "dynamics") continue;
           // 同一谱表、这个拍位起最近的那个字（首段）
           const lrc = md.lyrics
             .filter((l) => l.staff === t.staff && !l.empty && l.offset.compareTo(t.offset) >= 0)
@@ -794,7 +824,8 @@ function placeDynamicsBelow(score: StaffLayout): void {
             // 文字块的 x 是相对它自己拍位的偏移（`updateDataXPos` 再加拍位）：字可能落在后面的拍上，按字的位置折回来
             t.x = lrc.x + lrc.xOffset - lrc.width / 2 - DYNAMIC_LYRIC_GAP - t.width() - mif.getEntPos(t.offset);
           } else {
-            t.y = -(systemLowest(score, sys, true, [part], t.staff) + DYNAMIC_BELOW_GAP + DYNAMIC_ASCENT);
+            // 不算松叶：力度与松叶同排一行（原谱「mf ＜ f」），算上就摞到松叶下面去了
+            t.y = -(systemLowest(score, sys, false, [part], t.staff) + DYNAMIC_BELOW_GAP + DYNAMIC_ASCENT);
           }
         }
       }

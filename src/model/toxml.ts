@@ -132,7 +132,7 @@ const OWNS: Readonly<Record<string, { attrs?: readonly string[]; kids?: readonly
   articulations: { kids: "*" },
   ornaments: { kids: "*" },
   technical: { kids: "*" },
-  lyric: { attrs: ["number", "name"], kids: ["syllabic", "text", "extend", "elision"] },
+  lyric: { attrs: ["number", "name", "placement"], kids: ["syllabic", "text", "extend", "elision"] },
   extend: { attrs: ["type"] },
   harmony: { attrs: ["staff"], kids: ["root", "kind", "bass", "degree", "offset"] },
   root: { kids: "*" },
@@ -447,7 +447,8 @@ function harmonyXml(o: Out, h: Harmony, cx: Ctx): void {
 function lyricXml(o: Out, l: Lyric, cx: Ctx): void {
   const number = l.numberText ?? (l.refrain ? "chorus" : String(l.number));
   const name = l.name !== undefined ? ` name="${escapeAttr(l.name)}"` : "";
-  o.open("lyric", ` number="${escapeAttr(number)}"${name}${posAttrs(cx.layout?.pos.get(l))}`, surfaceOf(l));
+  const pl = l.placement ? ` placement="${l.placement}"` : "";
+  o.open("lyric", ` number="${escapeAttr(number)}"${name}${pl}${posAttrs(cx.layout?.pos.get(l))}`, surfaceOf(l));
   if (l.syllabic) o.text("syllabic", l.syllabic);
   o.text("text", (l.leadingPunctuation ?? "") + l.text + (l.trailingPunctuation ?? ""));
   if (l.extend) o.leaf("extend", l.extendType ? ` type="${l.extendType}"` : "");

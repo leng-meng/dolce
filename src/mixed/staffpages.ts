@@ -139,15 +139,32 @@ function placePartAboveStaff(score: StaffLayout, p: PartLayout, mixed: boolean):
         const y = yPos ?? 0;
         placed.push({ x0: left, x1: right, y0: 30 - y - 20, y1: 50 - y });
       }
+      // 谱表上方的词（`placement="above"`）：文字记号摞到它上面
+      for (const m of sys.measures) {
+        for (const l of p.measures[m.index]?.lyrics ?? []) {
+          if (l.staff !== 0 || l.y <= 0 || l.empty) continue;
+          const cx = m.xpos() + l.x + l.xOffset;
+          placed.push({ x0: cx - l.width / 2, x1: cx + l.width / 2, y0: l.y - l.font.metrics.descent, y1: l.y + l.font.size });
+        }
+      }
       // **速度记号最后排**（摞在最上面）：力度、文字记号贴着谱面，速度是整段的标题性记号，
       // 按出现先后摞的话曲首的 `♩=88` 会被同一拍上的 `mp` 压到下面去
       const isTempo = (t: MeasureText): boolean => !!t.src && [t.src, ...(t.src.more ?? [])].some((d) => d.type === "metronome");
       const blocks = sys.measures.flatMap((m) => (p.measures[m.index]?.textBlocks ?? []).map((t) => ({ m, t })));
       blocks.sort((a, b) => Number(isTempo(a.t)) - Number(isTempo(b.t)));
+      // 源谱版面档：文字按它横向跨过的那一段音符与弧贴（原谱「unis.」「dim.」落在低音处、离谱表近），不按整行最高的音一律抬
+      const sky = score.keepBreaks && !mixed && !st.hasHarmony ? st.skyline(sys, true).above : null;
+      const localFloor = (x0: number, x1: number): number => {
+        let top = 0;
+        for (let b = Math.max(0, Math.floor(x0 / SKYLINE_BIN)); b <= Math.min(sky!.length - 1, Math.floor(x1 / SKYLINE_BIN)); b++) top = Math.max(top, sky![b]!);
+        return top + MIXED_TEXT_CLEAR;
+      };
       for (const { m, t } of blocks) {
         // 原文带 default-y 的谱表上方文字（「（副歌）」）也只往上抬不往下压：混排时简谱层插在谱表与它之间，
         // 五线谱档和弦被抬离符干后原高度会压在和弦行上（006）
         if (t.staff !== 0 || (!t.autoY && !(t.y > 0))) continue;
+        // 源谱版面档已放到下方的（`placement="below"` 的力度、文字记号，`placeDynamicsBelow`）不抬回上方
+        if (t.autoY && t.y < 0 && t.src?.placement === "below") continue;
         // 带坐标的谱：原文高过和弦行的文字也落回和弦那一层（005「（副歌）」用户定：与和弦大致同高），撞上再摞；速度记号不动
         if (t.y < floor || (!score.autoLayout && st.hasHarmony && !isTempo(t))) t.y = floor;
         const w = t.width();
@@ -156,6 +173,7 @@ function placePartAboveStaff(score: StaffLayout, p: PartLayout, mixed: boolean):
         const [inkL, inkR] = textInkSpan(t);
         const x0 = left + inkL;
         const x1 = left + inkR;
+        if (sky && t.autoY && !isTempo(t)) t.y = localFloor(x0, x1);
         const h = textInkHeight(t);
         for (let again = true; again; ) {
           again = false;
