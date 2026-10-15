@@ -374,8 +374,8 @@ function fillLeadingVerses(staff: StaffRow[], copied?: (n: JpNum, from: number, 
 async function simplifyStrayTraditional(
   ocr: OcrBackend, strips: Surface[], mainIdx: number[],
   textOf: (s: number) => string, setChar: (s: number, k: number, ch: string) => void,
-): Promise<void> {
-  if (!ocr.rankTextChars) return;
+): Promise<boolean> {
+  if (!ocr.rankTextChars) return false;
   let trad = 0, simp = 0;
   const hits: number[] = []; // 含繁体字的条
   for (const s of mainIdx) {
@@ -387,7 +387,8 @@ async function simplifyStrayTraditional(
     if (any) hits.push(s);
   }
   // 孤立才算误判：整页至多两个繁体字、且简体字是它的十倍以上（繁体谱面一整页都是繁体，碰不到这条）
-  if (!trad || trad > 2 || simp < trad * 10) return;
+  const simplifiedPage = trad <= 2 && simp >= Math.max(10, trad * 10);
+  if (!trad || !simplifiedPage) return simplifiedPage;
   const ranked = await ocr.rankTextChars(hits.map((s) => strips[s]!));
   hits.forEach((s, i) => {
     const alt = ranked[i];
@@ -400,6 +401,32 @@ async function simplifyStrayTraditional(
       setChar(s, k, sc);
     });
   });
+  return true;
+}
+
+/**
+ * 页眉的标题、副标题里读成繁体的字（青年诗歌 2《真爱》读出「真愛」）：歌词判定整页是简体时（`recognizeLyrics` 的
+ * `simplifiedPage`）按同一口径改判——裁出它在源图上的框重跑候选，**简体形在该字候选里**才换。署名不走这里
+ * （可能真是繁体，76「詞曲：巧兒」）。候选的字序与原文对不上（补过空格、剥过曲号以外的字）就整条不动。
+ */
+export async function simplifyHeaderLine(bin: Binary, ocr: OcrBackend, text: string, bbox: Rect): Promise<string> {
+  if (!ocr.rankTextChars || ![...text].some((ch) => simplifiedOf(ch))) return text;
+  const [line] = await ocr.rankTextChars([buildStrip(surfaceFromBinary(bin), [bbox])]);
+  if (!line) return text;
+  const chars = [...text];
+  const keep = chars.map((ch, i) => ({ ch, i })).filter((c) => !/\s/.test(c.ch));
+  const got = line.filter((c) => !/\s/.test(c.ch));
+  // 原文（去空白）在候选首选串里的位置：标题行可能还带着被剥掉的曲号
+  let off = -1;
+  for (let o = 0; o + keep.length <= got.length && off < 0; o++) if (keep.every((c, k) => got[o + k]!.ch === c.ch)) off = o;
+  if (off < 0) return text;
+  keep.forEach((c, k) => {
+    const sc = simplifiedOf(c.ch);
+    if (!sc || !got[off + k]!.alts.includes(sc)) return;
+    probe("header.tradToSimp");
+    chars[c.i] = sc;
+  });
+  return chars.join("");
 }
 
 /** 一个歌词字出自哪条 rec 条（strips 下标）的第几个字（textsPos 下标），及它的叠加定位框。 */
@@ -425,7 +452,7 @@ export async function recognizeLyrics(
   /** 页眉里**已被采纳**的字段区域（标题/词曲/调号/速度/拍号）。第一谱行的上方带与页眉 ROI
    *  几何上重叠，落在这些框里的块一律不进和弦通道——见 jianpu.ts 那处说明。 */
   headerRegions?: TextRegion[],
-): Promise<{ lyrics: TextRegion[]; chords: TextRegion[]; hooks: LyricHooks }> {
+): Promise<{ lyrics: TextRegion[]; chords: TextRegion[]; hooks: LyricHooks; /** 歌词整页是简体（`simplifyHeaderLine` 用） */ simplifiedPage?: boolean }> {
   const regions: TextRegion[] = [];
   if (!ocr.recognizeTexts || !staff.length) return { lyrics: regions, chords: [], hooks: noHooks };
 
@@ -659,7 +686,7 @@ export async function recognizeLyrics(
     else { const r = await ocr.recognizeTexts(st); idxs.forEach((ci, k) => { texts![ci] = r[k]; }); }
   }
   // 整页简体里蹦出来的个别繁体字：形近误判，据候选改回简体（页眉不参与，只看歌词那批）
-  await simplifyStrayTraditional(
+  const simplifiedPage = await simplifyStrayTraditional(
     ocr, strips, mainIdx,
     (s) => (textsPos ? textsPos[s]!.map((c) => c.ch).join("") : texts![s]!),
     (s, k, ch) => {
@@ -1259,6 +1286,6 @@ export async function recognizeLyrics(
       return c ? { alts: c.alts, scores: c.scores ?? [] } : null;
     });
   };
-  return { lyrics: dropped.size ? regions.filter((r) => !dropped.has(r)) : regions, chords: chordRegions,
+  return { lyrics: dropped.size ? regions.filter((r) => !dropped.has(r)) : regions, chords: chordRegions, simplifiedPage,
     hooks: { rankAlts, regionOf: ({ n, verse, idx }) => charSrc.get(n)?.[verse]?.[idx]?.region } };
 }

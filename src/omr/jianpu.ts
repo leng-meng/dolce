@@ -11,7 +11,7 @@ import type { Binary, Component, JpNum, Rect, StaffRow, RecognizedScore } from "
 import { rright, rbottom, rcx, rcy, RHYTHM_DIGIT, isRejoinedArc } from "../omrkit/types";
 import { connectedComponents } from "../omrkit/ccl";
 import type { OcrBackend } from "../omrkit/ocr";
-import { recognizeLyrics, type LyricCharRef, type LyricHooks } from "./lyrics";
+import { recognizeLyrics, simplifyHeaderLine, type LyricCharRef, type LyricHooks } from "./lyrics";
 import { applyRefLyrics } from "./reflyrics";
 import { recognizeHeader } from "./header";
 import { recognizeTrailingStanzas } from "./stanzas";
@@ -2217,6 +2217,19 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
     const lr = await recognizeLyrics(bin, lyricComps, useRows, numH, ocr, headerRegions);
     lyricRegions = lr.lyrics.length ? lr.lyrics : undefined;
     chordRegions = lr.chords.length ? lr.chords : undefined;
+    // 标题、副标题里读成繁体的字：歌词整页是简体才按候选改回（署名不动，见 `simplifyHeaderLine`）
+    if (lr.simplifiedPage) {
+      for (const field of ["title", "subtitle"] as const) {
+        const text = field === "title" ? title : subtitle;
+        const region = text ? headerRegions?.find((r) => r.text === text) : undefined;
+        if (!text || !region) continue;
+        const fixed = await simplifyHeaderLine(bin, ocr, text, region.bbox);
+        if (fixed === text) continue;
+        region.text = fixed;
+        if (field === "title") title = fixed;
+        else subtitle = fixed;
+      }
+    }
     // 谱后单独排版的附段（第 2…N 段印成诗行、不跟音符对齐）：照第 1 段的音位骨架填进去。
     // 要排在下面「digit=0 复原」「隐含 tie 补检」之前——两者都看音符有没有词。
     // 多声部谱的歌词只挂在一个声部上（四声部本子夹在第 2、3 声部之间 → 第 2 声部）。别的声部行底下被当成歌词行的
