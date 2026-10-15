@@ -207,9 +207,9 @@ function readCredits(root: Element): Credit[] {
   return out;
 }
 
-function readPartGroups(partList: Element): { groups: PartGroup[]; names: Map<string, { name?: string; abbrev?: string }> } {
+function readPartGroups(partList: Element): { groups: PartGroup[]; names: Map<string, { name?: string; abbrev?: string; size?: number }> } {
   const groups: PartGroup[] = [];
-  const names = new Map<string, { name?: string; abbrev?: string }>();
+  const names = new Map<string, { name?: string; abbrev?: string; size?: number }>();
   const open: PartGroup[] = [];
   for (const c of Array.from(partList.children)) {
     if (c.tagName === "part-group") {
@@ -234,7 +234,8 @@ function readPartGroups(partList: Element): { groups: PartGroup[]; names: Map<st
       const id = c.getAttribute("id") ?? "";
       const nm = childText(c, "part-name") ?? undefined;
       const ab = childText(c, "part-abbreviation") ?? undefined;
-      names.set(id, { name: nm, abbrev: ab });
+      const sz = Number(child(c, "part-name")?.getAttribute("font-size"));
+      names.set(id, { name: nm, abbrev: ab, ...(sz > 0 ? { size: sz } : {}) });
       for (const g of open) g.parts.push(id);
     }
   }
@@ -836,7 +837,7 @@ export function loadScoreDoc(xmlText: string): ScoreDoc {
   const partList = child(root, "part-list");
   const { groups, names } = partList
     ? readPartGroups(partList)
-    : { groups: [], names: new Map<string, { name?: string; abbrev?: string }>() };
+    : { groups: [], names: new Map<string, { name?: string; abbrev?: string; size?: number }>() };
   if (groups.length) song.partGroups = groups;
   const scoreParts = new Map((partList ? children(partList, "score-part") : []).map((sp) => [sp.getAttribute("id") ?? "", sp]));
 
@@ -850,6 +851,7 @@ export function loadScoreDoc(xmlText: string): ScoreDoc {
     const nm = names.get(id);
     if (nm?.name) part.name = nm.name;
     if (nm?.abbrev) part.abbrev = nm.abbrev;
+    if (nm?.size) part.nameSize = nm.size;
     let staves: number | undefined;
     for (const mEl of children(p, "measure")) {
       const m = readMeasure(mEl, ids, marks);

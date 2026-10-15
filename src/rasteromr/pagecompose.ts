@@ -9,6 +9,7 @@
 // 文字层落在这一段里的字直接当页眉行（不用认）。识别用的位图一点不动，其余各路条子的指纹都不变。
 import type { WordLine } from "../omrkit/headertext";
 import type { WordStrip } from "./words";
+import { TEXT_INK_EM } from "./textsize";
 import { decodeImage } from "./rasterpage";
 import { pageImageOps, pageImageObj } from "../omrkit/pdf";
 import type { Mat } from "../omrkit/vector";
@@ -94,7 +95,8 @@ export async function composeHeaderStrip(page: any, OPS: any, binW: number): Pro
     const size = Math.max(...r.map((it) => it.size));
     const x = Math.min(...r.map((it) => it.x));
     const right = Math.max(...r.map((it) => it.x + it.w));
-    texts.push({ t, x: Math.round(x * s), y: Math.round((pageTop - r[0].base - size * 0.8) * s), w: Math.round((right - x) * s), h: Math.round(size * s) });
+    // 文字层给得出真字号：按位图路字高的口径记（`TEXT_INK_EM`，写出时再折回字号）。这些字不在拼出的条里，墨迹量不到
+    texts.push({ t, x: Math.round(x * s), y: Math.round((pageTop - r[0].base - size * 0.8) * s), w: Math.round((right - x) * s), h: Math.round(size * s), size: size * s * TEXT_INK_EM });
   }
   let any = 0;
   for (let i = 0; i < data.length && !any; i++) any = data[i];

@@ -149,8 +149,11 @@ function assignSlots(rows: StaffToken[][]): number[][] | null {
     let clef = "";
     let cn = 0;
     for (const [c, v] of clefs) if (v > cn) [clef, cn] = [c, v];
+    const braces = full.map((r) => braceOf(r[k])).filter((b) => b);
+    const top = braces.filter((b) => b === "T").length;
     return {
       clef,
+      brace: braces.length * 2 > full.length ? (top * 2 >= braces.length ? "T" : "B") : "",
       lyric: full.filter((r) => r[k].lyric).length * 2 >= full.length,
       pitch: ps.length ? ps.sort((a, b) => a - b)[ps.length >> 1] : null,
     };
@@ -168,6 +171,9 @@ function assignSlots(rows: StaffToken[][]): number[][] | null {
     const sl = slots[k];
     let v = 0;
     if (t.clef && sl.clef) v += t.clef === sl.clef ? CLEF_HIT : CLEF_MISS;
+    // 花括号的上下半：两边都有才表态（花括号常认不出，认不出不逼走）
+    const tb = braceOf(t);
+    if (tb && sl.brace) v += tb === sl.brace ? BRACE_HIT : BRACE_MISS;
     v += t.lyric === sl.lyric ? LYRIC_HIT : -LYRIC_HIT;
     if (t.pitch !== null && sl.pitch !== null) v -= Math.min(PITCH_CAP, Math.abs(t.pitch - sl.pitch) * PITCH_W);
     // **标签压过音域**：谱面写着 `Soprano 1` 就是女高一部，而音域跨段落会整体挪
@@ -215,6 +221,8 @@ function assignSlots(rows: StaffToken[][]): number[][] | null {
   // 标签只在声部进入处印，一个槽位往往只有一两行带标签，所以要先有个指派才归得起来。
   const first = assign();
   if (!first) return null;
+  /** 槽位名字是投票投出来的票数（「行数最满」那一档读出来的记 0：那是纸上的字，不让） */
+  const voteOf: number[] = new Array(n).fill(0);
   for (let k = 0; k < n; k++) {
     const votes = new Map<string, number>();
     for (let si = 0; si < rows.length; si++) {
@@ -235,6 +243,13 @@ function assignSlots(rows: StaffToken[][]): number[][] | null {
     let an = 0;
     for (const [lb, v] of anchor) if (v > an) [ab, an] = [lb, v];
     labelOf[k] = ab ?? best;
+    if (!ab && best) voteOf[k] = bn;
+  }
+  // **一个名字只归一个槽位**（投出来的那几个里票最多的）：第一遍错放的行把自己的名字投给错的槽位，
+  // 两个槽位同名就分不开了（宁静 3 个没词的「W」行落在空着名字的槽位 0，槽位 0 也成了「W」）
+  for (let k = 0; k < n; k++) {
+    const lb = labelOf[k];
+    if (lb && voteOf[k] && labelOf.some((o, j) => j !== k && o === lb && (voteOf[j] === 0 || voteOf[j]! > voteOf[k]!))) labelOf[k] = null;
   }
   // **标签少到区分不了任何东西时就别让它表态。** 标签只在声部进入处印，
   // 认出来的更少（实测全语料 59 条标签条只读出 8 个声部名）；只有一个槽位有名字、
@@ -287,12 +302,32 @@ function propagateLabels(rows: StaffToken[][]): void {
       for (const [lb, v] of votes) if (v > bn) [best, bn] = [lb, v];
       if (best) for (const r of group) if (!r[i].label) r[i].label = best;
     }
+    // 花括号同理：一档里有的系统认出了上下半，整行都没认出的那几个照它补（宁静前奏那行的钢琴没认出花括号，落进了人声槽位）
+    const braced = group.filter((r) => r.some((t) => braceOf(t)));
+    if (!braced.length) continue;
+    for (const r of group) {
+      if (r.some((t) => braceOf(t))) continue;
+      for (let i = 0; i < k; i++) {
+        const top = braced.filter((b) => b[i]!.topOfBrace).length;
+        const bot = braced.filter((b) => b[i]!.bottomOfBrace).length;
+        if (top * 2 > braced.length) r[i]!.topOfBrace = true;
+        else if (bot * 2 > braced.length) r[i]!.bottomOfBrace = true;
+      }
+    }
   }
+}
+
+/** 一行谱在花括号的上半（`T`）、下半（`B`）还是不在（空） */
+function braceOf(t: StaffToken): "T" | "B" | "" {
+  return t.topOfBrace ? "T" : t.bottomOfBrace ? "B" : "";
 }
 
 /** 谱号对上 / 对不上的分。对不上要压得住音域那一项，谱号是硬证据。 */
 const CLEF_HIT = 2;
 const CLEF_MISS = -6;
+/** 花括号上下半对上 / 对不上的分。对不上同谱号一样是硬证据。 */
+const BRACE_HIT = 2;
+const BRACE_MISS = -6;
 /** 有没有词对上的分。单行漏认只丢这么多，不否决。 */
 const LYRIC_HIT = 1.5;
 /** 标签对上 / 对不上的分。要压得过音域那一项（谱面写着的比量出来的硬）。 */
@@ -499,17 +534,25 @@ function nameParts(systems: StaffScore["systems"], parts: Part[]): void {
       const bottom = Math.max(...sts.map((st) => st.box.bottom)) + sp;
       const left = Math.min(...sts.map((st) => st.box.left));
       const mid = (top + bottom) / 2;
-      let best: { text: string; d: number } | null = null;
-      for (const o of page.objs) {
-        if (!o.run || !o.hasTag("Instrument") || o.box.right > left) continue;
-        const cy = (o.box.top + o.box.bottom) / 2;
+      let best: { text: string; d: number; size: number } | null = null;
+      // 矢量路：文字层里打了 `Instrument` 的；位图路：声部名带读出来的块（`SPage.partNames`）
+      const cands = [
+        ...page.objs.filter((o) => o.run && o.hasTag("Instrument")).map((o) => ({
+          text: o.run!.glyphs.map((g) => g.unicode).join("").trim(), box: o.box, size: o.textSize ?? o.run!.sizeDev,
+        })),
+        ...page.partNames,
+      ];
+      for (const c of cands) {
+        if (c.box.right > left) continue;
+        const cy = (c.box.top + c.box.bottom) / 2;
         if (cy < top || cy > bottom) continue;
-        const text = o.run.glyphs.map((g) => g.unicode).join("").trim();
-        if (text && (!best || Math.abs(cy - mid) < best.d)) best = { text, d: Math.abs(cy - mid) };
+        if (c.text && (!best || Math.abs(cy - mid) < best.d)) best = { text: c.text, d: Math.abs(cy - mid), size: c.size };
       }
       if (!best) continue;
-      if (!part.name) part.name = best.text;
-      else if (!part.abbr && best.text !== part.name) part.abbr = best.text;
+      if (!part.name) {
+        part.name = best.text;
+        part.nameSize = { page, size: best.size };
+      } else if (!part.abbr && best.text !== part.name) part.abbr = best.text;
     }
   }
 }

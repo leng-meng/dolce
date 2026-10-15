@@ -607,7 +607,7 @@ function scoreToMusicXmlRaw(
       if (g.first === pi)
         partList.push(`<part-group type="start" number="${gi + 1}"><group-symbol>${g.symbol}</group-symbol><group-barline>${g.barline ? "yes" : "no"}</group-barline></part-group>`);
     });
-    partList.push(scorePartXml(id, part.name, part.abbr));
+    partList.push(scorePartXml(id, part.name, part.abbr, layout && part.nameSize ? pageTextPt(part.nameSize.page, part.nameSize.size) : undefined));
     score.groups?.forEach((g, gi) => {
       if (g.last === pi) partList.push(`<part-group type="stop" number="${gi + 1}"/>`);
     });
@@ -618,16 +618,25 @@ function scoreToMusicXmlRaw(
     let prevFifths: number | null = null;
     let prevTime: string | null = null;
     let prevClef: string[] = [];
-    let hidden = false;
     const nStaves = part.scoreStaves.length;
-    const staffDetails = (n: number, show: "yes" | "no") =>
-      n > 1 ? Array.from({ length: n }, (_, k) => `<staff-details number="${k + 1}" print-object="${show}"/>`).join("") : `<staff-details print-object="${show}"/>`;
+    /** 各谱表当前印不印（`<staff-details>` 的状态跨小节延续，只在变的时候写） */
+    const shown: boolean[] = Array(nStaves).fill(true);
+    /** 各谱表的可见性改成 `want`，变了的谱表写 `<staff-details>`（单谱表声部不带 number） */
+    const staffDetails = (want: boolean[]): string =>
+      want
+        .map((v, k) => {
+          if (v === shown[k]) return "";
+          shown[k] = v;
+          const show = v ? "yes" : "no";
+          return nStaves > 1 ? `<staff-details number="${k + 1}" print-object="${show}"/>` : `<staff-details print-object="${show}"/>`;
+        })
+        .join("");
 
     /**
      * **这一系统里这个声部的谱表全隐藏了**（Finale「隐藏空谱表」：牵我的手首系统只印了器乐，W / M 两行人声没印）。
      * 原来整段跳过不写小节，这个声部从第二个系统起算第 1 小节，整体往前错了一个系统（W / M 少开头 6 小节）。
      * 照样按这一系统的小节数写整小节休止：拍号、调号取同一系统别的谱表的，谱号取这个声部第一次露面那一系统的；
-     * 头一个隐藏小节写 `<staff-details print-object="no"/>`，重新露面时写回 `yes`。
+     * 头一个隐藏小节写 `<staff-details print-object="no"/>`，重新露面时写回 `yes`（逐谱表记，见 `staffDetails`）。
      * `sysOfBar` 记 -1：隐藏的系统不算这个声部「出现过」，接跨行弧时跳过它（见 `renumberSlurs`）。
      */
     const hiddenSystem = (entry: (typeof score.systems)[number], si: number): string => {
@@ -669,10 +678,7 @@ function scoreToMusicXmlRaw(
             prevClef = clefs;
           }
         }
-        if (!hidden) {
-          attrs += staffDetails(nStaves, "no");
-          hidden = true;
-        }
+        attrs += staffDetails(Array(nStaves).fill(false));
         const [beats, beatType] = (prevTime ?? "4/4").split("/").map(Number);
         const dur = ticks(beats / beatType);
         let notes = "";
@@ -730,11 +736,8 @@ function scoreToMusicXmlRaw(
             });
             prevClef = clefs;
           }
-          // 隐藏了一段之后重新露面
-          if (hidden) {
-            attrs += staffDetails(staves.length, "yes");
-            hidden = false;
-          }
+          // 隐藏了一段之后重新露面；多谱表声部只印了其中几行的（望十架第三页长笛那行没印、钢琴右手照印），没印的那行单独藏
+          attrs += staffDetails(staves.map((st) => !!st));
         }
         // 被系统换行劈开的小节的后半截：系统里任一行谱配得上就算（一行认漏了音、凑不满，别的行照样配得上，232 主也爱我歌）
         const splitTail = entry.sys.staves.some((st) => st.bars[bi]?.splitTail);

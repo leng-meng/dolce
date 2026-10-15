@@ -9,7 +9,8 @@ import { Fraction } from "../common/fraction";
 import { Matrix33 } from "../common/geom";
 import { Font } from "../layout/font";
 import { Group, TextFrame } from "../layout/pageitem";
-import { harmonyBand, LCR, SKYLINE_BIN, StaffLayout, Notation, ScoreCredit, Sys, type MeasureText, type TextBlock } from "./model";
+import { harmonyBand, LCR, SKYLINE_BIN, StaffLayout, Notation, ScoreCredit, Sys, type MeasureText, type PartLayout, type TextBlock } from "./model";
+import { autoStaffDistances } from "./layoutpass";
 import { drawSystem, endingPlace, harmonyWidthOf } from "./render";
 
 // -----------------------------------------------------------------------
@@ -86,7 +87,14 @@ export function formatMixedScore(score: StaffLayout, jianpuPart = 0): void {
  *  混排（`formatMixedScore`）与五线谱档共用。带坐标的五线谱档也走：原文和弦的 default-y 常贴着谱表上沿
  *  （Finale 出的 500 首是 9），朝上符干、符杠一高就压上去（007、008），和弦行一律让开谱面内容。 */
 export function placeAboveStaff(score: StaffLayout, mixed: boolean): void {
-  const p = score.parts[0];
+  // 源谱版面档逐个声部摞：首个声部常整行不印（合唱谱人声进来之前），文字记号挂在下面的声部上（望十架曲首的速度与「unis.」叠成一团）
+  const ps = score.keepBreaks ? score.parts : score.parts.slice(0, 1);
+  for (const p of ps) placePartAboveStaff(score, p, mixed);
+  // 文字往上摞过后与上一谱表的不碰距离要重量（谱表距离是排行时按当时的文字高量的）
+  if (score.keepBreaks) autoStaffDistances(score);
+}
+
+function placePartAboveStaff(score: StaffLayout, p: PartLayout, mixed: boolean): void {
   if (!p || p.staves.length === 0) return;
   // Calculate mixed staff y positions (needs chords/slurs in place)
   p.calcMixedStaffY();
@@ -276,6 +284,8 @@ function systemGap(a: Sys, b: Sys): number {
  * 满页的原谱一页就排不下。
  * 一页排不下：按比例压**各系统多出不碰距离的那截**（页首那截压到页首能到的最高处）与**系统内各谱表距离多出不碰距离的那截**
  * （`SysStaff.minDistance`）；压到底仍排不下才把末行挪到下一页，挪下去的行不再有原位，与下一页的行一起照同一规则排。
+ * 并进去会把下一页原有的行再挤出去时不并，挪下去的行单独成页：不然一处排不下逐页往后挤（扫描件望十架十页挪了 15 行），
+ * 单独成页只多一页，后面各页仍照原谱。
  * 上边距是按识别出的墨迹框量的（弧、符杠不在里面），原谱页首那一行的弧与高音常伸进这片地方：
  * 没有页眉的页，首个系统可以上探到离纸边 `SOURCE_MIN_TOP` 为止。
  */
@@ -300,29 +310,33 @@ function sourceFlow(score: StaffLayout, items: FrameItem[], ph: number): LayoutF
     it.height = top - bot + it.musicYOffset;
     result[i]!.height = it.height;
   };
-  let carry: number[] = [];
-  for (let p = 0; p < pages.length || carry.length; p++) {
-    const list = [...carry, ...(pages[p] ?? [])];
-    carry = [];
-    if (!list.length) continue;
-    const lo = items[list[0]!]!.credits.length ? 0 : -rise;
+  /** 照原位、只往下让排一页：首谱表顶线的位置、上下相邻两行的不碰距离、末行压到底还超出多少（`over`、可压的总量 `total`） */
+  const trial = (list: number[], lo: number) => {
+    const gaps = list.map((i, k) => (k === 0 ? 0 : systemGap(items[list[k - 1]!]!.system, items[i]!.system)));
+    const ls: number[] = [];
+    list.forEach((i, k) => {
+      const floor = k === 0 ? floorOf(i, lo) : ls[k - 1]! + gaps[k]!;
+      ls.push(Math.max(moved.has(i) ? floor : want[i]!, floor));
+    });
+    const lastI = list[list.length - 1]!;
+    const over = ls[ls.length - 1]! - items[lastI]!.bottomY - ph;
+    const gapExcess = ls.map((l, k) => l - (k === 0 ? floorOf(list[0]!, lo) : ls[k - 1]! + gaps[k]!));
+    const total = gapExcess.reduce((a, b) => a + b, 0) + list.reduce((a, i) => a + staffExcess(i), 0);
+    return { ls, over, gapExcess, total };
+  };
+  const loOf = (list: number[]) => (items[list[0]!]!.credits.length ? 0 : -rise);
+  /** 排一页；排不下的末几行挪出来交回 */
+  const place = (list: number[]): number[] => {
+    const out: number[] = [];
+    if (!list.length) return out;
+    const lo = loOf(list);
     for (;;) {
-      const gaps = list.map((i, k) => (k === 0 ? 0 : systemGap(items[list[k - 1]!]!.system, items[i]!.system)));
-      // 照原位、只往下让
-      const ls: number[] = [];
-      list.forEach((i, k) => {
-        const floor = k === 0 ? floorOf(i, lo) : ls[k - 1]! + gaps[k]!;
-        ls.push(Math.max(moved.has(i) ? floor : want[i]!, floor));
-      });
-      const lastI = list[list.length - 1]!;
-      const over = ls[ls.length - 1]! - items[lastI]!.bottomY - ph;
+      const { ls, over, gapExcess, total } = trial(list, lo);
       if (over > 0) {
-        const gapExcess = ls.map((l, k) => l - (k === 0 ? floorOf(list[0]!, lo) : ls[k - 1]! + gaps[k]!));
-        const total = gapExcess.reduce((a, b) => a + b, 0) + list.reduce((a, i) => a + staffExcess(i), 0);
         if (total < over && list.length > 1) {
           const last = list.pop()!;
           moved.add(last);
-          carry.unshift(last);
+          out.unshift(last);
           continue;
         }
         const keep = total > 0 ? Math.max(0, 1 - over / total) : 0;
@@ -343,8 +357,23 @@ function sourceFlow(score: StaffLayout, items: FrameItem[], ph: number): LayoutF
         result[i]!.ypos = ls[k]! - it.topY - it.musicYOffset;
         result[i]!.newPage = k === 0;
       });
-      break;
+      return out;
     }
+  };
+  // 挪下去的行先并进下一页；并进去会把那一页原有的行再挤出去（级联）时，挪下去的行单独成页，后面各页照原谱
+  let carry: number[] = [];
+  for (let p = 0; p < pages.length || carry.length; p++) {
+    const own = pages[p] ?? [];
+    if (carry.length && own.length) {
+      const both = [...carry, ...own];
+      const t = trial(both, loOf(both));
+      if (t.over > t.total) {
+        let rest = carry;
+        while (rest.length) rest = place(rest);
+        carry = [];
+      }
+    }
+    carry = place([...carry, ...own]);
   }
   return result;
 }

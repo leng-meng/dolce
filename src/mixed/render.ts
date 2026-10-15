@@ -1265,6 +1265,41 @@ function drawPartGroups(container: Group, sys: Sys): void {
   }
 }
 
+/** 声部名离系统左缘（括号、花括号之外）多远，tenths */
+const PART_NAME_GAP = 25;
+
+/**
+ * 声部名：首个系统印全名、之后印缩写，右对齐在系统左缘外（行首缩进里），纵向居本声部各可见谱表的中线；多行名逐行排。
+ * 只在源谱版面档印（`keepBreaks`）：缩进是照原谱来的，原谱在那里印着名字；自动铺排不留缩进，印了会出版心。
+ */
+function drawPartNames(container: Group, sys: Sys): void {
+  const scr = sys.score;
+  const first = scr.systems[0] === sys;
+  for (const part of scr.parts) {
+    const text = first ? part.name : part.abbrev;
+    if (!text) continue;
+    const ks = sys.staves.flatMap((st, k) => (st.part() === part && st.staffVisible ? [k] : []));
+    if (!ks.length) continue;
+    const y0 = sys.ypos(ks[0]!);
+    const y1 = sys.ypos(ks[ks.length - 1]!) + sys.staves[ks[ks.length - 1]!]!.height();
+    const font = new Font(scr.options.wordFont, part.nameSize > 0 ? part.nameSize / scr.scaling : scr.defaults.wordFont.size);
+    const lines = text.split(/\r?\n/);
+    const lineH = font.size * 1.2;
+    const cap = font.charBound("H");
+    // 首行基线：整块（首行字顶到末行基线）居中
+    const base = (y0 + y1) / 2 - ((lines.length - 1) * lineH + cap.top) / 2;
+    lines.forEach((line, li) => {
+      const tf = new TextFrame();
+      tf.text = line;
+      tf.font = font;
+      const m = new Matrix33();
+      m.setAffine([1, 0, 0, 1, -PART_NAME_GAP - font.measureText(line), base + li * lineH]);
+      tf.matrix = m;
+      container.add(tf);
+    });
+  }
+}
+
 // -----------------------------------------------------------------------
 // drawSysStaff
 
@@ -1361,6 +1396,7 @@ export function drawSystem(container: Group, sys: Sys): Group {
 
   drawBarline(eng, res, sys);
   drawPartGroups(res, sys);
+  if (scr.keepBreaks) drawPartNames(res, sys);
   for (const p of scr.parts) {
     drawLineObjs(res, sys, p);
   }

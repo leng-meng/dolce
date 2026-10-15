@@ -901,7 +901,7 @@ export function scoreDocToMusicXml(doc: ScoreDoc, options: ToXmlOptions = {}): s
     }
     o.open("score-part", ` id="${escapeAttr(p.id)}"`, surfaceOf(p, "score-part"));
     // MuseScore 兼容：`<part-name>` 留空并 print-object="no"（见 MusicXML-导出.md）
-    if (p.name) o.text("part-name", p.name);
+    if (p.name) o.text("part-name", p.name, p.nameSize ? ` font-size="${p.nameSize}"` : "");
     else o.leaf("part-name", ' print-object="no"');
     if (p.abbrev) o.text("part-abbreviation", p.abbrev);
     o.close();

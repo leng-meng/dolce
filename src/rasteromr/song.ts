@@ -12,7 +12,7 @@ import type { JianpuRow } from "./jianpufuse";
 import type { HeaderCredit, WordLine } from "../omrkit/headertext";
 import type { Rect } from "../omrkit/types";
 import { markSplitBars } from "../staffomr/notedata";
-import { buildScore } from "../staffomr/score";
+import { buildScore, type StaffProfile } from "../staffomr/score";
 import type { StaffReviewResult, StaffReviewStats } from "../staffomr/review";
 import { pageTextPt, scoreToMusicXml } from "../staffomr/toxml";
 import type { SPage, Staff } from "../staffomr/model";
@@ -70,6 +70,8 @@ export async function recognizeRasterSong(
   const barPages: Parameters<typeof markSplitBars>[0] = [];
   /** 闭合人声谱：两行谱之间印着歌词的上一行（见 `buildScore` 的同名选项） */
   const lyricsBelow = new Set<Staff>();
+  /** 谱面印的声部标签（`recognize.ts` 的 `staffLabels`，按谱行认回对象） */
+  const labelOf = new Map<Staff, string>();
   const total = sources.reduce((n, s) => n + (s.pdf.numPages as number), 0);
   let done = 0;
   /** 曲首页（第一页有谱的）的页眉 */
@@ -108,6 +110,10 @@ export async function recognizeRasterSong(
           stats.kind ??= r.raster?.kind ?? null;
           entries.push({ page: r.page, ctx: r.ctx });
           markLyricsBelow(r.page, r.lyricLines, lyricsBelow);
+          for (const st of r.page.staves) {
+            const lb = r.staffLabels.get(st.index);
+            if (lb) labelOf.set(st, lb);
+          }
           for (const n of r.notes) {
             const a = notesByStaff.get(n.staff) ?? [];
             a.push(n);
@@ -142,7 +148,16 @@ export async function recognizeRasterSong(
   if (!entries.length) return { xml: null, score: null, stats, pages, noteBoxes, assignment: emptyAssign, rebuild: () => { throw new Error("没有谱表"); } };
   // 拉丁段挪到全曲中文段后面（页内先占位，见 `lyricpost.ts::settleLyricVerses`）
   settleLyricVerses([...notesByStaff.values()].flat());
-  let score = buildScore(entries, { lyricsBelow });
+  // 内容剖面（有没有词、音域中位数、谱面标签）交给 `buildScore` 做全局指派，见 `score.ts::assignSlots`
+  const profileOf = (st: Staff): StaffProfile => {
+    const ns = notesOf(st);
+    const ps = ns
+      .filter((n) => !n.rest && !n.grace && n.step)
+      .map((n) => "CDEFGAB".indexOf(n.step!) + 7 * n.octave!)
+      .sort((a, b) => a - b);
+    return { lyric: ns.some((n) => n.lyrics?.length), pitch: ps.length ? ps[ps.length >> 1]! : null, label: labelOf.get(st) ?? null };
+  };
+  let score = buildScore(entries, { lyricsBelow, profileOf });
   const credits = (header ?? []).map(({ text, type, justify, size, box }) => ({ text, type, justify, box, ...(headerPage ? { size: pageTextPt(headerPage, size) } : {}) }));
   // 没给标题（编辑器里打开的图、PDF）就拿页眉的头一个标题
   const title = opts.title ?? credits.find((c) => c.type === "title")?.text;

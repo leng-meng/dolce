@@ -726,6 +726,8 @@ export interface Part {
   id: string;
   name?: string;
   abbrev?: string;
+  /** 声部名的字号（pt，`<part-name font-size>`；识别结果照原谱量的） */
+  nameSize?: number;
   /** [五线谱] 多谱表（钢琴谱） */
   staffCount?: number;
   measures: Measure[];

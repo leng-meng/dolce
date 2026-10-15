@@ -13,7 +13,7 @@ import { stripKey, type LyricStrip, type OcrChar } from "./lyric";
 import { labelKey, normalizeLabel, type LabelStrip } from "./stafflabel";
 import { jianpuKey, type JianpuStrip } from "./jianpuband";
 import { timeKey, type TimeStrip } from "./timesig";
-import { keepWordLine, spaceHeaderText, spaceWordText, wordKey, type WordStrip } from "./words";
+import { keepStripLine, spaceHeaderText, spaceWordText, wordKey, type WordStrip } from "./words";
 import { keepHeaderLine, type WordLine } from "../omrkit/headertext";
 import type { JianpuRow } from "./jianpufuse";
 import { surfaceFromGray, surfaceFromInk, type Surface } from "../omrkit/surface";
@@ -96,19 +96,19 @@ export async function ocrLabelStrips(ocr: OcrBackend, strips: readonly LabelStri
   return out;
 }
 
-/** 文字指示带：DBNet 找行、逐行 rec，只留像文字指示的行（`keepWordLine`），词界按列投影补空格。空带也回一条空表。 */
+/** 文字指示带与声部名带：DBNet 找行、逐行 rec，只留该存的行（`keepStripLine`），词界按列投影补空格。空带也回一条空表。 */
 export function ocrWordStrips(ocr: OcrBackend, strips: readonly WordStrip[]): Promise<Map<string, WordLine[]>> {
-  return ocrLineStrips(ocr, strips, keepWordLine, spaceWordText);
+  return ocrLineStrips(ocr, strips, keepStripLine, spaceWordText);
 }
 
 /** 页眉带：同文字指示带，但中文行也留（`keepHeaderLine`），词间空格按 `spaceHeaderText` 补。 */
 export function ocrHeaderStrips(ocr: OcrBackend, strips: readonly WordStrip[]): Promise<Map<string, WordLine[]>> {
-  return ocrLineStrips(ocr, strips, keepHeaderLine, spaceHeaderText);
+  return ocrLineStrips(ocr, strips, (_, t) => keepHeaderLine(t), spaceHeaderText);
 }
 
 /** 文字带（文字指示 / 页眉）：DBNet 找行、逐行 rec，留 `keep` 认的行，词界按 `space` 补空格。 */
 type SpaceFn = (text: string, chars: { text: string; cx: number }[] | undefined, strip: WordStrip, box: Rect) => string;
-async function ocrLineStrips(ocr: OcrBackend, strips: readonly WordStrip[], keep: (text: string) => boolean, space: SpaceFn): Promise<Map<string, WordLine[]>> {
+async function ocrLineStrips(ocr: OcrBackend, strips: readonly WordStrip[], keep: (strip: WordStrip, text: string) => boolean, space: SpaceFn): Promise<Map<string, WordLine[]>> {
   const out = new Map<string, WordLine[]>();
   if (!ocr.recognizeRegion) return out;
   for (const it of strips) {
@@ -118,7 +118,7 @@ async function ocrLineStrips(ocr: OcrBackend, strips: readonly WordStrip[], keep
     } catch {
       lines = [];
     }
-    out.set(wordKey(it), lines.filter((l) => keep(l.text)).map((l) => {
+    out.set(wordKey(it), lines.filter((l) => keep(it, l.text)).map((l) => {
       const box = { x: Math.round(l.bbox.x), y: Math.round(l.bbox.y), w: Math.round(l.bbox.w), h: Math.round(l.bbox.h) };
       return { t: space(l.text, l.chars, it, box), ...box };
     }));

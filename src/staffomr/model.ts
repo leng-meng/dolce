@@ -472,6 +472,8 @@ export class Part {
   /** 谱面印的声部名（首个系统的全名，`Soprano`）与之后系统的缩写（`S.`）；没印为 undefined。见 `score.ts::nameParts`。 */
   name?: string;
   abbr?: string;
+  /** 全名的字高（`page` 的页面单位，同 `SPage.textEm` 口径），写出时折成字号 */
+  nameSize?: { page: SPage; size: number };
 }
 
 /** 一页。musicpp 的 `omr::Page`。 */
@@ -480,6 +482,8 @@ export class SPage {
   readonly width: number;
   readonly height: number;
   objs: PObj[] = [];
+  /** 位图路读出的声部名块（行首缩进与页边，`rasteromr/words.ts::partNameLines`）；矢量路的声部名是 `objs` 里打了 `Instrument` 的 */
+  partNames: { text: string; box: Box; size: number }[] = [];
   /** 全页从路径里抽出来的直线段（谱线/符干/小节线/加线都在里面）。 */
   segs: Seg[] = [];
   symbols: Sym[] = [];

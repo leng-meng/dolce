@@ -11,14 +11,14 @@
 import type { Binary } from "../omrkit/types";
 import { timeDigit, timeKey, timeStripOf, type TimeStrip } from "./timesig";
 import type { Component, Rect } from "../omrkit/types";
-import { inkTextSize } from "./textsize";
+import { inkTextSize, smallCapsCase, TEXT_INK_EM } from "./textsize";
 import { findBarlines, findNoteheads, findStaves, findStems, findTails, makeBars, makeSystems, tagSystemBarlines, unknownObjs } from "../staffomr/page";
 import { isAccidental, isClef, timeSigDigit, type SmuflName } from "../staffomr/glyphs";
 import { buildNotes, checkBars, findClefKeyTime, keyFifths, lastTimeSignature, type BeamShape, type StaffContext, type StaffNote, type StemInfo, type BarCheck } from "../staffomr/notedata";
 import { findRasterArticulations } from "./artic";
 import { markRepeatsAndVoltas } from "./repeats";
 import { findRasterTuplets } from "./tuplet";
-import { attachWordLines, findHeaderStrip, findWordStrips, headerZoneLines, wordKey, type HeaderStrip, type WordStrip } from "./words";
+import { attachWordLines, findHeaderStrip, findNameStrips, findWordStrips, headerZoneLines, partNameLines, wordKey, type HeaderStrip, type WordStrip } from "./words";
 import { headerCredits, type HeaderCredit, type WordLine } from "../omrkit/headertext";
 import { applyTuplet, attachDynamicTexts, attachNotations, attachWedges, findNotations, findTuplets, markLyricExtends } from "../staffomr/notations";
 import type { PObj, SPage, Staff, Sym, Tag } from "../staffomr/model";
@@ -198,8 +198,6 @@ const SEG_TAGS: Tag[] = ["Staff", "Leger", "Stem", "BarLine", "SysLine", "Tail",
 
 /** 页面单位合 pt 的系数到这么大（≈80dpi）就当页面尺寸不可信（`SPage.sizeKnown`） */
 const LOW_DPI_SCALE = 0.9;
-/** 位图上量出来的字高（汉字墨迹、OCR 文字框）约是字号的这么多（`SPage.textEm`） */
-const TEXT_INK_EM = 0.85;
 
 /** 判别器只看这个尺寸包络内的块（线距的倍数）——比 `findRasterHeads` 的闸宽一圈，
  *  正是要捞被啃窄、被粘宽的那一批；再宽就成了「拿模板去空地里找东西」。 */
@@ -439,7 +437,7 @@ function mergeLayerLines(ocr: readonly WordLine[], layer: readonly WordLine[]): 
     const y = Math.min(o.y, l.y);
     const r = Math.max(o.x + o.w, l.x + l.w);
     const bot = Math.max(o.y + o.h, l.y + l.h);
-    Object.assign(o, { t: `${a.t} ${b.t}`, x, y, w: r - x, h: bot - y });
+    Object.assign(o, { t: `${a.t} ${b.t}`, x, y, w: r - x, h: bot - y, size: o.size ?? l.size });
   };
   for (const l of [...ocr].sort((a, b) => a.x - b.x)) {
     const o = out.find((m) => near(m, l, 0.3) && Math.max(m.h, l.h) <= Math.min(m.h, l.h) * 1.5);
@@ -4361,7 +4359,10 @@ export async function recognizeRasterPage(
   //
   // 带照固定几何切（两行谱之间的空当），认字靠 `wordOcr` 缓存；歌词行、和弦字母已经另有身份，中心落在它们盒里的行不要。
   const wordStrips = opts.wordOcr || opts.wantWordStrips || live?.word ? findWordStrips(raster.bin, pg.staves, unit) : [];
-  const wordOcr = opts.wordOcr ?? (live?.word ? await live.word(wordStrips) : undefined);
+  // 声部名带（行首缩进与页边）：认字同文字指示带，归位另走（`partNameLines`）
+  const nameStrips = opts.wordOcr || opts.wantWordStrips || live?.word ? findNameStrips(raster.bin, pg.systems, unit) : [];
+  const wordOcr = opts.wordOcr ?? (live?.word ? await live.word([...wordStrips, ...nameStrips]) : undefined);
+  if (wordOcr) pg.partNames = partNameLines(pg, nameStrips, wordOcr);
   // 页眉（曲首页）：标题、词曲作者。认字同文字指示带，缓存另放
   let headerStrip: HeaderStrip | null = opts.wantHeader ? findHeaderStrip(raster.bin, pg.staves, unit) : null;
   // 谱图里切不出页眉带、谱图又没顶到页顶的（排版软件出的 PDF，标题是另贴的小图块与文字层）：拼出谱图上方那一段（`pagecompose.ts`）
@@ -4382,8 +4383,11 @@ export async function recognizeRasterPage(
   // 页眉字号按墨迹量（OCR 框高带留白）。在页眉带自己的像素上量：排版软件出的 PDF 页眉不在谱图里（`composeHeaderStrip` 另拼的）
   const header = (headerStrip && headerLines ? headerCredits(headerLines, headerStrip) : []).map((c) => {
     const st = headerStrip!;
-    const ink = inkTextSize(st, { x: c.box.x - st.box.x, y: c.box.y - st.box.y, w: c.box.w, h: c.box.h }, c.text);
-    return ink ? { ...c, size: ink } : c;
+    const box = { x: c.box.x - st.box.x, y: c.box.y - st.box.y, w: c.box.w, h: c.box.h };
+    // 小型大写读成的全大写改回首字母大写（`smallCapsCase`），字号照改过的字折
+    const text = smallCapsCase(st, box, c.text);
+    const ink = inkTextSize(st, box, text);
+    return ink ? { ...c, text, size: ink } : { ...c, text };
   });
   if (wordOcr) {
     const skip: Rect[] = [
@@ -4721,7 +4725,7 @@ export async function recognizeRasterPage(
     harmonyTexts,
     labelStrips,
     timeStrips,
-    wordStrips: opts.wantWordStrips ? wordStrips : [],
+    wordStrips: opts.wantWordStrips ? [...wordStrips, ...nameStrips] : [],
     headerStrips: headerStrip ? [headerStrip] : [],
     header,
     textKey,

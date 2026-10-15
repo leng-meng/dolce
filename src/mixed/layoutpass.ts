@@ -748,7 +748,7 @@ function systemLowest(score: StaffLayout, sys: Sys, withWedges = true, parts: re
 
 /** 多谱表的谱（合唱 SATB、钢琴）：上一谱表往下伸的（歌词、低音、朝下符干）与本谱表往上伸的（高音、朝上符干）
  *  之间留够净空，缺省 80 只管得了没歌词的谱。只撑大、不缩小。系统之间的距离由装页按包围盒另算（`painter.ts::flowLayout`）。 */
-function autoStaffDistances(score: StaffLayout): void {
+export function autoStaffDistances(score: StaffLayout): void {
   for (const sys of score.systems) {
     let prev: SysStaff | null = null;
     for (const st of sys.staves) {

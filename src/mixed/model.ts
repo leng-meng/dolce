@@ -2075,6 +2075,10 @@ export class LrcExtend extends SpanOverNotes {
 export class PartLayout {
   score!: StaffLayout;
   pid = "";
+  /** 声部名与缩写（`<part-name>` / `<part-abbreviation>`），字号 pt（没给为 0）。只在源谱版面档印，见 `render.ts::drawPartNames` */
+  name = "";
+  abbrev = "";
+  nameSize = 0;
   measures: PartMeasureLayout[] = [];
   staves: PartStaff[] = [];
 

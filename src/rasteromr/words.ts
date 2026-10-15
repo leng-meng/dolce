@@ -6,7 +6,7 @@
 import type { Binary, Rect } from "../omrkit/types";
 import { isCreditText, type WordLine } from "../omrkit/headertext";
 import { recoverSpacesByInk } from "../omrkit/textspace";
-import type { SPage, Staff } from "../staffomr/model";
+import type { Box, SPage, Staff } from "../staffomr/model";
 import type { StaffNote } from "../staffomr/notedata";
 import { chordCoverage, isChordLineCoverage, isWholeChord } from "../omrkit/chordgrammar";
 import type { RasterUnit } from "./staffline";
@@ -19,6 +19,8 @@ export interface WordStrip {
   /** 逐像素 0/1，长 `w*h`，1 = 墨。 */
   data: Uint8Array;
   box: Rect;
+  /** 声部名带（`findNameStrips`）：指纹前缀与挑行口径另算（中文名也留，`keepStripLine`） */
+  name?: boolean;
 }
 
 /** 页首行上方、页末行下方各取这么多格；两行谱之间取整段空当，上下各让开谱线这么多格。 */
@@ -62,6 +64,82 @@ export function findWordStrips(bin: Binary, staves: { box: { left: number; right
     else cut(st.box.top - sp * EDGE_BAND, st.box.top - sp * LINE_CLEAR, st.box.left, st.box.right);
     if (i === rows.length - 1) cut(st.box.bottom + sp * LINE_CLEAR, st.box.bottom + sp * EDGE_BAND, st.box.left, st.box.right);
   });
+  return out;
+}
+
+/** 声部名带往左伸到全页最靠左那行谱的左缘再往左这么多格（不缩进的系统，缩写印在页边）；右界让开花括号、方括号这么多格 */
+const NAME_REACH = 8;
+const NAME_CLEAR = 1.5;
+
+/**
+ * **声部名带**：每个系统谱行左边那一段（首行缩进里的全名「Soprano Alto」「Piano」、以后各行页边的缩写「S. A.」），
+ * 上下到系统首尾谱行外一格。认字同文字指示带（同一个缓存、同一套 OCR），名字归哪个声部由 `staffomr/score.ts::nameParts` 按纵向定。
+ */
+export function findNameStrips(bin: Binary, systems: { staves: { box: { left: number; top: number; bottom: number } }[] }[], unit: RasterUnit): WordStrip[] {
+  const sp = unit.space;
+  const lefts = systems.flatMap((s) => s.staves.map((st) => st.box.left));
+  if (!lefts.length) return [];
+  const pageLeft = Math.min(...lefts);
+  const out: WordStrip[] = [];
+  for (const sys of systems) {
+    if (!sys.staves.length) continue;
+    const left = Math.min(...sys.staves.map((st) => st.box.left));
+    const x0 = Math.max(0, Math.round(pageLeft - sp * NAME_REACH));
+    const x1 = Math.round(left - sp * NAME_CLEAR);
+    const y0 = Math.max(0, Math.round(Math.min(...sys.staves.map((st) => st.box.top)) - sp));
+    const y1 = Math.min(bin.h, Math.round(Math.max(...sys.staves.map((st) => st.box.bottom)) + sp));
+    if (x1 - x0 < sp * 2 || y1 - y0 < sp * 2) continue;
+    const box = { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
+    const data = new Uint8Array(box.w * box.h);
+    let ink = 0;
+    for (let y = 0; y < box.h; y++)
+      for (let x = 0; x < box.w; x++) {
+        const v = bin.data[(box.y + y) * bin.w + box.x + x];
+        data[y * box.w + x] = v;
+        ink += v;
+      }
+    if (ink) out.push({ w: box.w, h: box.h, data, box, name: true });
+  }
+  return out;
+}
+
+/** 声部名的一块里上下两行之间的空不超过行高的这么多倍（「Soprano」「Alto」叠成一个名字） */
+const NAME_STACK_GAP = 0.8;
+
+/**
+ * 声部名带里读出来的行 → 页面上的名字块（页面坐标，字号按墨迹量）。上下叠着、左右相交的行并成一块（多行名用换行连）；
+ * 只要像名字的：有拉丁字母或汉字（「女低」）、不是力度字母（行首的 `p`、`mf`）。
+ */
+export function partNameLines(pg: SPage, strips: readonly WordStrip[], ocr: ReadonlyMap<string, WordLine[]>): { text: string; box: Box; size: number }[] {
+  const out: { text: string; box: Box; size: number }[] = [];
+  for (const strip of strips) {
+    const lines = (ocr.get(wordKey(strip)) ?? [])
+      .map((l) => ({ t: l.t.trim(), x: strip.box.x + l.x, y: strip.box.y + l.y, w: l.w, h: l.h }))
+      .filter((l) => NAME_CHAR_RE.test(l.t) && !/^(ppp|pp|p|mp|mf|fff|ff|f|sfz|sf|fz|fp)$/.test(l.t))
+      .sort((a, b) => a.y - b.y);
+    const blocks: (typeof lines)[] = [];
+    for (const l of lines) {
+      const b = blocks.find((bl) => {
+        const last = bl[bl.length - 1]!;
+        return l.y - (last.y + last.h) < Math.min(l.h, last.h) * NAME_STACK_GAP && l.x < last.x + last.w && last.x < l.x + l.w;
+      });
+      if (b) b.push(l);
+      else blocks.push([l]);
+    }
+    for (const bl of blocks) {
+      const sizes = bl.map((l) => pg.inkTextSize?.({ x: l.x, y: l.y, w: l.w, h: l.h }, l.t) || l.h);
+      out.push({
+        text: bl.map((l) => l.t).join("\n"),
+        box: {
+          left: Math.min(...bl.map((l) => l.x)),
+          right: Math.max(...bl.map((l) => l.x + l.w)),
+          top: bl[0]!.y,
+          bottom: Math.max(...bl.map((l) => l.y + l.h)),
+        },
+        size: Math.max(...sizes),
+      });
+    }
+  }
   return out;
 }
 
@@ -178,9 +256,17 @@ const HEADER_BORDER = 0.1;
 /** 竖条只在页边找：左右各这么宽（页宽的比例）。 */
 const HEADER_MARGIN = 0.12;
 
-/** 条的内容指纹（与 `stafflabel.ts::labelKey` 同一套：尺寸 + FNV-1a）。 */
+/** 条的内容指纹（与 `stafflabel.ts::labelKey` 同一套：尺寸 + FNV-1a）。声部名带另用前缀（挑行口径不同，同一块像素不能共用一条缓存）。 */
 export function wordKey(s: WordStrip): string {
-  return contentKey("W", s.w, s.h, s.data);
+  return contentKey(s.name ? "N" : "W", s.w, s.h, s.data);
+}
+
+/** 声部名里有的字：拉丁字母或汉字 */
+const NAME_CHAR_RE = /[A-Za-z\u3400-\u9fff]/;
+
+/** 这条带该存的行：文字指示带按 `keepWordLine`；声部名带中文名也留（「女低」「男低」，带在谱行左边，压不进歌词） */
+export function keepStripLine(strip: { name?: boolean }, text: string): boolean {
+  return strip.name ? NAME_CHAR_RE.test(text) : keepWordLine(text);
 }
 
 /** 值得存进缓存的行：有拉丁字母（力度只有一个字母），或者像节拍器记号（`= 86`）。纯中文行（歌词、署名）、纯数字不存。 */

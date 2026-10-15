@@ -1386,6 +1386,9 @@ export function layoutStaff(doc: ScoreDoc, options: MixedOptions): StaffLayout {
     const part = new PartLayout();
     part.score = score;
     part.pid = src.id;
+    part.name = src.name ?? "";
+    part.abbrev = src.abbrev ?? "";
+    part.nameSize = src.nameSize ?? 0;
     score.parts.push(part);
   }
 
