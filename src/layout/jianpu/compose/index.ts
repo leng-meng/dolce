@@ -25,7 +25,7 @@ import type { ElementId, ScoreDoc } from "../../../model/doc";
 import type { DocView } from "../../../pu/slots";
 import { originalInputOf } from "../input";
 import { applyBreaks } from "../../../model/breaks";
-import type { InkMeasurer, InkTextRole, PlacedScore } from "../place/model";
+import type { InkMeasurer, InkTextRole, PlacedPage, PlacedScore } from "../place/model";
 import { layoutDocument } from "../place/song";
 import { foldLineStarts, naturalSpans, reflowLineStarts } from "../place/reflow";
 import type { OriginalCtx } from "./ctx";
@@ -195,8 +195,15 @@ export function layoutJianpu(source: ScoreDoc, cfg: JianpuLayoutConfig): JianpuL
     }
   }
   const placed = layoutDocument(doc.songs, m, headerBottoms, ink, doc.songs.map((_, i) => footerSpan(c, i)), slide);
-  // 展开档：第一页是标题页（谱页从第二页起，页码不含它）
-  if (plans) placed.pages.unshift({ groups: [], song: 0, firstOfSong: false, titlePage: true });
+  // 展开档：每首前面一页标题页（谱页从它后面起，页码不含它；一份多首的各首各自起标题页、各自计页）
+  if (plans) {
+    const withTitles: PlacedPage[] = [];
+    for (const pg of placed.pages) {
+      if (pg.firstOfSong) withTitles.push({ groups: [], song: pg.song, firstOfSong: false, titlePage: true });
+      withTitles.push(pg);
+    }
+    placed.pages = withTitles;
+  }
   c.placed = placed;
   // **连谱号、段号也在版心里**（用户定）：音符起点贴版心左缘时它们伸进左边距、左右留白不等。
   // 量出最靠左的系统左缘（连谱号粗线另有半个线宽），版心左缘让出这一截、整份再排一遍（断行按变窄的版心重求）
@@ -234,8 +241,15 @@ export function layoutJianpu(source: ScoreDoc, cfg: JianpuLayoutConfig): JianpuL
     c._pageShiftX = (c.pageWidth - span) / 2 - inkLeft;
   }
   const footerItems = layoutFooters(c, c._pageShiftX);
-  const meta = doc.songs[0]?.metadata;
+  // 展开档各首的标题页在第几页、谱页共几页（页脚的「i/n」按各首自己计）
+  const titleAt = new Map<number, number>();
+  const pagesOf = new Map<number, number>();
+  placed.pages.forEach((pg, i) => {
+    if (pg.titlePage) titleAt.set(pg.song, i);
+    else pagesOf.set(pg.song, (pagesOf.get(pg.song) ?? 0) + 1);
+  });
   const pages = placed.pages.map((pg, i) => {
+    const meta = doc.songs[pg.song]?.metadata;
     if (pg.titlePage) {
       const g = new Group();
       if (meta) paintSlideLines(c, g, placeTitlePage(meta, m, headMeasure), true);
@@ -244,7 +258,10 @@ export function layoutJianpu(source: ScoreDoc, cfg: JianpuLayoutConfig): JianpuL
     const g = paintPage(c, pg, i);
     for (const f of footerItems) if (f.page === i) for (const it of f.items) g.add(it);
     // 展开档每个谱页的页脚：曲名 + 「i/n」
-    if (plans) paintSlideLines(c, g, placeSlideFooter((meta?.titles[0] ?? "").split("\n")[0] ?? "", i, placed.pages.length - 1, m, headMeasure), false);
+    if (plans) {
+      const title = (meta?.titles[0] ?? "").split("\n")[0] ?? "";
+      paintSlideLines(c, g, placeSlideFooter(title, i - (titleAt.get(pg.song) ?? -1), pagesOf.get(pg.song) ?? 0, m, headMeasure), false);
+    }
     g.x += c._pageShiftX;
     return g;
   });

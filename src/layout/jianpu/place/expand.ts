@@ -682,18 +682,19 @@ export function expandSong(
   return { ...song, pages };
 }
 
-/** 整份文档的展开档行视图（各首各按自己的演唱顺序） */
+/** 整份文档的展开档行视图（各首各按自己的演唱顺序逐首排；推不出演唱顺序的那首照原样） */
 export function expandView(
   view: DocView, plans: readonly ({ measures: readonly PlayItem[]; isSimpple: boolean } | null)[], m: JianpuGrid, ink: InkMeasurer,
   /** `.jpwabc` 的 `.Layout` 分页描述（只管第一首） */
   breakDesc: string | null = null,
 ): DocView {
   const idOf = view.idOf as Map<MusicElement, unknown>;
-  // 只排第一首（同旧简谱引擎展开档：`jianpuInputOfDoc` 缺省只投第一首；一份多首的文本谱展开档只见第一首，记在 dev 待办）
-  const song = view.songs[0];
-  const pd = plans[0];
-  if (!song || !pd) return { ...view, songs: view.songs.slice(0, 1) };
-  const layout = breakDesc ? { desc: breakDesc, simple: pd.isSimpple } : null;
   const owners = view.syllableOwner as Map<LyricSyllable, unknown>;
-  return { ...view, songs: [expandSong(song, pd.measures, m, ink, idOf, owners, layout, view.doc.sourceFormat === "jpwabc", view.doc.sourceFormat === "pu")] };
+  const songs = view.songs.map((song, i) => {
+    const pd = plans[i];
+    if (!pd) return song;
+    const layout = breakDesc && i === 0 ? { desc: breakDesc, simple: pd.isSimpple } : null;
+    return expandSong(song, pd.measures, m, ink, idOf, owners, layout, view.doc.sourceFormat === "jpwabc", view.doc.sourceFormat === "pu");
+  });
+  return { ...view, songs };
 }
