@@ -1519,7 +1519,8 @@ export class OmrController implements FormatSource {
     return ins ? [...els, ins] : els;
   }
 
-  hitFor(kind: "note" | "lyric", id: ElementId, verse = 0): SVGGraphicsElement | null {
+  /** `verse`：歌词是第几段；和弦名是这个音的第几个和弦（`reproject.ts::harmoniesOf` 的序）。 */
+  hitFor(kind: "note" | "lyric" | "chord", id: ElementId, verse = 0): SVGGraphicsElement | null {
     const pane = document.getElementById("score-pane");
     if (this.staffResult) {
       if (kind !== "note") return null;
@@ -1530,6 +1531,9 @@ export class OmrController implements FormatSource {
     const i = this.idMapOf(this.host.currentScoreDoc())?.toI.get(id);
     if (kind === "lyric") {
       return i === undefined ? null : pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="lyric"][data-i="${i}"][data-verse="${verse}"]`) ?? null;
+    }
+    if (kind === "chord") {
+      return i === undefined ? null : pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="chord"][data-i="${i}"][data-slot="${verse}"]`) ?? null;
     }
     if (i !== undefined) return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-i="${i}"]`) ?? null;
     return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-id="${id}"]`) ?? null;

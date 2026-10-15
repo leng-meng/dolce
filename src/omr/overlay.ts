@@ -4,7 +4,7 @@
 
 import type { Binary, RecognizedScore, JpNum, Rect } from "../omrkit/types";
 import { type MsgKey, t as tr } from "../i18n";
-import type { Reprojected, ShownNum } from "./reproject";
+import { chordSlots, type Reprojected, type ShownNum } from "./reproject";
 import { rcx, rcy, rright, RHYTHM_DIGIT } from "../omrkit/types";
 import { SVG_NS, baseImage, pageSvg, svgRect } from "../omrkit/svgkit";
 import { clusterRectsByY, median } from "../omrkit/geom";
@@ -288,7 +288,7 @@ function computeStats(score: RecognizedScore): Stats {
 function buildOverlayGroup(
   score: RecognizedScore,
   stats: Stats,
-  opts?: { rows?: number[]; header?: boolean; lyrics?: boolean; edits?: Pick<Reprojected, "inserted" | "lyricFixes"> },
+  opts?: { rows?: number[]; header?: boolean; lyrics?: boolean; edits?: Pick<Reprojected, "inserted" | "lyricFixes" | "chordFixes"> },
 ): SVGGElement {
   const g = document.createElementNS(SVG_NS, "g");
   g.setAttribute("class", "omr-overlay");
@@ -304,10 +304,15 @@ function buildOverlayGroup(
     if (!rowSet) for (const r of score.stanzaRegions ?? []) renderHeaderRegion(g, r, "omr-lyric");
   }
   // 和弦记号：印在谱行上方，按源图框原位绘制（与页眉同一套画法——整段一串、无逐字位）。
-  for (const r of score.chordRegions ?? []) {
-    if (rowSet && !score.rows.some((row, ri) => rowSet.has(ri) && rcy(r.bbox) > row.topY - noteH * 3 && rcy(r.bbox) < row.topY)) continue;
-    renderHeaderRegion(g, r, "omr-chord");
-  }
+  // 核对时改过的按现在的字画（标蓝），删掉的照原字划灰
+  const chordFix = new Map((opts?.edits?.chordFixes ?? []).map((f) => [f.k, f.text]));
+  (score.chordRegions ?? []).forEach((r, k) => {
+    if (rowSet && !score.rows.some((row, ri) => rowSet.has(ri) && rcy(r.bbox) > row.topY - noteH * 3 && rcy(r.bbox) < row.topY)) return;
+    const fix = chordFix.get(k);
+    if (fix === undefined) renderHeaderRegion(g, r, "omr-chord");
+    else if (fix === null) renderHeaderRegion(g, r, "omr-chord omr-chord-deleted");
+    else renderHeaderRegion(g, { text: fix, bbox: { ...r.bbox, w: r.bbox.w * Math.max(1, fix.length / Math.max(1, r.text.length)) } }, "omr-chord omr-chord-fixed");
+  });
   score.rows.forEach((row, ri) => {
     if (rowSet && !rowSet.has(ri)) return;
     const fit = rowFits[ri];
@@ -429,6 +434,11 @@ function buildHitLayer(score: RecognizedScore, stats: Stats, inserted: Reproject
     }
   });
 
+  // 和弦名：按原识别对回的「第几个框的第几个和弦」认（`chordSlots`）
+  chordSlots(score).forEach((at, k) => {
+    if (at) hit(score.chordRegions![k]!.bbox, { "data-kind": "chord", "data-i": String(at.i), "data-slot": String(at.slot), class: "omr-hit" });
+  });
+
   // 新插的音（核对时插的，框是插值出来的）：按元素 id 认
   for (const ins of inserted) hit(ins.num.bbox, { "data-kind": "note", "data-id": String(ins.id), class: "omr-hit" });
 
@@ -451,7 +461,7 @@ export function renderRecognitionSvg(
   /** 小节时值自检报出的小节（`omr/beats.ts`）：各视图都标出，悬停显示说明 */
   beatMarks: readonly { boxes: readonly Rect[]; text: string; tag?: string }[] = [],
   /** 核对时改过的东西（`reproject.ts`）：`score` 已是重投影过的那份，这里给新插的音与改过的歌词 */
-  edits?: Pick<Reprojected, "inserted" | "lyricFixes">,
+  edits?: Pick<Reprojected, "inserted" | "lyricFixes" | "chordFixes">,
 ): SVGSVGElement {
   const svg = pageSvg(bin, "omr-recognize");
 
@@ -576,7 +586,7 @@ function popupSvg(bin: Binary, vb: { x: number; y: number; w: number; h: number 
 /** 浮窗：单行识别数据（干净渲染）。横向用整幅源图宽（列与源图对齐），竖向裁到该行+其下方歌词带。
  *  返回 svg 及该行内容在源图的竖向范围（srcTop/srcBottom），供 app 定位到当前 system 之下（不盖歌词）。 */
 export function renderRowPopup(
-  bin: Binary, score: RecognizedScore, rowIndex: number, edits?: Pick<Reprojected, "inserted" | "lyricFixes">,
+  bin: Binary, score: RecognizedScore, rowIndex: number, edits?: Pick<Reprojected, "inserted" | "lyricFixes" | "chordFixes">,
 ): { svg: SVGSVGElement; srcTop: number; srcBottom: number } {
   const stats = computeStats(score);
   const g = buildOverlayGroup(score, stats, { rows: [rowIndex], header: false, lyrics: true, ...(edits ? { edits } : {}) });

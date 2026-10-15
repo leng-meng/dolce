@@ -580,7 +580,8 @@ export class VisualEditController {
 
   /** 光标落在文字条目（歌词、页眉字段）里或两端：谱面上画在那串字里对应的位置。画了返回 true。 */
   private drawTextCaret(head: number): boolean {
-    const e = this.host.sync.ordered().find((x) => isText(x) && head >= x.from && head <= x.to);
+    // 和弦名只在双击进来的改字会话里画字里的光标：平时光标停在它两端是在音符之间
+    const e = this.host.sync.ordered().find((x) => (isText(x) || (this.textEditing && isChordName(x))) && head >= x.from && head <= x.to);
     if (!e) return false;
     const src = this.host.view.state.doc.sliceString(e.from, e.to);
     const texts = this.host.textEls(e).flatMap(textsOf);
@@ -1133,16 +1134,19 @@ export class VisualEditController {
     if (!this.host.visualEnabled()) return false;
     // 双击小节里的空白：选中整小节（第一下 click 已落了插入光标，这里覆盖成选区；双击音符不做事）
     if (!entry) return this.selectMeasureAt(ev.clientX, ev.clientY);
-    if (!isText(entry)) return false;
+    if (!isText(entry) && !isChordName(entry)) return false;
     // 没有可见代码区（`.musicxml`）：就地弹输入框改字
     if (this.host.modelEditing()) {
+      if (!isText(entry)) return false;
       this.editTextInline(entry);
       return true;
     }
     const at = this.textCaretAt(entry, ev.clientX, ev.clientY);
+    // 先置上改字会话再挪焦点：谱面失焦那次重画要认得出这是改字（字里照画光标），最后按新状态再画一遍
+    this.textEditing = true;
     this.select(at, at);
     this.host.view.focus();
-    this.textEditing = true;
+    this.refresh();
     return true;
   }
 
@@ -1155,11 +1159,11 @@ export class VisualEditController {
     const sel = this.host.view.state.selection.main;
     if (!sel.empty) return false;
     const head = sel.head;
-    const e = this.host.sync.ordered().find((x) => isText(x) && head >= x.from && head <= x.to);
+    const e = this.host.sync.ordered().find((x) => (isText(x) || isChordName(x)) && head >= x.from && head <= x.to);
     if (!e) return false;
     this.textEditing = false;
     const pane = this.host.scorePane;
-    if (e.kind === "header") {
+    if (e.kind === "header" || isChordName(e)) {
       this.select(e.from, e.to);
       pane.focus({ preventScroll: true });
       return true;
@@ -2602,6 +2606,11 @@ function elementAtOrdinal(doc: ScoreDoc, key: string, k: number): ElementId | nu
 
 function isText(e: SyncEntry): boolean {
   return e.kind === "lyric" || e.kind === "header";
+}
+
+/** 和弦名：单击选中整个记号，双击同文字一样进改字（`handleDoubleClick`）。 */
+function isChordName(e: SyncEntry): boolean {
+  return e.kind === "mark" && e.markKind === "harmony";
 }
 
 /** 细线条目：小节线（竖）、增时线（横）。它们有自己的 `<g>`，但某一个方向上薄得没有厚度 */

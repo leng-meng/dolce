@@ -1218,6 +1218,11 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   private _recognizeElOf(entry: SyncEntry): SVGGraphicsElement | null {
     if (entry.kind === "note") return this.omr.hitFor("note", entry.id);
     if (entry.kind === "lyric") return this.omr.hitFor("lyric", entry.id, entry.verse ?? 0);
+    // 和弦名：这个音的第几个（音符本身的在前、增时线上的按序在后，同原文顺序）
+    if (entry.kind === "mark" && entry.markKind === "harmony" && !this.omr.hasStaffResult) {
+      const slot = this._sync.marksOf(entry.id).filter((m) => m.markKind === "harmony").indexOf(entry);
+      return slot < 0 ? null : this.omr.hitFor("chord", entry.id, slot);
+    }
     // 五线谱对照：小节末那条线（条目借本小节最后一个音的 id）按「收尾的是第几小节」对到源图上的那条
     if (entry.kind === "barline" && entry.edge !== "before" && this.omr.hasStaffResult) {
       const doc = this.syncDoc();
@@ -1337,8 +1342,9 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   private _markPartEl(entry: SyncEntry): SVGGraphicsElement | null {
     const role = entry.markKind === "harmony" || entry.markKind === "deco" || entry.markKind === "annotation" ? entry.markKind : null;
     if (!role) return null;
-    const els = this.painter.partEls(entry.id, role);
-    const same = this._sync.marksOf(entry.id).filter((m) => m.markKind === entry.markKind);
+    // 挂在增时线上的（长音中途换的和弦）不在音符格里，按增时线 id 认；音符格里的只数挂在音符本身的
+    const els = entry.own !== undefined ? this.painter.ownedPartEls(entry.own, role) : this.painter.partEls(entry.id, role);
+    const same = this._sync.marksOf(entry.id).filter((m) => m.markKind === entry.markKind && m.own === entry.own);
     const nth = same.findIndex((m) => m.from === entry.from);
     return els.length === same.length && nth >= 0 ? els[nth] ?? null : null;
   }

@@ -6,8 +6,10 @@
 // - 对不上元素的框（音删了）：标 `deleted`（叠加层划掉、变灰）。
 // - 模型里有、框里没有的元素（新插的音）：按同一声部里前后两个有框的音插值定位，另列 `inserted`（叠加层标蓝虚框，命中层带 `data-id`）。
 // - 歌词：当前词与原识别不同的，在原位另盖一层新字（`lyricFixes`）。
+// - 和弦：源图上的每个和弦框按原识别对回「第几个框的第几个和弦」（`chordSlots`），当前原文里改了、删了的另记（`chordFixes`）。
 
-import type { Chord, ElementId, ScoreDoc } from "../model/doc";
+import type { Chord, ElementId, Harmony, ScoreDoc } from "../model/doc";
+import { harmonyText } from "../model/jianpu";
 import type { JpNum, RecognizedScore, Rect } from "../omrkit/types";
 import { RHYTHM_DIGIT } from "../omrkit/types";
 
@@ -23,6 +25,42 @@ export interface Reprojected {
   inserted: { id: ElementId; num: ShownNum; row: number }[];
   /** 改过的歌词：第几个框（原框序）、第几段、现在的字 */
   lyricFixes: { i: number; verse: number; text: string }[];
+  /** 改过 / 删掉的和弦：`chordRegions` 里第几个框、现在的字（删掉了为 null） */
+  chordFixes: { k: number; text: string | null }[];
+}
+
+/** 一个音上按原文顺序的和弦：音符本身的在前，增时线上的（长音中途换的）按增时线顺序在后。
+ *  与识别结果的 `chord` + `extraChords`（按拍位升序）同序，可视化编辑数第几个和弦名也按这个序（`App._recognizeElOf`）。 */
+export function harmoniesOf(ch: Chord): Harmony[] {
+  return [...(ch.harmony ? [ch.harmony] : []), ...(ch.sustains ?? []).flatMap((s) => (s.harmony ? [s.harmony] : []))];
+}
+
+/**
+ * 源图上的和弦框（`chordRegions`）各是哪个音（框序 `i`）的第几个和弦（`slot`，同 `harmoniesOf`）；对不上为 null。
+ * 识别时和弦挂到音上（`chordline.ts::placeChords`）没记框，这里按字相同、横向最近、在那一行谱上方认回来，一对一。
+ */
+export function chordSlots(rec: RecognizedScore): ({ i: number; slot: number } | null)[] {
+  const flat = rec.rows.flatMap((row, ri) => row.nums.map((n) => ({ n, ri })));
+  const used = new Set<string>();
+  return (rec.chordRegions ?? []).map((r) => {
+    let best: { i: number; slot: number } | null = null;
+    let bestD = Infinity;
+    flat.forEach(({ n, ri }, i) => {
+      const toks = n.chord === undefined ? [] : [n.chord, ...(n.extraChords ?? []).map((e) => e.tok)];
+      toks.forEach((tok, slot) => {
+        if (tok !== r.text || used.has(`${i}:${slot}`)) return;
+        const row = rec.rows[ri]!;
+        // 横向距离 + 离这一行谱顶的竖向距离（和弦印在所属谱行上方，竖向错一行就远了）
+        const d = Math.abs(n.bbox.x - r.bbox.x) + Math.abs(r.bbox.y + r.bbox.h - row.topY) * 2;
+        if (d < bestD) {
+          bestD = d;
+          best = { i, slot };
+        }
+      });
+    });
+    if (best) used.add(`${(best as { i: number }).i}:${(best as { slot: number }).slot}`);
+    return best;
+  });
 }
 
 const DIV_OF: Record<string, number> = { eighth: 1, "16th": 2, "32nd": 3, "64th": 4 };
@@ -65,6 +103,7 @@ export function reprojectRecognized(rec: RecognizedScore, doc: ScoreDoc, toI: Re
   const seen = new Set<number>();
   const inserted: Reprojected["inserted"] = [];
   const lyricFixes: Reprojected["lyricFixes"] = [];
+  const chordAt = new Map<number, Chord>();
   for (const part of doc.songs[0]?.parts ?? []) {
     // 本声部按顺序的「有框的音」与「没框的音」：没框的插在前后两个有框的音之间
     const seq: { ch: Chord; i: number | undefined }[] = [];
@@ -79,6 +118,7 @@ export function reprojectRecognized(rec: RecognizedScore, doc: ScoreDoc, toI: Re
         const at = flat[i];
         if (!at) continue;
         seen.add(i);
+        chordAt.set(i, ch);
         const base = rec.rows[at.ri]!.nums[at.k]!;
         const shown = numOf(ch, base);
         if (!same(shown, base)) shown.state = "edited";
@@ -114,5 +154,13 @@ export function reprojectRecognized(rec: RecognizedScore, doc: ScoreDoc, toI: Re
   flat.forEach(({ ri, k }, i) => {
     if (!seen.has(i)) rows[ri]!.nums[k] = { ...rows[ri]!.nums[k]!, state: "deleted" };
   });
-  return { score: { ...rec, rows }, inserted, lyricFixes };
+  const chordFixes: Reprojected["chordFixes"] = [];
+  chordSlots(rec).forEach((at, k) => {
+    if (!at) return;
+    const ch = chordAt.get(at.i);
+    const h = ch ? harmoniesOf(ch)[at.slot] : undefined;
+    const text = h ? h.text ?? harmonyText(h) : null;
+    if (text !== rec.chordRegions![k]!.text) chordFixes.push({ k, text });
+  });
+  return { score: { ...rec, rows }, inserted, lyricFixes, chordFixes };
 }

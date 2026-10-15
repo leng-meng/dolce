@@ -1,5 +1,6 @@
 // 音符：数字、升降号、八度点、附点、和弦与注释、倚音、`&xx` 记号。
 import type { BarlineElement, MusicElement, NoteElement } from "../../../pu/ast";
+import type { ElementId } from "../../../model/doc";
 import { AccidentalGlyph, type AccidentalKind } from "../../../engrave/accidental";
 import { ACCIDENTAL_GLYPH, ACCOMP_BRACKET } from "../../../pu/glyph";
 import { Font } from "../../font";
@@ -13,20 +14,22 @@ import { graceLayout, noteBeams } from "../place/vertical";
 import { type OriginalCtx, digitItem, digitOrigin, dot, octaveDot, rect, stroke, text } from "./ctx";
 import { musicText } from "../../../engrave/prims";
 
-/** 音符/增时线上方的和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）。位置照定位端（`PlacedText`）。 */
-function paintChord(c: OriginalCtx, g: Group, t: PlacedText, x: number, baseline: number): void {
+/** 音符/增时线上方的和弦：与五线谱共用富文本分段（根音升降号用 SMuFL csym 字形、后缀上标）。位置照定位端（`PlacedText`）。
+ *  打 `harmony` 标签给可视化编辑单独点选：音符上的随音符格认；增时线上的不在任何格里，标签带增时线自己的 id（`ownId`）。 */
+function paintChord(c: OriginalCtx, g: Group, t: PlacedText, x: number, baseline: number, ownId?: ElementId): void {
   const m = c.metrics;
   const wordFont = new Font(m.style.font.text.family, t.size);
   const musicFont = new Font("Bravura", t.size);
   const grp = layoutHarmonySegs(chordTextSegs(t.text, m.style.look.chordPlain, m.style.look.accidentalSide), wordFont, musicFont, c.ink);
   grp.x = x;
   grp.y = baseline;
+  grp.ident = { kind: "harmony", ...(ownId !== undefined ? { id: ownId } : {}) };
   g.add(grp);
 }
 
 /** 上方带里挂在 `el` 上的字（和弦、注释、转调标签、力度/术语/跳转字、奏法记号）：y 已在定位端定死（place/band.ts），这里只照画。
- *  `kinds` 给了就只画这几种。 */
-export function paintBand(c: OriginalCtx, g: Group, el: MusicElement, kinds?: ReadonlySet<PlacedText["kind"]>): void {
+ *  `kinds` 给了就只画这几种；`ownId`：挂在增时线上时那条增时线的 id（见 `paintChord`）。 */
+export function paintBand(c: OriginalCtx, g: Group, el: MusicElement, kinds?: ReadonlySet<PlacedText["kind"]>, ownId?: ElementId): void {
   const list = c.band?.get(el);
   const o = c.bandOrigin;
   if (!list || !o) return;
@@ -35,7 +38,7 @@ export function paintBand(c: OriginalCtx, g: Group, el: MusicElement, kinds?: Re
     if (kinds && !kinds.has(t.kind)) continue;
     const x = o.x + t.x, y = o.y + t.y;
     if (t.kind === "chord") {
-      paintChord(c, g, t, x, y);
+      paintChord(c, g, t, x, y, ownId);
       continue;
     }
     // SMuFL 字形（奏法、力度、跳转字形）挂 `smufl`（`musicText`）：PPTX 按它转曲、成书按它落乐谱字体（同旧简谱引擎的 `SmuflText`）

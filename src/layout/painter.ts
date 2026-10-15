@@ -495,6 +495,11 @@ export class ScorePainter {
     return this.elsOf(this.index.parts(id, kind, pass).map((h) => h.item));
   }
 
+  /** 不在音符格里的部件（增时线 `ownId` 上方的和弦），按页面树顺序。 */
+  ownedPartEls(ownId: ElementId, role: VisualPartRole): SVGGElement[] {
+    return this.elsOf(this.index.ownedParts(ownId, role).map((h) => h.item));
+  }
+
   /** 页眉里画出来的东西（标题、署名、调号拍号）：`<g>`、所画的字、是不是调号拍号。可视化编辑按字对回原文字段。 */
   headerParts(): HeaderPart[] {
     if (this.staff) {

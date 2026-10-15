@@ -255,7 +255,7 @@ export function paintVoice(c: OriginalCtx,
       const sid = c.doc?.idOf.get(it.element);
       if (sid !== undefined) line.ident = { kind: "sustain", id: sid, ...(c.pass !== undefined ? { pass: c.pass } : {}) };
       // 长音里换的和弦印在增时线上方（`- "hx:C/G"`），画法与音符上方那个一样
-      paintBand(c, root, it.element);
+      paintBand(c, root, it.element, undefined, sid);
       paintSyllables(c, root, it, x, voice, lyricRight);
       continue;
     }

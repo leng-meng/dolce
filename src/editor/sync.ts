@@ -60,7 +60,7 @@ export interface SyncEntry {
   verse: number | null;
   /** 歌词：原文里的段号（`W2`、`w:` 第 2 行为 2）。一行里缺了某段时与 `verse + 1` 不同 */
   verseNo?: number;
-  /** 增时线自己的 id */
+  /** 增时线自己的 id；`mark`：挂在增时线上的记号，那条增时线的 id */
   own?: ElementId;
   /** 增时线是宿主音符的第几条（0 基）：旧简谱引擎那一路的增时线不带 id，按序号在音符格后面数 */
   ord?: number;
@@ -311,7 +311,7 @@ export class SyncIndex {
           if (hasSpan(su.source)) {
             out.push({ kind: "sustain", from: su.source.offset, to: spanEnd(su.source), id: el.id, own: su.id, ord, verse: null });
           }
-          pushAttached(su.attachedSources, el.id, out);
+          pushAttached(su.attachedSources, el.id, out, su.id);
         });
         lastId = el.id;
       }
@@ -399,10 +399,11 @@ export class SyncIndex {
   }
 }
 
-function pushAttached(list: AttachedSource[] | undefined, id: ElementId, out: SyncEntry[]): void {
+/** `own`：挂在增时线上时那条增时线的 id（条目仍记在宿主音符名下，谱面按 `own` 认图元）。 */
+function pushAttached(list: AttachedSource[] | undefined, id: ElementId, out: SyncEntry[], own?: ElementId): void {
   for (const a of list ?? []) {
     if (!hasSpan(a.source)) continue;
-    out.push({ kind: "mark", from: a.source.offset, to: spanEnd(a.source), id, verse: null, markKind: a.kind, name: a.name });
+    out.push({ kind: "mark", from: a.source.offset, to: spanEnd(a.source), id, verse: null, markKind: a.kind, name: a.name, ...(own !== undefined ? { own } : {}) });
   }
 }
 

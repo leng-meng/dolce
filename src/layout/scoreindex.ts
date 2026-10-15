@@ -25,6 +25,8 @@ export class ScoreIndex {
   private syllables = new Map<string, Hit[]>();
   private systems = new Map<PageItem, PageItem[]>();
   private headerHits: Hit[] = [];
+  /** 不在音符格里、标签自带 id 的部件（增时线上的和弦），按「种类:id」收 */
+  private ownParts = new Map<string, Hit[]>();
   /** 带身份的全部图元（渲染后把 DOM 元素反查回图元用） */
   readonly all: Hit[] = [];
 
@@ -98,6 +100,11 @@ export class ScoreIndex {
             break;
           case "header":
             this.headerHits.push(hit);
+            break;
+          case "harmony":
+          case "deco":
+          case "annotation":
+            if (ident.id !== undefined) push(this.ownParts, `${ident.kind}:${ident.id}`);
             break;
         }
       }
@@ -182,6 +189,11 @@ export class ScoreIndex {
   parts(id: ElementId, kind: IdentityKind, pass = 0): Hit[] {
     const cell = this.note(id, pass);
     return cell ? findByKind(cell.item, kind).map((item) => ({ page: cell.page, item })) : [];
+  }
+
+  /** 标签自带 id 的部件（增时线上的和弦：`id` 是增时线自己的），按页面树顺序。 */
+  ownedParts(id: ElementId, kind: IdentityKind): Hit[] {
+    return this.ownParts.get(`${kind}:${id}`) ?? [];
   }
 
   /** 图元所在那一行谱（`system` 标签）与行里的音符、增时线、歌词格。不在任何行里为 null。 */
