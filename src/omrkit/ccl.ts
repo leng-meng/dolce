@@ -1,4 +1,4 @@
-// 连通域标注（迭代式 flood fill，避免递归爆栈）。两个口径：
+// 连通域标注（`connectedComponents` 按行游程并查集，`components` 迭代式 flood fill，都不递归）。两个口径：
 //   - `connectedComponents`：墨的 8 邻接块，给包围盒、面积、质心，可出标号图（对应 musicpp 用 cv::findContours 得到的 contour 包围盒）；
 //   - `components`：墨或白、4 或 8 邻接，给像素表与碰没碰图边（面积开闭运算、找内腔用）。
 import type { Binary, Component, Rect } from "./types";
@@ -12,45 +12,80 @@ export function connectedComponents(bin: Binary, minArea = 4, out?: Int32Array):
   const { w, h, data } = bin;
   const labels = out ?? new Int32Array(w * h);
   labels.fill(0);
-  const comps: Component[] = [];
-  let next = 1;
-  const stack: number[] = [];
+  // 按行取墨游程，上下两行游程横向相接（含斜角，8 邻接）就并。游程按光栅序编号、并查集总挂到小号上，
+  // 根就是块里光栅序最早的那段——块号照「块首像素的光栅序」发，与逐点 flood 的编号一致
+  const ry: number[] = [];
+  const rx0: number[] = [];
+  const rx1: number[] = [];
+  const parent: number[] = [];
+  const find = (a: number): number => {
+    while (parent[a] !== a) a = parent[a] = parent[parent[a]];
+    return a;
+  };
+  let prevStart = 0;
+  let prevEnd = 0;
   for (let y = 0; y < h; y++) {
-    for (let x = 0; x < w; x++) {
-      const idx = y * w + x;
-      if (data[idx] !== 1 || labels[idx] !== 0) continue;
-      // 新连通块
-      const id = next++;
-      let minX = x, maxX = x, minY = y, maxY = y, area = 0, sx = 0, sy = 0;
-      stack.length = 0;
-      stack.push(idx);
-      labels[idx] = id;
-      while (stack.length) {
-        const cur = stack.pop()!;
-        const cy = (cur / w) | 0;
-        const cx = cur - cy * w;
-        area++; sx += cx; sy += cy;
-        if (cx < minX) minX = cx; if (cx > maxX) maxX = cx;
-        if (cy < minY) minY = cy; if (cy > maxY) maxY = cy;
-        for (let dy = -1; dy <= 1; dy++) {
-          const ny = cy + dy;
-          if (ny < 0 || ny >= h) continue;
-          for (let dx = -1; dx <= 1; dx++) {
-            if (dx === 0 && dy === 0) continue;
-            const nx = cx + dx;
-            if (nx < 0 || nx >= w) continue;
-            const nIdx = ny * w + nx;
-            if (data[nIdx] === 1 && labels[nIdx] === 0) {
-              labels[nIdx] = id;
-              stack.push(nIdx);
-            }
-          }
-        }
+    const o = y * w;
+    const curStart = ry.length;
+    let j = prevStart;
+    for (let x = 0; x < w; ) {
+      if (data[o + x] !== 1) {
+        x++;
+        continue;
       }
-      if (area < minArea) continue;
-      const bbox: Rect = { x: minX, y: minY, w: maxX - minX + 1, h: maxY - minY + 1 };
-      comps.push({ id, bbox, area, cx: sx / area, cy: sy / area });
+      const a = x;
+      while (x < w && data[o + x] === 1) x++;
+      const b = x - 1;
+      const id = ry.length;
+      ry.push(y);
+      rx0.push(a);
+      rx1.push(b);
+      parent.push(id);
+      while (j < prevEnd && rx1[j] < a - 1) j++;
+      for (let k = j; k < prevEnd && rx0[k] <= b + 1; k++) {
+        const ra = find(k);
+        const rb = find(id);
+        if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+      }
     }
+    prevStart = curStart;
+    prevEnd = ry.length;
+  }
+  const n = ry.length;
+  const label = new Int32Array(n);
+  const area: number[] = [];
+  const sx: number[] = [];
+  const sy: number[] = [];
+  const minX: number[] = [];
+  const maxX: number[] = [];
+  const minY: number[] = [];
+  const maxY: number[] = [];
+  let next = 0;
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    let c: number;
+    if (r === i) {
+      c = next++;
+      area.push(0), sx.push(0), sy.push(0), minX.push(w), maxX.push(0), minY.push(ry[i]), maxY.push(0);
+    } else c = label[r];
+    label[i] = c;
+    const y = ry[i];
+    const a = rx0[i];
+    const b = rx1[i];
+    const len = b - a + 1;
+    area[c] += len;
+    sx[c] += ((a + b) * len) / 2;
+    sy[c] += y * len;
+    if (a < minX[c]) minX[c] = a;
+    if (b > maxX[c]) maxX[c] = b;
+    if (y > maxY[c]) maxY[c] = y;
+    labels.fill(c + 1, y * w + a, y * w + b + 1);
+  }
+  const comps: Component[] = [];
+  for (let c = 0; c < next; c++) {
+    if (area[c] < minArea) continue;
+    const bbox: Rect = { x: minX[c], y: minY[c], w: maxX[c] - minX[c] + 1, h: maxY[c] - minY[c] + 1 };
+    comps.push({ id: c + 1, bbox, area: area[c], cx: sx[c] / area[c], cy: sy[c] / area[c] });
   }
   return comps;
 }
