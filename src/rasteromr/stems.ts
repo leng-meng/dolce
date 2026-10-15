@@ -165,6 +165,16 @@ export function splitUnisons(notes: StaffNote[], stems: StemInfo[], beams: BeamS
   /** 头另一侧那段竖墨上不能再有别的头（那是和弦里另一个头的干）。 */
   const clear = (s: Sym, x0: number, x1: number, y0: number, y1: number) =>
     !heads.some((o) => o !== s && o.box.right > x0 && o.box.left < x1 && o.box.bottom > Math.min(y0, y1) && o.box.top < Math.max(y0, y1));
+  /** [x0, x1] 里有一列竖墨从头的这一侧外 `above` 一直连到另一侧外半格：是贴着头路过的线（邻头的干、小节线），
+   *  不是在这个头上停住的另一根干（宁静的伯利恒 m71/m72 钢琴十六分，低头 F4 右缘紧贴高头 F5 朝下的干，那根干一直伸到头下的符杠）。 */
+  const passes = (x0: number, x1: number, b: Sym["box"], dir: number) => {
+    for (let x = Math.round(x0); x <= Math.round(x1); x++) {
+      const run = vRunAt(bin, x, Math.round(dir < 0 ? b.top - 2 : b.bottom + 2));
+      if (!run) continue;
+      if (dir < 0 ? run[0] <= b.top - sp * UNISON_SHORT && run[1] >= b.bottom + sp * 0.5 : run[1] >= b.bottom + sp * UNISON_SHORT && run[0] <= b.top - sp * 0.5) return true;
+    }
+    return false;
+  };
   for (const n of notes) {
     if (n.rest || n.grace || up.has(n.sym) === down.has(n.sym)) continue;
     const b = n.sym.box;
@@ -192,12 +202,12 @@ export function splitUnisons(notes: StaffNote[], stems: StemInfo[], beams: BeamS
       const x1 = b.left + w * 0.3;
       const len = reach(Math.min(b.left - out, bl - 1), x1, b.bottom, 1) >= sp * UNISON_REACH && reach(b.left - 1, x1, b.top, -1) < sp * 0.5 ? sp * UNISON_REACH
         : reach(bl - 1, x1, b.bottom, 1) >= sp * UNISON_SHORT && reach(Math.min(b.left - out, bl - 1), x1, b.top, -1) < sp * 0.5 && headRows(bl - 1, x1, b.bottom + 2, b.bottom + sp * UNISON_SHORT, 0.4, 3) < sp * 0.2 ? sp * UNISON_SHORT : 0;
-      if (len && clear(n.sym, Math.min(b.left - out, bl - 1), x1, b.bottom + 1, b.bottom + len) && headRows(Math.min(b.left - out, bl - 1), x1, b.bottom + 2, b.bottom + len) < sp * 0.3) down.add(n.sym);
+      if (len && clear(n.sym, Math.min(b.left - out, bl - 1), x1, b.bottom + 1, b.bottom + len) && headRows(Math.min(b.left - out, bl - 1), x1, b.bottom + 2, b.bottom + len) < sp * 0.3 && !passes(Math.min(b.left - out, bl - 1), b.left - 1, b, 1)) down.add(n.sym);
     } else {
       const x0 = b.right - w * 0.3;
       const len = reach(x0, Math.max(b.right + out, br + 1), b.top, -1) >= sp * UNISON_REACH && reach(x0, b.right + 1, b.bottom, 1) < sp * 0.5 ? sp * UNISON_REACH
         : reach(x0, br + 1, b.top, -1) >= sp * UNISON_SHORT && reach(x0, Math.max(b.right + out, br + 1), b.bottom, 1) < sp * 0.5 && headRows(x0, br + 1, b.top - sp * UNISON_SHORT, b.top - 2, 0.4, 3) < sp * 0.2 ? sp * UNISON_SHORT : 0;
-      if (len && clear(n.sym, x0, Math.max(b.right + out, br + 1), b.top - len, b.top - 1) && headRows(x0, Math.max(b.right + out, br + 1), b.top - len, b.top - 2) < sp * 0.3) up.add(n.sym);
+      if (len && clear(n.sym, x0, Math.max(b.right + out, br + 1), b.top - len, b.top - 1) && headRows(x0, Math.max(b.right + out, br + 1), b.top - len, b.top - 2) < sp * 0.3 && !passes(b.right + 1, Math.max(b.right + out, br + 1), b, -1)) up.add(n.sym);
     }
   }
   /** 朝下那根「干」其实是头下方歌词字的一笔：头下 1.2 格内先是一段细墨、接着连续几行 0.9~2.4 格宽的横墨（字的横笔）。

@@ -785,14 +785,46 @@ export function findPrimitives(
   // 半径取两个线宽：符干就这么粗，再大会把相邻两组的符杠连成一条。
   const bMaskC = close1d(bMask, w, h, Math.round(unit.lineThick * 2), true);
   const beams: BeamQuad[] = [];
-  /** 这一列附近有没有一根竖段搭着这块（x 在 ±tol 内、纵向与块相交），有就返回它的 x。 */
+  /** 这一列附近有没有一根竖段搭着这块（x 在 ±tol 内、纵向与块相交或差不到 0.3 格），有就返回它的 x。
+   *  干接杠那几列横墨宽、抽竖段时常截掉一小截，干端离杠底三四像素（宁静的伯利恒 p6 m79 低音 A2–E3 的短杠） */
   const stemNear = (x: number, b: Rect, tol: number): number | null => {
+    const gap = Math.max(2, unit.space * 0.3);
     for (const v of vSegs) {
       const vx = (v.x0 + v.x1) / 2;
-      if (Math.abs(vx - x) <= tol && Math.min(v.y0, v.y1) <= b.y + b.h + 2 && Math.max(v.y0, v.y1) >= b.y - 2) return vx;
+      if (Math.abs(vx - x) <= tol && Math.min(v.y0, v.y1) <= b.y + b.h + gap && Math.max(v.y0, v.y1) >= b.y - gap) return vx;
     }
     return null;
   };
+  /** 竖段表里没有的干：这一列附近从块上沿往上、或下沿往下连着 `SHORT_BEAM_INK_STEM` 格以上的竖墨（原图），返回列 x。
+   *  干两侧挨着别的墨时抽不成竖段（宁静的伯利恒 p8 m96 钢琴右手 A4、B4 两个十六分，B4 的干左边是两层短杠、下边贴着 A4 的头） */
+  const inkStemNear = (x: number, b: Rect, tol: number): number | null => {
+    const at = (xx: number, y: number) => xx >= 0 && xx < w && y >= 0 && y < h && !!bin.data[y * w + xx];
+    let best: number | null = null;
+    let most = 0;
+    for (let xx = Math.round(x - tol); xx <= Math.round(x + tol); xx++)
+      for (const [y0, dir] of [[b.y, -1], [b.y + b.h - 1, 1]] as const) {
+        let y = y0;
+        while (at(xx, y + dir)) y += dir;
+        const reach = Math.abs(y - y0);
+        if (reach >= unit.space * SHORT_BEAM_INK_STEM && reach > most) (most = reach), (best = xx);
+      }
+    return best;
+  };
+  /** 从块上沿往上、下沿往下顺着 x 那一列（左右各让一列）走到墨断，取走得远的那头的 y。 */
+  const colEnd = (x: number, b: Rect): number => {
+    const at = (y: number) => [-1, 0, 1].some((d) => {
+      const xx = Math.round(x) + d;
+      return xx >= 0 && xx < w && y >= 0 && y < h && !!bin.data[y * w + xx];
+    });
+    let up = b.y;
+    while (at(up - 1) && b.y - up < unit.space * 6) up--;
+    let dn = b.y + b.h - 1;
+    while (at(dn + 1) && dn - (b.y + b.h - 1) < unit.space * 6) dn++;
+    return b.y - up >= dn - (b.y + b.h - 1) ? up : dn;
+  };
+  /** 杠两端的两根「干」通到同一个头：一根是干、另一根是弯回头边的符尾，块是符尾根部（破碎 p9 m87 低音 B3 朝下的八分）。
+   *  杠只架在两个音之间——两根干的末端隔开不到一个头宽、高低又差不到 0.6 格，就是同一个头 */
+  const sameHead = (xa: number, xb: number, b: Rect) => xb - xa < unit.space * 1.3 && Math.abs(colEnd(xa, b) - colEnd(xb, b)) < unit.space * 0.6;
   /** 两根干之间逐列量块的墨厚（这一列在块盒里最长的竖游程），取中位数。 */
   const midThick = (b: Rect, xa: number, xb: number): number => {
     const ts: number[] = [];
@@ -810,9 +842,9 @@ export function findPrimitives(
     const tol = Math.max(2, unit.lineThick * 2);
     let shortBeam = false;
     if (c.bbox.w >= unit.space * SHORT_BEAM_W && c.bbox.w < unit.space * 1.5 && c.bbox.h <= unit.space * 1.2) {
-      const xa = stemNear(c.bbox.x, c.bbox, tol);
-      const xb = stemNear(c.bbox.x + c.bbox.w - 1, c.bbox, tol);
-      if (xa !== null && xb !== null && xb - xa >= unit.space * 0.7) {
+      const xa = stemNear(c.bbox.x, c.bbox, tol) ?? inkStemNear(c.bbox.x, c.bbox, tol);
+      const xb = stemNear(c.bbox.x + c.bbox.w - 1, c.bbox, tol) ?? inkStemNear(c.bbox.x + c.bbox.w - 1, c.bbox, tol);
+      if (xa !== null && xb !== null && xb - xa >= unit.space * 0.7 && !sameHead(xa, xb, c.bbox)) {
         const t = midThick(c.bbox, xa + tol, xb - tol) / unit.space;
         shortBeam = t >= SHORT_BEAM_THICK[0] && t <= SHORT_BEAM_THICK[1];
       }
@@ -1312,6 +1344,8 @@ export function repairLineCuts(bin: Binary, nl: Binary, lineYs: number[], unit: 
 const SHORT_BEAM_W = 0.9;
 /** 同上：两根干之间逐列墨厚的中位数（格）。杠约半格厚；比这薄的是连线、谱线残段，比这厚的是挨着两根干的实心头。 */
 const SHORT_BEAM_THICK = [0.4, 0.6] as const;
+/** 短杠一端没有竖段时，图上那一列从杠往外连着的竖墨至少这么多格才算干（`inkStemNear`）。 */
+const SHORT_BEAM_INK_STEM = 1.5;
 /** `thinOnly`：这几条线只抹竖游程不过 `THIN_ONLY_RUN` 个线宽的列（见 `recognize.ts` 调用处）。 */
 /**
  * **按游程去线**（只给认弧用）：每条线逐列取线心处的竖游程，不过这条线的实测线宽就整段清掉，更长的整段留下

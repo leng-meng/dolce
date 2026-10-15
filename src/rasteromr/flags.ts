@@ -235,7 +235,25 @@ export function bootstrapFlags(bin: Binary, pg: SPage, beams: BeamQuad[], unit: 
     // **窗口里那团墨是别的头**：两个头左缘连成的竖墨被当成干，下面那个头（吊在加线下的 B3）左缘离这根「干」稍远、没算作它的头，
     // 干尖于是成了自由端、头的墨当了符尾（耶和华是我的牧者 m9 E4/B3 读成八分）。已认的实心头大半落在出块里、又贴着加线的不出尾。
     // 要贴着加线：符尾那团墨自己也常被收成假头（我一生要赞美你 m18 E4 的尾），光看「盖住已认头」会把真尾剔掉
-    if (heads.some((s) => !on.includes(s) && overlapFrac({ x: s.box.left, y: s.box.top, w: s.box.right - s.box.left, h: s.box.bottom - s.box.top }, fbox) > FLAG_ON_HEAD && besideLeger(s.box))) continue;
+    // 盖住的头另挂着自己的一根干（不是这根、与这根隔开半格以上、从头往外伸出一格半以上）、扣掉头盒之后出块里几乎没墨的也一样
+    //（尾窗罩住邻头、尾也真在的不拒：我一生要赞美你 m18 C4 八分，扣头后剩 0.26，破碎那处 0.06）：那是旁边真音符的头，不是符尾的墨
+    //（破碎 p2 m3 钢琴右手 C4 四分朝上的干，干尖右边就是 B♭4 的头，被当成符尾读成八分）
+    const ownStem = (s: (typeof heads)[number]) =>
+      stemsAll.some((o) => o !== st && Math.abs(o.cx - st.cx) >= sp * 0.5 && (Math.abs(s.box.left - o.cx) < sp / 3 || Math.abs(s.box.right - o.cx) < sp / 3) && o.top < s.box.bottom && s.box.top < o.bottom && Math.max(s.box.top - o.top, o.bottom - s.box.bottom) >= sp * 1.5);
+    /** 出块里扣掉所有头盒之后剩下的墨占比：真有尾时尾那一笔还在 */
+    const residual = () => {
+      let k = 0, n = 0;
+      for (let y = fbox.y; y < fbox.y + fbox.h; y++)
+        for (let x = fbox.x + 2; x < fbox.x + fbox.w; x++) {
+          if (x < 0 || y < 0 || x >= bin.w || y >= bin.h) continue;
+          if (heads.some((s) => x >= s.box.left - 1 && x <= s.box.right + 1 && y >= s.box.top - 1 && y <= s.box.bottom + 1)) continue;
+          n++;
+          k += bin.data[y * bin.w + x];
+        }
+      return n ? k / n : 0;
+    };
+    const onHead = (s: (typeof heads)[number]) => overlapFrac({ x: s.box.left, y: s.box.top, w: s.box.right - s.box.left, h: s.box.bottom - s.box.top }, fbox);
+    if (heads.some((s) => !on.includes(s) && ((onHead(s) > FLAG_ON_HEAD && besideLeger(s.box)) || (onHead(s) > FLAG_ON_OWN_HEAD && ownStem(s) && residual() < FLAG_RESIDUAL)))) continue;
     out.push({ box: fbox, code });
   }
   // **两个八分的「符尾」连到一起**：左边那根干的符尾弯下来正落在右邻同朝向那根干的尖上（我一生要赞美你 m14 F4–D4），
@@ -331,6 +349,10 @@ const HOOK_PROM = 0.15;
 const FLAG_AVOID = 0.2;
 /** 出块盖住一个已认实心头的比例上限（见用处）。 */
 const FLAG_ON_HEAD = 0.5;
+/** 盖住的是另挂着自己干的头时，比例下限放到这么多。 */
+const FLAG_ON_OWN_HEAD = 0.25;
+/** 扣掉头盒之后出块里的墨占比低于这个，才算没有尾（见用处）。 */
+const FLAG_RESIDUAL = 0.12;
 
 /** 干尖顺着干往外延的上限（格）。 */
 const FLAG_TIP_EXT = 2.0;
@@ -375,7 +397,7 @@ const BEAM_SNAP_INK = 0.8;
  * 另加两道：这一段沿杠的墨要比线厚两像素以上（压在线上时线墨处处都有，只看有没有墨等于没判），那根干也还没挂别的杠
  *（只按有没有墨续到 1.5 格，望十架、破碎干净版各错接几处，十六分读成三十二分）。
  */
-export function snapBeamEnds(beams: BeamShape[], stems: Seg[], bin: Binary, sp: number, lineThick: number): void {
+export function snapBeamEnds(beams: BeamShape[], stems: Seg[], bin: Binary, sp: number, lineThick: number, heads: { left: number; right: number; top: number; bottom: number }[] = []): void {
   const yAt = (b: BeamShape, x: number) => (b.x1 === b.x0 ? b.y0 : b.y0 + ((b.y1 - b.y0) * (x - b.x0)) / (b.x1 - b.x0));
   for (const b of beams) {
     const half = (b.box.bottom - b.box.top) / 2 + 1;
@@ -391,6 +413,15 @@ export function snapBeamEnds(beams: BeamShape[], stems: Seg[], bin: Binary, sp: 
       for (let y = Math.round(cy - half * 2); y <= Math.round(cy + half * 2); y++) (run = y >= 0 && y < bin.h && bin.data[y * bin.w + x] ? run + 1 : 0), (best = Math.max(best, run));
       return best >= lineThick + 2;
     };
+    /** 干在杠高度那一端挂着一个头（头贴着干、杠高度落在头的上下半格内）。 */
+    //  压在这条杠上的「头」不算：那是杠端被认成了头（当我们回到天家 m3 杠右端认出一个 D5），拿它挡杠就把真杠挡掉了
+    const onBeam = (h: { left: number; right: number; top: number; bottom: number }) => {
+      if (h.right < b.x0 || h.left > b.x1) return false;
+      const y = yAt(b, Math.min(Math.max((h.left + h.right) / 2, b.x0), b.x1));
+      return y >= h.top - half && y <= h.bottom + half;
+    };
+    const headAt = (st: Seg, y: number) =>
+      heads.some((h) => h.left <= st.cx + sp * 0.3 && h.right >= st.cx - sp * 0.3 && y >= h.top - sp * 0.5 && y <= h.bottom + sp * 0.5 && h.bottom >= st.top - 2 && h.top <= st.bottom + 2 && !onBeam(h));
     const beamedElsewhere = (st: Seg) => beams.some((o) => o !== b && st.cx >= o.box.left - 3 && st.cx <= o.box.right + 3 && st.bottom >= o.box.top - sp * 0.4 && st.top <= o.box.bottom + sp * 0.4);
     for (const side of [0, 1] as const) {
       const end = side === 0 ? b.x0 : b.x1;
@@ -403,6 +434,9 @@ export function snapBeamEnds(beams: BeamShape[], stems: Seg[], bin: Binary, sp: 
         const through = d <= sp * 0.5 && st.top < y && st.bottom > y;
         if (!through && Math.min(Math.abs(st.top - y), Math.abs(st.bottom - y)) > sp * BEAM_SNAP_END) continue;
         if (d > sp * BEAM_SNAP_FAR && beamedElsewhere(st)) continue;
+        // 干的一端挂头、另一端挂杠，两样互斥：杠续到的那一端已经挂着头，这根干不是这条杠的
+        //（宁静的伯利恒 p2 m31 低音 D2–A2 的杠右端停在 F♯3 朝下的干的头端旁边，续过去 F♯3 成了八分）
+        if (!through && headAt(st, y)) continue;
         if (!got || Math.abs(st.cx - end) < Math.abs(got.cx - end)) got = st;
       }
       if (!got) continue;

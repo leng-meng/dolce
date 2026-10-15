@@ -181,6 +181,7 @@ export function findRasterHeads(
     // 填充率按**原块**算：上面借进来的符干那几列不在 `t.area` 里
     const fill = t.area / Math.max(1, t.box.w * t.box.h);
     if (fill < 0.3) continue; // 太空：是弧线的一段、方框
+    if (fill >= FILL_SOLID && beamStub(bin, b, stems, unit)) continue;
     const stem = stemOf(b, stems, unit);
     // 剪掉了列，且高度落在谱线网格的延长线上 → 那两截细横笔是加线
     const ledger: LineSeg | null =
@@ -216,6 +217,46 @@ export function findRasterHeads(
   }
   return out;
 }
+
+/**
+ * **夹在两根同向干之间的一截短杠**：两个八分音符的干挨得近（宁静的伯利恒 p4 m51 低音 E3、B3 相距 1.6 格），
+ * 连着两根干底端的符杠抽走干之后只剩 1.4×0.8 格一块实心墨，尺寸、填充率都像个头（读成多出来的 F2）。
+ * 真头只在一侧挂干；这一块左右两缘各贴一根干，两根干都在块上止住、朝同一方向伸出 `BEAM_STUB_STEM` 格以上。
+ */
+function beamStub(bin: Binary, b: Rect, stems: LineSeg[], unit: RasterUnit): boolean {
+  const sp = unit.space;
+  // 形状：杠是平行四边形，靠两缘的列与中间那列一样高；椭圆的头靠两缘矮下去（两个八分头左右夹着别人的干也会两缘都有干，
+  // 宁静的伯利恒 p4 m60 低音两个挨着的 E3，后一个右缘贴着 F3 朝下的干）
+  const colH = (x: number) => {
+    let n = 0;
+    for (let y = b.y; y < b.y + b.h; y++) if (x >= 0 && x < bin.w && y >= 0 && y < bin.h && bin.data[y * bin.w + x]) n++;
+    return n;
+  };
+  // 杠约半格厚，头约一格高：中间那列墨高过 `BEAM_STUB_THICK` 格的是头（我一生要赞美你低分辨率页上贴着邻音干的小头，各列都差不多高）
+  const mid = colH(Math.round(b.x + b.w / 2));
+  if (!mid || mid > sp * BEAM_STUB_THICK || Math.min(colH(Math.round(b.x + b.w * 0.15)), colH(Math.round(b.x + b.w * 0.85))) < mid * BEAM_STUB_EDGE) return false;
+  const tol = Math.max(unit.lineThick * 2, sp * 0.25);
+  const dirAt = (edge: number) => {
+    let dir = 0;
+    for (const s of stems) {
+      if (Math.abs((s.x0 + s.x1) / 2 - edge) > tol) continue;
+      const top = Math.min(s.y0, s.y1);
+      const bottom = Math.max(s.y0, s.y1);
+      if (bottom >= b.y - tol && bottom <= b.y + b.h + tol && top < b.y - sp * BEAM_STUB_STEM) dir |= 1;
+      if (top >= b.y - tol && top <= b.y + b.h + tol && bottom > b.y + b.h + sp * BEAM_STUB_STEM) dir |= 2;
+    }
+    return dir;
+  };
+  const l = dirAt(b.x);
+  return (l & dirAt(b.x + b.w)) !== 0;
+}
+
+/** 短杠两头的干至少伸出这么多格（`beamStub`）。 */
+const BEAM_STUB_STEM = 1.5;
+/** 靠两缘（15%、85%）的列墨高至少是中间那列的这么多（`beamStub`）。 */
+const BEAM_STUB_EDGE = 0.85;
+/** 中间那列墨高上限（格，`beamStub`）。 */
+const BEAM_STUB_THICK = 0.7;
 
 /** 空心候选够这么高（线距的倍数）才查「底是不是开口的」。 */
 const OPEN_ARC_H = 0.8;
@@ -411,6 +452,8 @@ const HOLE_NEED_STEM = true;
 const FILL_RING = [0.3, 0.75] as const;
 /** 图上量出的墨柱往一头伸出多长（格）才算符干：够一根干，又不是花括号、谱号那种长竖笔。 */
 const INK_STEM = [2.5, 7] as const;
+/** 墨柱往另一头至多伸出这么多格（`hollowHeadsFromHoles`）。 */
+const INK_STEM_BACK = 1.5;
 /** 叠置空心和弦里两个头的中心最多隔几格（闭合谱两声部同干可到八度多，3.5 格）。 */
 const MATE_GAP = 3.5;
 
@@ -564,7 +607,21 @@ export function hollowHeadsFromHoles(
       const col = inkColumn(nl, box, unit);
       const cy = box.y + box.h / 2;
       const reach = col ? Math.max(cy - col[0], col[1] - cy) : 0;
-      if (reach >= sp * INK_STEM[0] && reach <= sp * INK_STEM[1]) stem = true;
+      // 墨柱的一端挂着已认出的头、那个头在柱的另一侧，候选盒又在柱的中段（反方向也伸出 `INK_STEM_BACK` 格以上）：
+      // 一根干的头都挂在同一侧，这是路过的别的音的干，干、谱线与旁边的头围出一块白
+      //（宁静的伯利恒 p4 m56 低音，A2 朝上的干右边与 E3 头之间那块白读成空心 E3）。
+      // 同侧的照收：共干的头，干穿过它通到另一个头（万福泉源歌 m21 E4/B3、我灵镇静两声部共干）
+      const back = col ? Math.min(cy - col[0], col[1] - cy) : 0;
+      const side = (b: Rect) => Math.sign(b.x + b.w / 2 - (col ? col[2] : 0));
+      const owner =
+        !!col &&
+        back >= sp * INK_STEM_BACK &&
+        taken.some((t) => {
+          const edge = Math.min(Math.abs(t.x - col[2]), Math.abs(t.x + t.w - col[2]));
+          const tcy = t.y + t.h / 2;
+          return edge <= sp * 0.3 && (Math.abs(tcy - col[0]) <= sp * 0.6 || Math.abs(tcy - col[1]) <= sp * 0.6) && side(t) !== side(box);
+        });
+      if (reach >= sp * INK_STEM[0] && reach <= sp * INK_STEM[1] && !owner) stem = true;
     }
     if (!stem) {
       const through = stemThrough(box, stems, unit);
@@ -942,6 +999,9 @@ export function hollowHeadsByPitch(
 
 /** 自由端最后这么多格是干本身，不找头。 */
 const ALONG_FREE = 2.5;
+/** 自由端里另开一段「深区」到干尖往回这么多格，那里只收模板分 ≥ `ALONG_DEEP_SCORE` 的。 */
+const ALONG_FREE_DEEP = 1.5;
+const ALONG_DEEP_SCORE = 0.55;
 /** 干的近端离头心不过这么多格，算干断在两者之间（中间夹着没认出的头）。 */
 const ALONG_GAP = 3.5;
 /** 头离干的近端也有这么多格，算悬在干中段。 */
@@ -1162,7 +1222,7 @@ export function hollowHeadsAlongStems(
   const out: { box: Rect; code: SmuflName; weak?: boolean }[] = [];
   const taken = heads.map((h) => h.box);
   const cyOf = (h: { box: Rect }) => h.box.y + h.box.h / 2;
-  const ranges: { ref: { box: Rect }; vx: number; y0: number; y1: number; end?: number; beyond?: boolean; third?: boolean; tip?: boolean }[] = [];
+  const ranges: { ref: { box: Rect }; vx: number; y0: number; y1: number; end?: number; beyond?: boolean; third?: boolean; tip?: boolean; deep?: boolean }[] = [];
   for (const v of stems) {
     const vx = (v.x0 + v.x1) / 2;
     const top = Math.min(v.y0, v.y1);
@@ -1193,6 +1253,10 @@ export function hollowHeadsAlongStems(
         if (bot - top < sp * (ALONG_FREE + 1)) continue;
         if (nearBot) ranges.push({ ref: h, vx, y0: top + sp * ALONG_FREE, y1: hy - sp * 0.75 });
         else ranges.push({ ref: h, vx, y0: hy + sp * 0.75, y1: bot - sp * ALONG_FREE });
+        // 自由端那 `ALONG_FREE` 格里也找，只收模板分够硬的（`ALONG_DEEP_SCORE`）：谱表外的干画得短，最外那个头离干尖只剩两格多
+        //（破碎 p3 m22、p6 m63 钢琴右手 F4/B♮3 二分，B3 挂在下加一线下，离干尖 2.3 格，模板 0.67）
+        if (nearBot) ranges.push({ ref: h, vx, y0: top + sp * ALONG_FREE_DEEP, y1: Math.min(hy - sp * 0.75, top + sp * ALONG_FREE), deep: true });
+        else ranges.push({ ref: h, vx, y0: Math.max(hy + sp * 0.75, bot - sp * ALONG_FREE), y1: bot - sp * ALONG_FREE_DEEP, deep: true });
         // 头悬在干中段（离近端也有 ALONG_MID 格以上）：近端挂着的是没认出的和弦头（我灵镇静 m10，
         // F4 上下缘正压两条谱线、内腔够不上，上面的 C5 认出来却在干中段）——近端那头也找
         const near = nearBot ? bot : top;
@@ -1212,7 +1276,7 @@ export function hollowHeadsAlongStems(
       }
     }
   }
-  for (const { ref, vx, y0, y1, end, beyond, third, tip } of ranges) {
+  for (const { ref, vx, y0, y1, end, beyond, third, tip, deep } of ranges) {
     if (y1 <= y0) continue;
     const cx = ref.box.x + ref.box.w / 2;
     for (const st of stepsIn(y0, y1)) {
@@ -1231,6 +1295,7 @@ export function hollowHeadsAlongStems(
       // 干端那一级、模板与内腔都够硬的（`END_THIN`）：细圈的头墨占比够不上 0.35（新编赞美诗 141 m10 干端的 D4：模板 0.43、内腔 0.63、墨 0.32）
       const inkMin = atEnd && b.s >= END_THIN.score && cav >= END_THIN.cavity ? END_THIN.ink : ALONG_INK[0];
       if (b.s < minS || ink < inkMin || ink > ALONG_INK[1]) continue;
+      if (deep && b.s < ALONG_DEEP_SCORE) continue;
       // 内腔佐证来自原始孔、行向却一点不围合的：原始孔里有谱线之间被干、小节线围成的大格，空着的线间挨着下面一个头，
       // 模板分也有 0.3、内腔佐证 0.66、围合 0.02（高举主大能 m13）。只滤大孔反倒伤圈断口、内腔连进线间的真头（新编 059、070）
       if (cav >= cavMin && enclosed(b.x, b.y) < ALONG_ENCLOSED_MIN) continue;

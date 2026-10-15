@@ -658,6 +658,7 @@ export function findStems(pg: SPage): void {
   pg.segs.push(...glyphStems(pg));
 
   const vlines = pg.segs.filter((s) => s.isV && !s.hasAnyTag());
+  const bars = pg.segs.filter((s) => s.isV && s.hasTag("BarLine"));
   for (const nt of pg.symbols) {
     if (!nt.ownerStaff) continue;
     if (nt.code !== "noteheadBlack" && nt.code !== "noteheadHalf") continue;
@@ -676,9 +677,16 @@ export function findStems(pg: SPage): void {
     // （我一生要赞美你第一行，C4 头右缘离干 2px、离小节线 11px、窗口 12px，四条小节线全丢）。
     // 差不多远的都挂：同一根干被符杠切成同 x 的两截，或矢量路一根干拆成错开一点的两段
     // （只挂最近一根时坚固保障时值 −1.5、矢量路时值 −0.01）。
+    // 头盒一侧已经压到一根小节线：盒是顺着墨粘到小节线上撑宽的，那一侧盒内 0.4 格以内的竖段也算贴缘
+    //（破碎 p8 m83 钢琴右手 G4，干在小节线左边 3 像素，头盒右缘量到小节线上，干离盒缘 6 像素出了窗口，头被并进前一个音的和弦）
+    const onBar = (x: number) => bars.some((b) => Math.abs(b.cx - x) < lw && overlapY(b.box, nt.box));
+    const inL = onBar(nt.box.left) ? space * 0.4 : 0;
+    const inR = onBar(nt.box.right) ? space * 0.4 : 0;
     const cand: { l: Seg; side: number; d: number }[] = [];
     for (const l of vlines) {
-      const dl = Math.abs(nt.box.left - l.cx), dr = Math.abs(nt.box.right - l.cx);
+      let dl = Math.abs(nt.box.left - l.cx), dr = Math.abs(nt.box.right - l.cx);
+      if (inL && l.cx > nt.box.left && l.cx - nt.box.left <= inL) dl = 0;
+      if (inR && l.cx < nt.box.right && nt.box.right - l.cx <= inR) dr = 0;
       if (dl >= lw && dr >= lw) continue;
       if (!overlapY(l.box, nt.box)) continue;
       // **符头要在符干的某一端**，不能在中间：小节线也常常擦着符头过，
@@ -946,7 +954,17 @@ export function tagSystemBarlines(pg: SPage): void {
     /** 这根竖线盖满 st、两端都落在本系统某行的外线上 */
     const barOn = (l: Seg, st: Staff) =>
       l.top <= st.box.top + tol && l.bottom >= st.box.bottom - tol && lands(l.top) && lands(l.bottom) && Math.abs(st.box.left - l.cx) >= Math.max(l.lw, 1) * 2;
-    const per = g.map((st) => vlines.filter((l) => barOn(l, st)));
+    // 一端挂着符头的是干，不是小节线：头缘贴着这根线、头心落在线端半格内。小节线与相邻的干多半隔一格以上，
+    // 可密排的十六分会把最后一个音的干挤到小节线前几个像素（破碎 p7 m70 钢琴右手 D4，干在小节线左边 6 像素、从第一线伸到头上），
+    // 下面按 x 收同伴时一并收进来，那个头就丢了干、被并进前一个音的和弦
+    const heads = pg.symbols.filter((s0) => isNoteHead(s0.code));
+    const headEnd = (l: Seg) =>
+      heads.some((h) => {
+        const edge = Math.min(Math.abs(h.box.left - l.cx), Math.abs(h.box.right - l.cx));
+        const cy = (h.box.top + h.box.bottom) / 2;
+        return edge <= Math.max(l.lw * 2, sp * 0.15) && (Math.abs(cy - l.top) <= sp * 0.5 || Math.abs(cy - l.bottom) <= sp * 0.5);
+      });
+    const per = g.map((st) => vlines.filter((l) => barOn(l, st) && !headEnd(l)));
     // 上下两行的 x 容 0.6 格：扫描件歪一点，隔着十几格歌词的两行就错开三四个像素（赞美三一歌 234 对 230）；
     // 小节线与相邻的干至少隔一格
     const xTol = sp * 0.6;

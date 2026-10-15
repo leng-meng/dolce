@@ -141,8 +141,7 @@ export function ownLegers(heads: { box: Rect }[], bin: Binary, onGrid: (y: numbe
     // ——符头落在加线上面/下面那一间时，压着它的那条加线同样抽不出来
     //（那一带的纵向游程是「符头 + 线」的高度，出了「细」的那道闸），
     // 而它正是 `findLegers` 要数的那一条。
-    for (const y of [cy, cy - unit.space / 2, cy + unit.space / 2]) {
-      if (!onGrid(y)) continue;
+    const inked = (y: number) => {
       let ink = 0;
       let n = 0;
       for (let x = Math.round(cx - half); x <= Math.round(cx + half); x++) {
@@ -156,9 +155,24 @@ export function ownLegers(heads: { box: Rect }[], bin: Binary, onGrid: (y: numbe
           }
         }
       }
-      if (!n || ink < n * 0.6) continue;
+      return n > 0 && ink >= n * 0.6;
+    };
+    const own: number[] = [];
+    for (const y of [cy, cy - unit.space / 2, cy + unit.space / 2]) {
+      if (!onGrid(y) || !inked(y)) continue;
+      own.push(y);
       out.push({ x0: cx - half, y0: y, x1: cx + half, y1: y, lw: th, maxLw: th });
     }
+    // 从自己那条加线顺着网格往外逐格走（一格一验墨，断了就停；谱表里不在网格上，走到谱表自然停）：
+    // 谱表外三格以上的头，中间那几条加线也没人补——横段表里没有（被干切成两截、出了长度闸），邻头补的那段又盖不住这个头
+    //（宁静的伯利恒 p9 m109/m110 钢琴的 E6，下面那条 C6 加线没人补，`findLegers` 数不够三条）
+    for (const y0 of own)
+      for (const dir of [-1, 1])
+        for (let k = 1; k <= 6; k++) {
+          const y = y0 + dir * k * unit.space;
+          if (!onGrid(y) || !inked(y)) break;
+          if (!out.some((l) => Math.abs(l.y0 - y) < unit.space * 0.25 && Math.abs((l.x0 + l.x1) / 2 - cx) < 1)) out.push({ x0: cx - half, y0: y, x1: cx + half, y1: y, lw: th, maxLw: th });
+        }
   }
   return out;
 }
