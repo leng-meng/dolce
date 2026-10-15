@@ -921,6 +921,8 @@ export const zh = {
   "ve.noNotes": "谱里还没有音符",
   "ve.selectInMeasure": "先选中一个小节里的音",
   "ve.badKey": "读不懂调号「{v}」",
+  "ve.altClickNeedsNote": "先选中一个音，再 Alt+点原图上漏掉的地方（照它补一个）",
+  "ve.dragSameVoice": "只能拖到同一声部同一声线的音上",
   "issue.none": "没有拍数不对的小节",
   "ve.onlyXml": "这一样只在五线谱（MusicXML）上能改",
   "ve.moveTextFormat": "这种格式的歌词 / 记号请在源码里挪",

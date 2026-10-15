@@ -1620,25 +1620,31 @@ export function rereadKeyAt(doc: ScoreDoc, si: number, mi: number, fifths: numbe
   return { select: [] };
 }
 
-/** 同一声部同一声线里 `loc` 前 / 后第一个和弦（可跨小节；`skip` 放过的不算，如休止、倚音）。 */
+/** 同一声部同一声线里 `loc` 前 / 后第 |`delta`| 个和弦（可跨小节；`skip` 放过的不算，如休止、倚音）。 */
 function stepInVoice(l: ChordLoc, delta: number, skip: (c: Chord) => boolean): ChordLoc | null {
   const dir = delta > 0 ? 1 : -1;
-  let mi = l.mi;
-  let i = l.index + dir;
-  for (;;) {
-    const m = l.part.measures[mi];
-    if (!m) return null;
-    if (i < 0 || i >= m.elements.length) {
-      mi += dir;
-      const nm = l.part.measures[mi];
-      if (!nm) return null;
-      i = dir > 0 ? 0 : nm.elements.length - 1;
-      continue;
+  let cur: ChordLoc = l;
+  for (let n = Math.abs(delta); n > 0; n--) {
+    let mi = cur.mi;
+    let i = cur.index + dir;
+    let found: ChordLoc | null = null;
+    while (!found) {
+      const m = l.part.measures[mi];
+      if (!m) return null;
+      if (i < 0 || i >= m.elements.length) {
+        mi += dir;
+        const nm = l.part.measures[mi];
+        if (!nm) return null;
+        i = dir > 0 ? 0 : nm.elements.length - 1;
+        continue;
+      }
+      const e = m.elements[i]!;
+      if (e.kind === "chord" && e.voice === l.chord.voice && !skip(e)) found = { ...l, mi, measure: m, chord: e, index: i };
+      i += dir;
     }
-    const e = m.elements[i]!;
-    if (e.kind === "chord" && e.voice === l.chord.voice && !skip(e)) return { ...l, mi, measure: m, chord: e, index: i };
-    i += dir;
+    cur = found;
   }
+  return cur;
 }
 
 /** 先后：同一声部里谁在前（小节、小节内下标）。 */
@@ -1789,6 +1795,18 @@ export function moveHarmony(doc: ScoreDoc, id: ElementId, delta: number): ModelE
  * `count`：只挪从这个字起的几个字（选中了几个字时）；往后挪时紧挨着的下一格不空，照样顺次推到第一个空格为止。
  */
 export function shiftLyrics(doc: ScoreDoc, id: ElementId, verse: number, delta: number, count?: number): ModelEdit & { moved?: MovedMark } {
+  // 挪几格 = 一格一格挪（每一格都按「空一格 / 收一格」的口径，拖动一次跨几个音时与按几下 Alt+→ 一样）
+  let at = id;
+  let last: ModelEdit & { moved?: MovedMark } = { error: tr("me.noLyric") };
+  for (let n = Math.abs(delta); n > 0; n--) {
+    last = shiftLyricsOnce(doc, at, verse, delta > 0 ? 1 : -1, count);
+    if (isEditError(last)) return last;
+    if (last.moved && "lyricOf" in last.moved) at = last.moved.lyricOf.id;
+  }
+  return last;
+}
+
+function shiftLyricsOnce(doc: ScoreDoc, id: ElementId, verse: number, delta: number, count?: number): ModelEdit & { moved?: MovedMark } {
   const l = locate(doc, id);
   if (!l) return { error: tr("me.noNote") };
   const seq: Chord[] = [];
@@ -1946,4 +1964,25 @@ export function deleteDirection(doc: ScoreDoc, r: DirRef): ModelEdit {
 export function neighbourChord(doc: ScoreDoc, id: ElementId, delta: number, skipRests = false): Chord | null {
   const l = locate(doc, id);
   return l ? stepInVoice(l, delta, (c) => !!c.grace || (skipRests && !!c.rest))?.chord ?? null : null;
+}
+
+/** 在锚点处插一个**给定音高**的音（升降按那里的调号，印法重算）：Alt+点原图补漏识的音用（音高由点的位置定，不是唱名）。 */
+export function insertPitch(doc: ScoreDoc, anchor: InsertAnchor, pitch: { step: Pitch["step"]; octave: number }, dur: NewDuration, hooks: EditHooks = {}): ModelEdit {
+  const r = insertChord(doc, anchor, 1, dur, hooks);
+  if (isEditError(r)) return r;
+  const ch = "caretAfter" in r ? r.caretAfter : "select" in r ? r.select[0] : "caretBefore" in r ? r.caretBefore : undefined;
+  const l = ch ? locate(doc, ch.id) : null;
+  if (!l) return r;
+  const { key } = measureCtx(l.song, l.part, l.mi);
+  l.chord.notes = [{ pitch: { step: pitch.step, octave: pitch.octave, alter: keyAlter(pitch.step, key.fifths) } }];
+  delete l.chord.rest;
+  respellMeasure(l.measure, key);
+  hooks.forgetStem?.(l.chord);
+  return { select: [l.chord] };
+}
+
+/** 和弦现在的时值换成「新音」的写法（减半次数 + 附点）：Alt+点补音时照选中的那个音的时值。 */
+export function newDurationOf(ch: Chord): NewDuration {
+  const H: Partial<Record<NoteType, number>> = { whole: -2, half: -1, quarter: 0, eighth: 1, "16th": 2, "32nd": 3, "64th": 4 };
+  return { halvings: H[ch.duration.type ?? "quarter"] ?? 0, dots: ch.duration.dots };
 }

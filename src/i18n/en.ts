@@ -922,6 +922,8 @@ export const en: Record<MsgKey, string> = {
   "ve.noNotes": "The score has no notes yet",
   "ve.selectInMeasure": "Select a note in a measure first",
   "ve.badKey": "Can't read key “{v}”",
+  "ve.altClickNeedsNote": "Select a note first, then Alt+click the missed spot on the image (a copy of it is added there)",
+  "ve.dragSameVoice": "Can only drag onto a note in the same part and voice",
   "issue.none": "No measures with wrong beats",
   "ve.onlyXml": "This can only be changed on staff notation (MusicXML)",
   "ve.moveTextFormat": "Move lyrics / marks of this format in the source",

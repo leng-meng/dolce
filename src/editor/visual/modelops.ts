@@ -12,7 +12,7 @@ import {
   isEditError, type JumpKind, locate, mergeMeasures, midiOf, type ChordPos, type EditHooks, type InsertAnchor, type ModelEdit, posOf,
   removeChordNote, scaleDuration, setBarKind, setBreakBefore, setDegree, setKeyAt, setTempoAt, setTimeAt, shiftOctave, splitMeasure,
   pasteClip, type ClipItem, setDirectionText, toggleTuplet, setHarmony, setLyric, shiftSemitones, transposeScore, stepDegree, stepSemitone, setStep, degreeOfStep, anchorFifths, toggleAccidental, toggleDeco, toggleDot, toggleEnding, toggleJump, toggleSlur, toggleTie,
-  type DecoKind, deleteDirection, dirPartner, moveDirection, moveHarmony, moveMarkEnd, type MovedMark, rereadKeyAt, setClefAt, shiftLyrics, toggleGrace, toggleWedge,
+  type DecoKind, deleteDirection, insertPitch, newDurationOf, dirPartner, moveDirection, moveHarmony, moveMarkEnd, type MovedMark, rereadKeyAt, setClefAt, shiftLyrics, toggleGrace, toggleWedge,
 } from "../../model/edit";
 import { parseClefInput, parseKeyInput, parseTempoInput, parseTimeInput } from "./measureinput";
 import { dropEmbeddedLayout, forgetNoteLayout } from "../../model/xmlsurface";
@@ -212,6 +212,25 @@ function insertNote(ctx: ModelActionCtx, degreeAt: (doc: ScoreDoc, at: InsertAnc
   }, true);
 }
 
+/**
+ * Alt+点原图补漏识的音（PhotoScore 的 Alt+点复制）：插在 `after` 那个音后面（左边没有音时插在 `before` 那一小节开头），
+ * 音高由点的位置定（`pitch`），时值照选中的那个音（没选中按当前输入时值）。插完选中它，接着可以 ↑↓ 微调。
+ */
+export function insertAtSourceModel(ctx: ModelActionCtx, at: { after: ElementId | null; before: ElementId | null }, pitch: { step: "A" | "B" | "C" | "D" | "E" | "F" | "G"; octave: number }): boolean {
+  const sel = selectedNotes(ctx)[0];
+  return commit(ctx, (doc) => {
+    const ref = sel !== undefined ? locate(doc, sel)?.chord : undefined;
+    const dur = ref && !ref.grace ? newDurationOf(ref) : ctx.curDur;
+    let anchor: InsertAnchor | null = null;
+    if (at.after !== null) anchor = { after: at.after };
+    else if (at.before !== null) {
+      const l = locate(doc, at.before);
+      if (l) anchor = { measureStart: { si: l.si, pi: l.pi, mi: l.mi, voice: l.chord.voice } };
+    }
+    return anchor ? insertPitch(doc, anchor, pitch, dur, HOOKS) : { error: tr("ve.cantInsert") };
+  }, true);
+}
+
 /** 粘贴（`clipboard.ts`）：插入模式贴在光标处、光标落在贴进来的最后一个音后面；编辑模式贴在选区后面、选中贴进来的那段。 */
 export function pasteModel(ctx: ModelActionCtx, items: readonly ClipItem[]): boolean {
   const insert = ctx.view.state.selection.main.empty;
@@ -305,7 +324,8 @@ function exactEntry(ctx: ModelActionCtx): SyncEntry | null {
  * 弧挪端点；`<direction>`（力度、文字、速度、渐强渐弱）挪到相邻的音，渐强渐弱整条挪时起止一起；和弦名挪到相邻的音；
  * 歌词字连同后面紧接的字整串挪一格（选了几个字就只挪这几个）。
  */
-function moveSelected(ctx: ModelActionCtx, delta: number, byMeasure: boolean, endOnly: boolean): boolean {
+export function moveSelected(ctx: ModelActionCtx, delta: number, byMeasure: boolean, which: "both" | "start" | "end" = "both"): boolean {
+  const endOnly = which !== "both";
   const e = exactEntry(ctx);
   const lyrics = ctx.view.state.selection.main.empty ? [] : ctx.sync.range(ctx.view.state.selection.main.from, ctx.view.state.selection.main.to).filter((x) => x.kind === "lyric");
   const ly = e?.kind === "lyric" ? e : lyrics[0];
@@ -317,7 +337,7 @@ function moveSelected(ctx: ModelActionCtx, delta: number, byMeasure: boolean, en
   if (!e || e.kind !== "mark") return status(ctx, tr("ve.selectToMoveMark"));
   if (e.markKind === "slur" && e.end !== undefined) {
     if (byMeasure) return status(ctx, tr("ve.moveLineByNote"));
-    return commit(ctx, (doc) => moveMarkEnd(doc, "slur", e.id, e.end!, endOnly ? "end" : "both", delta));
+    return commit(ctx, (doc) => moveMarkEnd(doc, "slur", e.id, e.end!, which, delta));
   }
   if (e.markKind === "tied") return status(ctx, tr("me.tieNoMove"));
   if (e.dir) {
@@ -326,9 +346,10 @@ function moveSelected(ctx: ModelActionCtx, delta: number, byMeasure: boolean, en
       const pair = dirPartner(doc, r);
       if (endOnly) {
         if (!pair) return { error: tr("ve.moveEndOnlyLine") };
-        // 只挪终点：选中的是起点就挪配对的那条
+        // 只挪一端：选中的是哪一端无所谓，按 `which` 取起点或终点那条
         const d = doc.songs[0]?.parts[r.pi]?.measures[r.mi]?.directions?.[r.index];
-        return moveDirection(doc, d?.spanType === "stop" ? r : pair, delta, byMeasure);
+        const isStop = d?.spanType === "stop";
+        return moveDirection(doc, (which === "end") === isStop ? r : pair, delta, byMeasure);
       }
       return moveDirection(doc, r, delta, byMeasure, pair ?? undefined);
     });
@@ -515,12 +536,12 @@ export function runModelAction(ctx: ModelActionCtx, a: VisualAction, key: string
       return commit(ctx, (doc) => toggleSlur(doc, l[0]!, l[l.length - 1]!));
     }
     case "tuplet.toggle": return need((doc, l) => toggleTuplet(doc, l, HOOKS));
-    case "move.prev": return moveSelected(ctx, -1, false, false);
-    case "move.next": return moveSelected(ctx, 1, false, false);
-    case "move.measPrev": return moveSelected(ctx, -1, true, false);
-    case "move.measNext": return moveSelected(ctx, 1, true, false);
-    case "span.endPrev": return moveSelected(ctx, -1, false, true);
-    case "span.endNext": return moveSelected(ctx, 1, false, true);
+    case "move.prev": return moveSelected(ctx, -1, false);
+    case "move.next": return moveSelected(ctx, 1, false);
+    case "move.measPrev": return moveSelected(ctx, -1, true);
+    case "move.measNext": return moveSelected(ctx, 1, true);
+    case "span.endPrev": return moveSelected(ctx, -1, false, "end");
+    case "span.endNext": return moveSelected(ctx, 1, false, "end");
     case "deco.staccato": case "deco.tenuto": case "deco.marcato": case "deco.staccatissimo": case "deco.fermataInv":
     case "deco.trill": case "deco.mordent": case "deco.turn":
       return need((doc, l) => toggleDeco(doc, l, DECO_OF[a.id]!));

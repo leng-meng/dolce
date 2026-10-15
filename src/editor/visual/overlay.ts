@@ -296,3 +296,16 @@ export function drawBreak(svg: SVGSVGElement, x0: number, after: Box, page: bool
   layerOf(svg).appendChild(g);
   return g;
 }
+
+/** 拖动挂件时的提示（识谱软件那样）：松手会挂到的那个音描框，从挂件拉一条虚线过去。 */
+export function drawDragHint(svg: SVGSVGElement, from: { x: number; y: number }, to: Box): void {
+  clearDragHints();
+  const layer = layerOf(svg);
+  const pad = to.h * 0.2;
+  layer.appendChild(el("rect", { class: "vis-drag-target", x: to.x - pad, y: to.y - pad, width: to.w + pad * 2, height: to.h + pad * 2, rx: pad }));
+  layer.appendChild(el("line", { class: "vis-drag-link", x1: from.x, y1: from.y, x2: to.x + to.w / 2, y2: to.y + to.h / 2, "stroke-width": Math.max(1, to.h * 0.06) }));
+}
+
+export function clearDragHints(): void {
+  for (const n of [...document.querySelectorAll(".vis-drag-target, .vis-drag-link")]) n.remove();
+}

@@ -38,34 +38,37 @@ export function shiftLyricText(ctx: EditCtx, ly: SyncEntry, delta: number, count
   const lead = body.slice(0, starts[0] ?? body.length);
   const toks = starts.map((s, i) => body.slice(s, i + 1 < starts.length ? starts[i + 1]! : body.length));
   const empty = (i: number): boolean => toks[i]?.trim().replace(/[\s-]+$/, "") === skip;
-  const k = starts.findIndex((s, i) => bodyFrom + s <= ly.from && (i + 1 >= starts.length || bodyFrom + starts[i + 1]! > ly.from));
-  if (k < 0) return { error: tr("me.noLyric") };
+  const k0 = starts.findIndex((s, i) => bodyFrom + s <= ly.from && (i + 1 >= starts.length || bodyFrom + starts[i + 1]! > ly.from));
+  if (k0 < 0) return { error: tr("me.noLyric") };
   const slot = (): string => `${skip} `;
-  let j = k;
-  const lim = count && count > 0 ? k + count - 1 : Infinity;
-  while (j + 1 < toks.length && !empty(j + 1) && (j < lim || delta > 0)) j++;
-  if (delta > 0) {
-    const gap = toks.findIndex((_, i) => i > j && empty(i));
-    if (gap >= 0) toks.splice(gap, 1);
-    else {
+  const total = slotsBetween(ctx.doc, start, last.to + 1);
+  // 挪几格 = 一格一格挪（与按几下 Alt+→ 一样）
+  let k = k0;
+  for (let n = Math.abs(delta); n > 0; n--) {
+    let j = k;
+    const lim = count && count > 0 ? k + count - 1 : Infinity;
+    while (j + 1 < toks.length && !empty(j + 1) && (j < lim || delta > 0)) j++;
+    if (delta > 0) {
+      const gap = toks.findIndex((_, i) => i > j && empty(i));
+      if (gap >= 0) toks.splice(gap, 1);
       // 这一行曲里没有空格可吸收：词行多出一格，最后那个字要还有音可配
-      const total = slotsBetween(ctx.doc, start, last.to + 1);
-      if (toks.length + 1 > total) return { error: tr("me.lyricNoRoom") };
+      else if (toks.length + 1 > total) return { error: tr("me.lyricNoRoom") };
+      toks.splice(k, 0, slot());
+      k++;
+    } else {
+      if (k === 0 || !empty(k - 1)) return { error: tr("me.lyricNoRoom") };
+      toks.splice(k - 1, 1);
+      // 后面的字不动：这串字后面补回一格（行尾就不用补）
+      if (j < toks.length) toks.splice(j, 0, slot());
+      k--;
     }
-    toks.splice(k, 0, slot());
-  } else {
-    if (k === 0 || !empty(k - 1)) return { error: tr("me.lyricNoRoom") };
-    toks.splice(k - 1, 1);
-    // 后面的字不动：这串字后面补回一格（行尾就不用补）
-    if (j + 1 < toks.length + 1) toks.splice(j, 0, slot());
   }
   // 最后一格后面不留多余的空白
   const joined = lead + toks.join("").replace(/\s+$/, "");
   const changes = [{ from: bodyFrom, to: line.to, insert: joined }];
   // 选中挪过去的那个字
   const ns = parseLyricLine(joined.slice(lead.length), 1, ZERO_SPAN, undefined, skip, undefined, ctx.doc?.sourceFormat === "jcx").starts;
-  const nk = delta > 0 ? k + 1 : k - 1;
-  const from = bodyFrom + lead.length + (ns[nk] ?? 0);
+  const from = bodyFrom + lead.length + (ns[k] ?? 0);
   const text = state.doc.sliceString(ly.from, ly.to);
   return { changes, anchor: from, head: from + text.length };
 }
@@ -88,26 +91,29 @@ export function moveAttachedText(ctx: EditCtx, mark: SyncEntry, delta: number): 
   return { changes, anchor: at, head: at + raw.length };
 }
 
-/** 圆滑线的一端（`which`）或整条挪一个音：`(` 搬到相邻那个音前面、`)` 搬到它后面。 */
-export function moveSlurText(ctx: EditCtx, slur: SyncEntry, which: "end" | "both", delta: number): EditOutcome {
+/** 圆滑线的一端（`which`）或整条挪几个音：`(` 搬到那个音前面、`)` 搬到它后面。 */
+export function moveSlurText(ctx: EditCtx, slur: SyncEntry, which: "start" | "end" | "both", delta: number): EditOutcome {
   if (!ctx.doc || slur.end === undefined || !slur.pair) return { error: tr("ve.moveTextFormat") };
   const open = slur.from < slur.pair.from ? { from: slur.from, to: slur.to } : slur.pair;
   const close = slur.from < slur.pair.from ? slur.pair : { from: slur.from, to: slur.to };
   const changes: { from: number; to: number; insert: string }[] = [];
-  const endTo = neighbourChord(ctx.doc, slur.end, delta, true);
-  const endSpan = endTo ? ctx.sync.spanOfNote(endTo.id) : null;
-  if (!endTo || !endSpan) return { error: tr("me.noNeighbour") };
   let startSpan = ctx.sync.spanOfNote(slur.id);
-  if (which === "both") {
+  let endSpan = ctx.sync.spanOfNote(slur.end);
+  if (which !== "end") {
     const st = neighbourChord(ctx.doc, slur.id, delta, true);
     startSpan = st ? ctx.sync.spanOfNote(st.id) : null;
     if (!startSpan) return { error: tr("me.noNeighbour") };
     changes.push({ from: open.from, to: open.to, insert: "" }, { from: startSpan.from, to: startSpan.from, insert: ctx.state.doc.sliceString(open.from, open.to) });
   }
-  if (!startSpan || endSpan.from <= startSpan.from) return { error: tr("me.markCollapse") };
-  changes.push({ from: close.from, to: close.to, insert: "" }, { from: endSpan.to, to: endSpan.to, insert: ctx.state.doc.sliceString(close.from, close.to) });
+  if (which !== "start") {
+    const en = neighbourChord(ctx.doc, slur.end, delta, true);
+    endSpan = en ? ctx.sync.spanOfNote(en.id) : null;
+    if (!endSpan) return { error: tr("me.noNeighbour") };
+    changes.push({ from: close.from, to: close.to, insert: "" }, { from: endSpan.to, to: endSpan.to, insert: ctx.state.doc.sliceString(close.from, close.to) });
+  }
+  if (!startSpan || !endSpan || endSpan.from <= startSpan.from) return { error: tr("me.markCollapse") };
   changes.sort((a, b) => a.from - b.from || a.to - b.to);
   const map = mapper(ctx.state, changes);
-  const at = map(which === "both" ? startSpan.from : open.from, -1);
+  const at = map(which !== "end" ? startSpan.from : open.from, -1);
   return { changes, anchor: at, head: at + (open.to - open.from) };
 }

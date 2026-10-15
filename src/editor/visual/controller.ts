@@ -9,7 +9,7 @@
 import { redo, undo } from "@codemirror/commands";
 import { type ChangeSpec, ChangeSet } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
-import type { ElementId, Part, ScoreDoc, Song } from "../../model/doc";
+import type { Chord, ElementId, Part, ScoreDoc, Song } from "../../model/doc";
 import { type BeatIssue, beatTag, checkMeasureDurations, describeBeatIssue } from "../../model/beatcheck";
 import { GlyphCodes } from "../../smufl/smufl";
 import type { BreakMark, SyncEntry, SyncIndex } from "../sync";
@@ -32,9 +32,9 @@ import { lyricTextOf, setLyricText } from "./lyrics";
 import { selectionInfo } from "./selinfo";
 import { type InlineDone, inlineEditing, openInlineEditor } from "./inline";
 import { measureEdit } from "./measureops";
-import { directionModel, harmonyModel, lyricModel, pasteModel, runModelAction, transposeModel, type ModelActionCtx } from "./modelops";
+import { directionModel, harmonyModel, insertAtSourceModel, lyricModel, moveSelected, pasteModel, runModelAction, transposeModel, type ModelActionCtx } from "./modelops";
 import {
-  type Box, boxInPage, charIndexAt, inkBoxInPage, clearOverlay, drawBlock, drawBreak, drawCaret, hitThroughOverlay, musicBox, rightEdgeInBand,
+  type Box, boxInPage, charIndexAt, inkBoxInPage, clearDragHints, clearOverlay, drawBlock, drawBreak, drawCaret, drawDragHint, hitThroughOverlay, musicBox, rightEdgeInBand,
   sameRow, setBeatIssues, textCaretInPage,
 } from "./overlay";
 import { t as tr } from "../../i18n";
@@ -92,6 +92,8 @@ export interface VisualHost {
   syncFresh(): boolean;
   setStatus(text: string): void;
   saveSettings(): void;
+  /** 识别核对：Alt+点原图的那一处落在哪两个音之间（五线谱另给按位置推出的音高）；不在核对视图为 null */
+  sourcePoint?(ev: MouseEvent): { after: ElementId | null; before: ElementId | null; pitch?: { step: "A" | "B" | "C" | "D" | "E" | "F" | "G"; octave: number } } | null;
   /** 识别核对时的可疑项（F8 与拍数不对的小节按原文位置一起走）：各在原文的哪儿、怎么跳过去 */
   doubtStops?(): { at: number; go(): void }[];
 }
@@ -219,6 +221,8 @@ export class VisualEditController {
     this.modeEl = modeEl;
     this.selInfoEl = els.selInfo ?? null;
     this.marksBtn = marksBtn;
+    // 拖动挂件先挂：按住选中的挂件时由它接走（`stopImmediatePropagation`），框选就不开
+    this.attachDrag(pane);
     this.attachMarquee(pane);
     marksBtn?.addEventListener("click", () => this.toggleFormatMarks());
     this.beatBtn = beatBtn;
@@ -652,6 +656,11 @@ export class VisualEditController {
     }
     // Alt+点击和弦里的某个符头（五线谱）：单独选中这一个音（Delete 只删它）
     if (ev.altKey && entry?.kind === "note" && this.host.surfaceKind() === "staff" && this.pickChordNote(entry, ev.clientY)) return true;
+    // Alt+点原图上没有东西的地方（识别核对）：在那儿补一个漏识的音 / 小节线（PhotoScore 的 Alt+点复制选中的那一样）
+    if (ev.altKey && !entry) {
+      const sp = this.host.sourcePoint?.(ev);
+      if (sp) return this.insertAtSource(sp);
+    }
     // 点在换行符号上：选中它
     const t = ev.target instanceof Element ? ev.target.closest(".vis-break") : null;
     const brk = t ? this.breakEls.get(t) : undefined;
@@ -913,6 +922,169 @@ export class VisualEditController {
     };
     pane.addEventListener("pointerup", end);
     pane.addEventListener("pointercancel", end);
+  }
+
+  /**
+   * 拖动挂件（识谱软件 PhotoScore / Audiveris 那样）：在**已选中**的力度、文字、和弦名、歌词字、圆滑线（按下处离哪一端近就拖哪一端）上按下，
+   * 移过 4px 起拖；拖动中离指针最近的那个音描框、从挂件拉一条虚线过去，松手按「隔了几个音」走一次挪动（与 Alt+←/→ 同一个动作，一步撤销）。
+   * 从空白按下仍是框选、在没选中的东西上按下仍是点选，三者不冲突；触屏不开（拖动是平移）。
+   */
+  private attachDrag(pane: HTMLElement): void {
+    type Drag = { id: number; x: number; y: number; entry: SyncEntry; which: "both" | "start" | "end"; anchor: ElementId; from: { svg: SVGSVGElement; x: number; y: number } | null; target: SyncEntry | null; moving: boolean };
+    let drag: Drag | null = null;
+    // 文本格式的装饰（`!mf!`、`!fermata!` 写在音前面）也能搬；MusicXML 的奏法装饰长在音符上，不挪
+    const movable = (e: SyncEntry): boolean => e.kind === "lyric" ||
+      (e.kind === "mark" && (e.markKind === "slur" || e.markKind === "dynamic" || e.markKind === "annotation" || e.markKind === "harmony" || e.markKind === "dir" ||
+        (e.markKind === "deco" && !this.host.modelEditing())));
+    const center = (b: Box): { x: number; y: number } => ({ x: b.x + b.w / 2, y: b.y + b.h / 2 });
+    const toSvg = (svg: SVGSVGElement, x: number, y: number): { x: number; y: number } | null => {
+      const m = svg.getScreenCTM();
+      if (!m) return null;
+      const p = new DOMPoint(x, y).matrixTransform(m.inverse());
+      return { x: p.x, y: p.y };
+    };
+    /** 指针下离得最近的音（同一页；纵向差出一个音的高度以外加重罚，免得挂到别的谱行） */
+    const nearest = (cx: number, cy: number): { e: SyncEntry; svg: SVGSVGElement; box: Box } | null => {
+      const under = document.elementFromPoint(cx, cy)?.closest<SVGSVGElement>("svg.score-page, svg.omr-recognize");
+      if (!under) return null;
+      const p = toSvg(under, cx, cy);
+      if (!p) return null;
+      let best: { e: SyncEntry; svg: SVGSVGElement; box: Box } | null = null;
+      let bd = Infinity;
+      for (const e of this.host.sync.ordered()) {
+        if (e.kind !== "note") continue;
+        const b = this.boxOf(e);
+        if (!b || b.svg !== under) continue;
+        const c = center(b.box);
+        const d = Math.abs(c.x - p.x) + 3 * Math.max(0, Math.abs(c.y - p.y) - b.box.h);
+        if (d < bd) (bd = d), (best = { e, ...b });
+      }
+      return best;
+    };
+    pane.addEventListener("pointerdown", (ev) => {
+      if (ev.pointerType !== "mouse" || ev.button !== 0 || ev.shiftKey || ev.altKey || !this.host.visualEnabled()) return;
+      const sel = this.host.view.state.selection.main;
+      if (sel.empty) return;
+      // 按在选中那一样的框里（略放宽）就算按住了它：细线（弧）不好按准，与别的记号叠在一起时也以选中的为准
+      let e = this.host.entryAtTarget(hitThroughOverlay(ev));
+      const cur = this.host.sync.ordered().find((x) => x.from === sel.from && x.to === sel.to && movable(x));
+      if (cur && e !== cur) {
+        const r = (cur.kind === "mark" && cur.markKind === "slur" ? this.host.slurEl(cur) : null)?.getBoundingClientRect() ?? this.elOf(cur)?.getBoundingClientRect();
+        const pad = r ? Math.max(r.height, 6) * 0.3 : 0;
+        if (r && ev.clientX >= r.left - pad && ev.clientX <= r.right + pad && ev.clientY >= r.top - pad && ev.clientY <= r.bottom + pad) e = cur;
+      }
+      if (!e || !movable(e)) return;
+      const picked = (e.from === sel.from && e.to === sel.to) || (!!e.pair && e.pair.from === sel.from && e.pair.to === sel.to);
+      if (!picked) return;
+      let which: Drag["which"] = "both";
+      let anchor = e.id;
+      if (e.kind === "mark" && e.markKind === "slur" && e.end !== undefined) {
+        // 按在弧的右半边拖终点、左半边拖起点（短弧两头的音挨得近，按离哪个音近判会判反）
+        const r = (this.host.slurEl(e) ?? this.elOf(e))?.getBoundingClientRect();
+        which = !r || ev.clientX >= r.left + r.width / 2 ? "end" : "start";
+        anchor = which === "end" ? e.end : e.id;
+      }
+      ev.stopImmediatePropagation();
+      const own = this.boxOf(e);
+      drag = { id: ev.pointerId, x: ev.clientX, y: ev.clientY, entry: e, which, anchor, from: own ? { svg: own.svg, ...center(own.box) } : null, target: null, moving: false };
+    });
+    pane.addEventListener("pointermove", (ev) => {
+      if (!drag || ev.pointerId !== drag.id) return;
+      if (!drag.moving && Math.hypot(ev.clientX - drag.x, ev.clientY - drag.y) < 4) return;
+      if (!drag.moving) {
+        drag.moving = true;
+        try {
+          pane.setPointerCapture(ev.pointerId);
+        } catch {
+          // 指针已经松开（合成事件、窗口外松手）：不抓也照样能拖完
+        }
+      }
+      const n = nearest(ev.clientX, ev.clientY);
+      drag.target = n?.e ?? null;
+      if (n) {
+        const from = drag.from && drag.from.svg === n.svg ? drag.from : toSvg(n.svg, drag.x, drag.y) ?? center(n.box);
+        drawDragHint(n.svg, from, n.box);
+      } else clearDragHints();
+    });
+    const end = (ev: PointerEvent): void => {
+      if (!drag || ev.pointerId !== drag.id) return;
+      const d = drag;
+      drag = null;
+      clearDragHints();
+      if (!d.moving) return;
+      this.swallowClick = true;
+      setTimeout(() => (this.swallowClick = false), 0);
+      if (!d.target || ev.type === "pointercancel") return;
+      const delta = this.voiceSteps(d.anchor, d.target.id, d.entry);
+      if (delta === null) {
+        this.host.setStatus(tr("ve.dragSameVoice"));
+        return;
+      }
+      if (delta === 0) return;
+      this.host.scorePane.focus({ preventScroll: true });
+      if (this.host.modelEditing()) moveSelected(this.modelCtx, delta, false, d.which);
+      else this.moveText(delta, false, d.which);
+    };
+    pane.addEventListener("pointerup", end);
+    pane.addEventListener("pointercancel", end);
+  }
+
+  /**
+   * Alt+点原图补漏识：选中的是小节线就在那儿补一条小节线（拆小节）；否则补一个音——五线谱音高按点的位置、时值照选中的音，
+   * 简谱照抄选中的那个音的原文（没选中音时说明一下）。插完选中新音（编辑模式），接着 ↑↓、数字键改。
+   */
+  private insertAtSource(sp: { after: ElementId | null; before: ElementId | null; pitch?: { step: "A" | "B" | "C" | "D" | "E" | "F" | "G"; octave: number } }): boolean {
+    const sync = this.host.sync;
+    const sel = this.host.view.state.selection.main;
+    const picked = sync.ordered().find((e) => e.from === sel.from && e.to === sel.to);
+    const after = sp.after !== null ? sync.ordered().find((e) => e.kind === "note" && e.id === sp.after) : undefined;
+    const before = sp.before !== null ? sync.ordered().find((e) => e.kind === "note" && e.id === sp.before) : undefined;
+    this.host.scorePane.focus({ preventScroll: true });
+    if (picked?.kind === "barline") {
+      if (!after) return this.status(tr("ve.cantInsert"));
+      const at = this.groupEnd(after);
+      this.select(at, at);
+      return this.runById("bar.insert");
+    }
+    if (this.host.modelEditing()) {
+      if (!sp.pitch) return this.status(tr("ve.cantInsert"));
+      return insertAtSourceModel(this.modelCtx, { after: sp.after, before: sp.before }, sp.pitch);
+    }
+    const c = this.editCtx();
+    if (!c) return true;
+    const ref = this.selectedEntries().find((e) => e.kind === "note");
+    if (!ref) return this.status(tr("ve.altClickNeedsNote"));
+    // 照抄选中的音（连同它的增时线）：简谱的音高从位置推不出来，PhotoScore 的 Alt+点也是复制选中的那一样
+    const tok = c.state.doc.sliceString(ref.from, this.groupEnd(ref));
+    const pos = after ? this.groupEnd(after) : before ? before.from : null;
+    if (pos === null) return this.status(tr("ve.cantInsert"));
+    const out = insertToken(c, pos, tok);
+    if (isError(out)) return this.apply(out);
+    // 选中刚补的那个音（跳过前面补的空格；补丁就这一处，落点就是 `pos`）
+    const lead = /^\s*/.exec(out.changes[0]!.insert)?.[0].length ?? 0;
+    return this.apply({ ...out, anchor: pos + lead, head: pos + lead + (ref.to - ref.from) });
+  }
+
+  private status(text: string): true {
+    this.host.setStatus(text);
+    return true;
+  }
+
+  /**
+   * 从 `from` 那个音到 `to` 那个音，在同一声部同一声线里隔了几个「能挂的音」（往后为正）；不在同一声线为 null。
+   * 能挂的音照各动作的口径：弧跳过休止与倚音，歌词只算能配字的（休止只在本来挂着字时算），其余跳过倚音。
+   */
+  private voiceSteps(from: ElementId, to: ElementId, what: SyncEntry): number | null {
+    const doc = this.host.syncDoc();
+    const a = doc ? locate(doc, from) : null;
+    const b = doc ? locate(doc, to) : null;
+    if (!a || !b || a.si !== b.si || a.pi !== b.pi || a.chord.voice !== b.chord.voice) return null;
+    const ok = (c: Chord): boolean => !c.grace && (what.kind === "lyric" ? (c.lyricAnchor ?? (!c.rest || !!c.lyrics?.length))
+      : what.markKind === "slur" ? !c.rest : true);
+    const seq = a.part.measures.flatMap((m) => m.elements.filter((e): e is Chord => e.kind === "chord" && e.voice === a.chord.voice && ok(e)));
+    const i = seq.indexOf(a.chord);
+    const j = seq.indexOf(b.chord);
+    return i < 0 || j < 0 ? null : j - i;
   }
 
   /** 谱面上的双击：文字对象由此进插入模式——光标落在原文里点中的那个字前后，焦点交给代码区，
@@ -1405,13 +1577,13 @@ export class VisualEditController {
       case "dyn.entry": return this.startAttached("dynamic");
       case "nav.home": return this.rowEdge(-1);
       case "nav.end": return this.rowEdge(1);
-      case "move.prev": return this.moveText(-1, false, false);
-      case "move.next": return this.moveText(1, false, false);
+      case "move.prev": return this.moveText(-1, false, "both");
+      case "move.next": return this.moveText(1, false, "both");
       case "move.measPrev": case "move.measNext":
         this.host.setStatus(tr("ve.moveLyricOneNote"));
         return true;
-      case "span.endPrev": return this.moveText(-1, false, true);
-      case "span.endNext": return this.moveText(1, false, true);
+      case "span.endPrev": return this.moveText(-1, false, "end");
+      case "span.endNext": return this.moveText(1, false, "end");
       case "sel.beamGroup": return this.selectBeamGroup();
       case "issue.next": return this.nextIssue(1);
       case "issue.prev": return this.nextIssue(-1);
@@ -2256,7 +2428,8 @@ export class VisualEditController {
    * 挪选中的记号 / 歌词字（文本那一路，`moves.ts`）：歌词字整串挪一格、力度注记和弦名搬到相邻的音、圆滑线挪终点或整条。
    * 模型那一路（`.musicxml`）在 `modelops.ts::moveSelected`，不走这里。
    */
-  private moveText(delta: number, byMeasure: boolean, endOnly: boolean): boolean {
+  private moveText(delta: number, byMeasure: boolean, which: "both" | "start" | "end"): boolean {
+    const endOnly = which !== "both";
     const c = this.editCtx();
     if (!c) return true;
     const sel = this.host.view.state.selection.main;
@@ -2271,7 +2444,7 @@ export class VisualEditController {
       const count = lyrics.filter((e) => e.verseNo === ly.verseNo).length;
       return this.apply(shiftLyricText(c, ly, delta, count > 1 ? count : undefined));
     }
-    if (exact?.kind === "mark" && exact.markKind === "slur" && !byMeasure) return this.apply(moveSlurText(c, exact, endOnly ? "end" : "both", delta));
+    if (exact?.kind === "mark" && exact.markKind === "slur" && !byMeasure) return this.apply(moveSlurText(c, exact, which, delta));
     if (exact?.kind === "mark" && exact.markKind !== "slur" && !endOnly && !byMeasure) return this.apply(moveAttachedText(c, exact, delta));
     this.host.setStatus(tr(ly || exact ? "ve.moveLyricOneNote" : "ve.selectToMoveMark"));
     return true;

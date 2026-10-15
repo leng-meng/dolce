@@ -703,6 +703,8 @@ button:focus-visible, select:focus-visible {
 .format-marks-button { min-width: 26px; font-weight: 600; }
 .vis-overlay .vis-beat { fill: rgba(224, 49, 49, 0.12); stroke: rgba(224, 49, 49, 0.55); stroke-dasharray: 3 2; pointer-events: all; }
 .omr-beat .omr-beat-tag { fill: #e03131; stroke: none; font-weight: 600; pointer-events: none; }
+.vis-overlay .vis-drag-target { fill: rgba(21, 101, 255, 0.10); stroke: #1565ff; stroke-width: 1.5; pointer-events: none; }
+.vis-overlay .vis-drag-link { stroke: #1565ff; stroke-dasharray: 4 3; pointer-events: none; }
 .vis-overlay .vis-beat-tag { fill: #e03131; font-weight: 600; pointer-events: none; }
 .cm-vis-beat { text-decoration: underline wavy rgba(224, 49, 49, 0.8); text-underline-offset: 3px; }
 .beat-count { font-size: 12px; padding: 1px 6px; border-radius: 4px; color: #e03131; border: 1px solid rgba(224, 49, 49, 0.5); cursor: pointer; }

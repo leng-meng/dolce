@@ -1127,6 +1127,11 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return this._syncEntryAt(target);
   }
 
+  /** Alt+点原图补漏识：点的位置落在哪两个音之间（`OmrController.sourcePoint`） */
+  sourcePoint(ev: MouseEvent): ReturnType<OmrController["sourcePoint"]> {
+    return this.omr.sourcePoint(ev);
+  }
+
   /** F8 导航：识别核对的可疑项（`OmrController.doubtStops`） */
   doubtStops(): { at: number; go(): void }[] {
     return this.omr.doubtStops();

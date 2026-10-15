@@ -9,6 +9,7 @@
 // （`formatswitch.ts`），这里作为它的一种来源（`FormatSource`）。
 import { recognizedBeatIssues, type RecognizedBeatIssue } from "../omr/beats";
 import { beatTag } from "../model/beatcheck";
+import { locate } from "../model/edit";
 import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
@@ -1058,6 +1059,8 @@ export class OmrController implements FormatSource {
   // ---------------- 五线谱识别的对照（位图路，`rasteromr/overlay.ts`） ----------------
   /** 当前模型的和弦 id → 它写在 `<note id>` 里的识别 id（对照框按它认） */
   private staffIdOf = new Map<ElementId, string>();
+  /** 识别 id（和弦里每个音各一个）→ 现在是哪个和弦的第几个音（Alt+点补音按它取参照音高） */
+  private staffNoteOfOmr = new Map<string, { chord: ElementId; k: number }>();
 
   /** 识别（或上次重建）刚落地时各音的样子（识别 id → 音高 + 时值的签名）：对照视图按它判「改过」。按原文缓存 */
   private staffBase: { text: string; sig: Map<string, string> } | null = null;
@@ -1094,6 +1097,7 @@ export class OmrController implements FormatSource {
     const pitchLabel = (p: { step: string; alter: number; octave: number } | undefined): string =>
       p ? `${p.step}${p.alter > 0 ? "♯".repeat(p.alter) : "♭".repeat(-p.alter)}${p.octave}` : t("omr.restLabel");
     this.staffIdOf.clear();
+    this.staffNoteOfOmr.clear();
     /** 和弦 id → 全曲第几小节（小节线按它认）；识别 id（和弦里每个音各一个）→ 和弦 id */
     const measureOf = new Map<ElementId, number>();
     const chordOfOmr = new Map<string, ElementId>();
@@ -1116,6 +1120,7 @@ export class OmrController implements FormatSource {
             if (first === null) first = id;
             if (k === 0) this.staffIdOf.set(el.id, id);
             chordOfOmr.set(id, el.id);
+            this.staffNoteOfOmr.set(id, { chord: el.id, k });
             const orig = res.noteBoxes.get(id)!;
             const p = el.notes[k]?.pitch;
             const label = el.rest ? t("omr.restLabel") : pitchLabel(p);
@@ -1204,7 +1209,9 @@ export class OmrController implements FormatSource {
           ? { id, box: b.box, label: cur.label, ...(cur.changed ? { state: "edited" as const } : {}) }
           : { id, box: b.box, label: b.rest ? t("omr.restLabel") : `${b.step}${b.octave}`, state: "deleted" as const };
       });
-      return renderStaffRecognitionPage(bin, [...marks, ...(insertedByPage.get(i) ?? [])], view, barsByPage.get(i) ?? []);
+      const svg = renderStaffRecognitionPage(bin, [...marks, ...(insertedByPage.get(i) ?? [])], view, barsByPage.get(i) ?? []);
+      svg.dataset.page = String(i);
+      return svg;
     }, {
       aspectRatio: (i) => `${pages[i]!.result.raster!.bin.w} / ${pages[i]!.result.raster!.bin.h}`,
       onPage: (svg) => this.wireStaffInteraction(svg),
@@ -1311,6 +1318,62 @@ export class OmrController implements FormatSource {
     }
     if (i !== undefined) return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-i="${i}"]`) ?? null;
     return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-id="${id}"]`) ?? null;
+  }
+
+  /**
+   * Alt+点原图（识别核对）：点的位置落在哪两个识别出的音之间（同一行谱表 / 同一行简谱），五线谱另按与最近那个音的纵向距离、
+   * 本行谱线间距推出音高（参照音现在的音高，谱号调号就都算进去了）。不在核对视图、点在谱行外为 null。
+   */
+  sourcePoint(ev: MouseEvent): { after: ElementId | null; before: ElementId | null; pitch?: { step: "A" | "B" | "C" | "D" | "E" | "F" | "G"; octave: number } } | null {
+    if (this.host.mode !== "recognize") return null;
+    const svg = ev.target instanceof Element ? ev.target.closest<SVGSVGElement>("svg.omr-recognize") : null;
+    const m = svg?.getScreenCTM();
+    if (!svg || !m) return null;
+    const p = new DOMPoint(ev.clientX, ev.clientY).matrixTransform(m.inverse());
+    const res = this.staffResult;
+    if (res) {
+      const page = Number(svg.dataset.page ?? -1);
+      const k = res.pages[page]?.scale ?? 1;
+      const st = (res.pages[page]?.result.page.staves ?? []).find((s) => s.lineYs.length >= 5 &&
+        p.y / k > s.lineYs[0]! - (s.lineYs[4]! - s.lineYs[0]!) / 2 && p.y / k < s.lineYs[4]! + (s.lineYs[4]! - s.lineYs[0]!) / 2);
+      if (!st) return null;
+      const half = ((st.lineYs[4]! - st.lineYs[0]!) / 8) * k;
+      const top = (st.lineYs[0]! - half * 6 / k) * k;
+      const bottom = (st.lineYs[4]! + half * 6 / k) * k;
+      const doc = this.host.currentScoreDoc();
+      const cands = [...res.noteBoxes].filter(([id, b]) => b.page === page && this.staffNoteOfOmr.has(id) && (b.box.top + b.box.bottom) / 2 > top && (b.box.top + b.box.bottom) / 2 < bottom)
+        .map(([id, b]) => ({ id, b, cx: (b.box.left + b.box.right) / 2, cy: (b.box.top + b.box.bottom) / 2, ...this.staffNoteOfOmr.get(id)! }));
+      const left = cands.filter((c) => c.cx < p.x).sort((a, b) => b.cx - a.cx)[0];
+      const right = cands.filter((c) => c.cx >= p.x).sort((a, b) => a.cx - b.cx)[0];
+      // 参照音高：横向最近、有音高的那个
+      const DIAT = "CDEFGAB";
+      let pitch: { step: "A" | "B" | "C" | "D" | "E" | "F" | "G"; octave: number } | undefined;
+      for (const c of [...cands].sort((a, b) => Math.abs(a.cx - p.x) - Math.abs(b.cx - p.x))) {
+        const ch = doc ? locate(doc, c.chord)?.chord : undefined;
+        const ref = ch?.notes[c.k]?.pitch;
+        if (!ref) continue;
+        const d = ref.octave * 7 + DIAT.indexOf(ref.step) + Math.round((c.cy - p.y) / half);
+        pitch = { step: DIAT[((d % 7) + 7) % 7] as "C", octave: Math.floor(d / 7) };
+        break;
+      }
+      if (!left && !right) return null;
+      return { after: left?.chord ?? null, before: right?.chord ?? null, ...(pitch ? { pitch } : {}) };
+    }
+    const score = this.shown?.score ?? this.score;
+    const map = this.idMapOf(this.host.currentScoreDoc());
+    if (!score || !map) return null;
+    let i0 = 0;
+    for (const row of score.rows) {
+      const n = row.nums.length;
+      if (p.y >= row.topY && p.y <= row.bottomY) {
+        const ids = row.nums.map((num, j) => ({ cx: num.bbox.x + num.bbox.w / 2, id: map.toId[i0 + j] })).filter((x): x is { cx: number; id: ElementId } => x.id !== undefined);
+        const left = ids.filter((x) => x.cx < p.x).sort((a, b) => b.cx - a.cx)[0];
+        const right = ids.filter((x) => x.cx >= p.x).sort((a, b) => a.cx - b.cx)[0];
+        return left || right ? { after: left?.id ?? null, before: right?.id ?? null } : null;
+      }
+      i0 += n;
+    }
+    return null;
   }
 
   /** 五线谱对照：第 `mi` 小节收尾那条小节线的命中框（几个谱表各一条，取第一条）。 */
