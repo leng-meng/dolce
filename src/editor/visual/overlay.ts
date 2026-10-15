@@ -205,14 +205,20 @@ function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, 
   return e;
 }
 
-/** 插入光标：一条竖线。 */
-export function drawCaret(svg: SVGSVGElement, x: number, box: Box): void {
+/** 插入光标：一条竖线。`opts.width` 给了就用它当线宽（改字光标与音符光标同粗）；
+ *  `opts.live`：焦点不在谱面也照闪（双击改字时焦点在代码区）。 */
+export function drawCaret(svg: SVGSVGElement, x: number, box: Box, opts: { width?: number; live?: boolean } = {}): void {
   const pad = box.h * 0.15;
   layerOf(svg).appendChild(el("line", {
-    class: "vis-caret",
+    class: opts.live ? "vis-caret vis-caret-live" : "vis-caret",
     x1: x, x2: x, y1: box.y - pad, y2: box.y + box.h + pad,
-    "stroke-width": Math.max(1, box.h * 0.06),
+    "stroke-width": opts.width ?? caretWidth(box.h),
   }));
+}
+
+/** 竖线光标的线宽：按它罩的那一带的高度。 */
+export function caretWidth(h: number): number {
+  return Math.max(1, h * 0.06);
 }
 
 /** `<text>` 里第 `i` 个字之前（`i` = 字数时为末尾）的横坐标，换到页面 SVG 用户坐标；连同这串字的包围盒。 */

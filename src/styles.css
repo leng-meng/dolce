@@ -666,7 +666,7 @@ button:focus-visible, select:focus-visible {
 .vis-overlay .vis-break:hover .vis-break-hit { fill: rgba(21, 101, 255, 0.12); }
 .vis-overlay .vis-break-selected .vis-break-hit { fill: rgba(21, 101, 255, 0.22); }
 .vis-overlay .vis-break-selected text { fill: #1565ff; }
-#score-pane:not(:focus) .vis-overlay .vis-caret { animation: none; opacity: 0.55; }
+#score-pane:not(:focus) .vis-overlay .vis-caret:not(.vis-caret-live) { animation: none; opacity: 0.55; }
 @keyframes vis-blink { 50% { opacity: 0; } }
 .cm-vis-block { outline: 2px solid #1565ff; background: rgba(21, 101, 255, 0.18); border-radius: 2px; }
 .cm-vis-caret { display: inline-block; width: 0; height: 1.2em; vertical-align: text-bottom; border-left: 2px solid #1565ff; margin-right: -2px; animation: vis-blink 1.06s steps(1) infinite; }

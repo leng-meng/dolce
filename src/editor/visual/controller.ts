@@ -34,7 +34,7 @@ import { type InlineDone, inlineEditing, openInlineEditor } from "./inline";
 import { measureEdit } from "./measureops";
 import { directionModel, harmonyModel, insertAtSourceModel, lyricModel, moveSelected, pasteModel, runModelAction, transposeModel, type ModelActionCtx } from "./modelops";
 import {
-  type Box, boxInPage, charIndexAt, inkBoxInPage, clearDragHints, clearOverlay, drawBlock, drawBreak, drawCaret, drawDragHint, hitThroughOverlay, musicBox, rightEdgeInBand,
+  type Box, boxInPage, charIndexAt, inkBoxInPage, clearDragHints, clearOverlay, drawBlock, drawBreak, caretWidth, drawCaret, drawDragHint, hitThroughOverlay, musicBox, rightEdgeInBand,
   sameRow, setBeatIssues, textCaretInPage,
 } from "./overlay";
 import { t as tr } from "../../i18n";
@@ -593,7 +593,7 @@ export class VisualEditController {
       if (di < 0 || di > disp.length) continue;
       const c = textCaretInPage(t, di);
       if (!c) continue;
-      drawCaret(c.svg, c.x, c.box);
+      drawCaret(c.svg, c.x, c.box, this.textCaretStyle(c.svg));
       return true;
     }
     // 字对不上（`♭B` 对 `bB`、叠排的拍号）：画在这一项的右边
@@ -601,8 +601,18 @@ export class VisualEditController {
     const boxes = els.map((el) => boxInPage(el)).filter((b): b is { svg: SVGSVGElement; box: Box } => !!b);
     if (boxes.length === 0) return false;
     const box = boxes.slice(1).reduce((a, b) => (b.svg === a.svg ? { svg: a.svg, box: union(a.box, b.box) } : a), boxes[0]!);
-    drawCaret(box.svg, box.box.x + box.box.w + box.box.h * 0.12, box.box);
+    drawCaret(box.svg, box.box.x + box.box.w + box.box.h * 0.12, box.box, this.textCaretStyle(box.svg));
     return true;
+  }
+
+  /** 文字 / 和弦名里的光标与音符间的光标同一个样子：线宽取这一页音符光标的（按音符那一带的高度），改字会话里照闪。 */
+  private textCaretStyle(svg: SVGSVGElement): { width?: number; live: boolean } {
+    for (const e of this.navigable()) {
+      if (e.kind !== "note") continue;
+      const hit = this.boxOf(e);
+      if (hit?.svg === svg) return { width: caretWidth(this.caretBox(e, hit).h), live: this.textEditing };
+    }
+    return { live: this.textEditing };
   }
 
   /** 编辑方块：选区罩住的元素，按页、按行各画一个。 */
