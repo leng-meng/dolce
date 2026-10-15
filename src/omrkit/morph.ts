@@ -10,9 +10,63 @@ export function areaOpen(bin: Binary, min: number): void {
   for (const b of components(bin, 1, 8, (n) => n < min)) for (const i of b.px) bin.data[i] = 0;
 }
 
-/** **面积闭运算**：填上面积小于 `max`、被墨围住（不碰图边）的白块（4 连通）。 */
+/**
+ * **面积闭运算**：填上面积小于 `max`、被墨围住（不碰图边）的白块（4 连通）。
+ * 按行取白游程、上下两行游程有横向重叠就并（并查集）——白底那一整块几百万点不必逐点 flood。
+ */
 export function areaClose(bin: Binary, max: number): void {
-  for (const b of components(bin, 0, 4, (n) => n < max)) if (!b.edge) for (const i of b.px) bin.data[i] = 1;
+  const { w, h, data } = bin;
+  // 游程：行、起、止（闭区间）
+  const ry: number[] = [];
+  const rx0: number[] = [];
+  const rx1: number[] = [];
+  const parent: number[] = [];
+  const find = (a: number): number => {
+    while (parent[a] !== a) a = parent[a] = parent[parent[a]];
+    return a;
+  };
+  let prevStart = 0;
+  let prevEnd = 0;
+  for (let y = 0; y < h; y++) {
+    const o = y * w;
+    const curStart = ry.length;
+    let j = prevStart;
+    for (let x = 0; x < w; ) {
+      if (data[o + x]) {
+        x++;
+        continue;
+      }
+      const a = x;
+      while (x < w && !data[o + x]) x++;
+      const b = x - 1;
+      const id = ry.length;
+      ry.push(y);
+      rx0.push(a);
+      rx1.push(b);
+      parent.push(id);
+      // 上一行与 [a,b] 重叠的游程并进来（上一行游程按 x 递增，指针只往前走）
+      while (j < prevEnd && rx1[j] < a) j++;
+      for (let k = j; k < prevEnd && rx0[k] <= b; k++) {
+        const ra = find(k);
+        const rb = find(id);
+        if (ra !== rb) parent[Math.max(ra, rb)] = Math.min(ra, rb);
+      }
+    }
+    prevStart = curStart;
+    prevEnd = ry.length;
+  }
+  const n = ry.length;
+  const area = new Float64Array(n);
+  const edge = new Uint8Array(n);
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    area[r] += rx1[i] - rx0[i] + 1;
+    if (ry[i] === 0 || ry[i] === h - 1 || rx0[i] === 0 || rx1[i] === w - 1) edge[r] = 1;
+  }
+  for (let i = 0; i < n; i++) {
+    const r = find(i);
+    if (!edge[r] && area[r] < max) data.fill(1, ry[i] * w + rx0[i], ry[i] * w + rx1[i] + 1);
+  }
 }
 
 /** 0/1 图的积分图（整型精确）：建好之后原图再改不影响它。 */
