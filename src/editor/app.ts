@@ -1021,6 +1021,8 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
       const el = this._syncGroupEl(entry);
       if (!el) continue;
       this._syncElOf.set(entry, el);
+      // 和弦名的组标上类名：点亮、方块都按它把和弦从音符里剔出去（`styles.css`、`overlay.ts::musicBox`；SVG 输出本身不带类名）
+      if (entry.kind === "mark" && entry.markKind === "harmony" && el !== this.painter.entryEl(entry.id, 0)) el.classList.add("vis-chord");
       // 展开档里音符与它的歌词共用一个 `<g>`，先来的音符条目占住它（`all()` 已排好序）
       if (!this._syncEls.has(el)) this._syncEls.set(el, entry);
     }
