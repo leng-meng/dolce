@@ -13,7 +13,7 @@ import type { BarStyle, StartStopDiscontinue } from "../score/enums";
 import type { PhraseChord, PhraseMeasure } from "../score/phraseinput";
 import type { PlayMeasure } from "../score/playorder";
 import type { TimelineMeasure } from "../score/timeline";
-import type { Chord, ElementId, Measure, Song } from "./doc";
+import type { Chord, ElementId, Measure, Part, Song } from "./doc";
 import { sectionMarkOf } from "./helpers";
 import { midiPitch, topNote } from "./jianpu";
 
@@ -81,6 +81,14 @@ export function distinctNumbers<L extends { number: number }>(lyrics: readonly L
   });
 }
 
+/** 一个声部的主分支：它里面最小的 voice 号。MusicXML 的 voice 号可以跨 part 连着编（文本谱 `Q2:` 投成的第二个 part 全是 voice 2），
+ *  写死 voice 1 会把这种声部整个滤空。 */
+export function mainVoiceOf(part: Part): number {
+  let v = Infinity;
+  for (const m of part.measures) for (const el of m.elements) if (el.kind === "chord" && el.voice < v) v = el.voice;
+  return v === Infinity ? 1 : v;
+}
+
 /** 断句输入。`partIndex` 缺省取第一声部（与引擎输入只读 `parts[0]` 一致）。
  *  `distinctLyrics` = 同音同号的词顺延（`distinctNumbers`，只试听的演唱顺序要；断句与引擎输入不顺延）。 */
 export function phrasePartOfDoc(song: Song, partIndex = 0, distinctLyrics = false): PhraseDocView {
@@ -99,9 +107,10 @@ export function phrasePartOfDoc(song: Song, partIndex = 0, distinctLyrics = fals
   const measures: MeasureOut[] = [];
   let at = new Fraction(0);
   let time = { beats: 4, beatType: 4 };
+  const voice = mainVoiceOf(part);
   for (const m of part.measures) {
     if (m.attrs?.time) time = { beats: m.attrs.time.beats, beatType: m.attrs.time.beatType };
-    const out = measureOf(m, at, div, slurStarts, slurEnds, idOf, time);
+    const out = measureOf(m, at, div, slurStarts, slurEnds, idOf, time, voice);
     measures.push(out);
     at = at.plus(measureEnd(m, div));
   }
@@ -152,6 +161,7 @@ function measureOf(
   slurStarts: ReadonlySet<ElementId>, slurEnds: ReadonlyMap<ElementId, number>,
   idOf: Map<PhraseChord, ElementId>,
   time: { beats: number; beatType: number },
+  voice: number,
 ): MeasureOut {
   const out: MeasureOut = {
     entries: [],
@@ -188,7 +198,7 @@ function measureOf(
 
   const at = onsets(m);
   for (const el of m.elements) {
-    if (el.kind !== "chord" || el.grace || el.voice > 1) continue;
+    if (el.kind !== "chord" || el.grace || el.voice > voice) continue;
     const ch = chordOf(el, at.get(el)!, div, slurStarts, slurEnds);
     out.entries.push(ch);
     idOf.set(ch, el.id);

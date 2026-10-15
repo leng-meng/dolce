@@ -14,7 +14,7 @@ import { midiPitch, topNote } from "./jianpu";
 import type { JpwChordIn, JpwLineBreakIn, JpwMeasureIn, JpwPitchIn, JpwScoreIn } from "./tojpw";
 import { BarStyle } from "../score/enums";
 import { Key } from "../score/jppitch";
-import { distinctNumbers, phrasePartOfDoc } from "./phrasedoc";
+import { distinctNumbers, mainVoiceOf, phrasePartOfDoc } from "./phrasedoc";
 import type { PhraseChord } from "../score/phraseinput";
 
 /** 主旋律声部：第一个带歌词的声部，都没词取第一声部（同简谱形状 `forExpanded` 的口径）。
@@ -112,7 +112,7 @@ function slursOf(song: Song): { starts: Set<ElementId>; ends: Map<ElementId, num
 
 /** 一个声部各和弦的歌词（导出 MIDI 的歌词事件）：段号、副歌取断句输入那份（同音同号已顺延、`findRefrain` 判过副歌，
  *  副歌各遍都唱），字取模型的、并上收尾标点。
- *  断句输入只收 voice ≤ 1，其余 voice 的和弦这里没有，由 `chordEntry` 直接读模型。 */
+ *  断句输入只收该声部的主分支（`mainVoiceOf`），其余 voice 的和弦这里没有，由 `chordEntry` 直接读模型。 */
 function lyricsOfPart(song: Song, partIndex: number): Map<ElementId, TimelineLyric[]> {
   const out = new Map<ElementId, TimelineLyric[]>();
   const view = phrasePartOfDoc(song, partIndex, true);
@@ -163,6 +163,7 @@ function timelinePartOf(
   /** 移调乐器（`<transpose>`）：记谱音高加这么多半音才是实际发声 */
   let shift = 0;
   const measures: TimelineMeasure[] = [];
+  const mainVoice = mainVoiceOf(part);
   for (const m of part.measures) {
     if (m.attrs?.time) time = { beats: m.attrs.time.beats, beatType: m.attrs.time.beatType };
     if (m.attrs?.transpose) shift = m.attrs.transpose.chromatic + 12 * (m.attrs.transpose.octaveChange ?? 0);
@@ -188,7 +189,7 @@ function timelinePartOf(
       if (el.cue) continue;
       let v = velocity;
       for (const e of dyn) if (e.at <= onset) v = e.v;
-      const entry = chordEntry(el, onset, div, v, lead && el.voice <= 1, shift, lyrics?.get(el.id));
+      const entry = chordEntry(el, onset, div, v, lead && el.voice <= mainVoice, shift, lyrics?.get(el.id));
       entries.push(slurs ? { ...entry, slurStart: slurs.starts.has(el.id), slurEnds: slurs.ends.get(el.id) ?? 0 } : entry);
     }
     if (dyn.length) velocity = dyn[dyn.length - 1]!.v;
