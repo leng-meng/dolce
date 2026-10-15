@@ -316,8 +316,7 @@ block 用 `line-height`（倍数）那两套已经合并——同一件事分两
 
 ## 9. 示例
 
-本仓库内置三份**风格**（`src/style/styles/`：`hymn500.ss` 出厂、`shige.ss` 诗歌本、`tomato.ss` 番茄，按 em 写；原样档在设置面板里选，
-叠在 print 主题之上、歌本样式表之下，见 `style/styles.ts`）；原样档页脚区域写在 `style/themes.ts` 的 print 主题里。三份歌本样式在本地私有仓库（都能被 `../dev/scripts/ss-roundtrip.mjs` 解析、写出、再解析）：
+原样档的出厂数值与页脚区域都写在 `style/themes.ts` 的 print 主题里。三份歌本样式在本地私有仓库（都能被 `../dev/scripts/ss-roundtrip.mjs` 解析、写出、再解析）：
 
 - `hymn500-measured.ss`：统计生成的实测部分（纸、字体、角色、`@jianpu` / `@break` / `@flow`、`@toc` 目录几何）。
 - `hymn500.ss`：fixed 区域（基线写实测数）+ `key-meter()` 组件（避让首行和弦）。

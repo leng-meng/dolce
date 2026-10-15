@@ -2,7 +2,7 @@
 import type { App, PaperChoice, PaperEngine } from "./app";
 import { resolvePaper, pageMargins, CUSTOM_PAPER } from "../style/paper";
 import { HEADER_ROLES } from "../style/header";
-import { isPrintStyle, NOTE_FONTS, PRINT_STYLES } from "../style/styles";
+import { NOTE_FONTS } from "../style/fonts";
 import type { PageDecl } from "../style/sheet";
 import { ORIGINAL_PAPERS, PAGE_RATIOS, PAPER_SIZES } from "../style/themes";
 import { CONVERT_TARGETS } from "../model/convert";
@@ -601,7 +601,7 @@ export function showOptionsDialog(app: App): void {
   }
   pHeader.append(labeled(t("settings.bookSheet"), bsBox));
 
-  // 原样档的风格、音符字体、和弦升降号写法：各格式共用一套（`style/styles.ts`）
+  // 原样档的音符字体、和弦升降号写法：各格式共用一套
   const choice = (opts: readonly (readonly [string, MsgKey])[], value: string): HTMLSelectElement => {
     const el = document.createElement("select");
     for (const [v, label] of opts) {
@@ -613,11 +613,10 @@ export function showOptionsDialog(app: App): void {
     }
     return el;
   };
-  const styleSel = choice(PRINT_STYLES.map((v) => [v, `settings.style.${v}` as MsgKey] as const), app.printStyle);
   const noteFontSel = choice([["", "settings.noteFont.follow"], ...NOTE_FONTS.map((f) => [f.id, `settings.noteFont.${f.id}` as MsgKey] as const)], app.noteFont);
   const chordAccSel = choice([["", "settings.chordAccidental.source"], ["before", "settings.chordAccidental.before"], ["after", "settings.chordAccidental.after"]], app.chordAccidental);
   if (isJianpu) {
-    pHeader.append(labeled(t("settings.style"), styleSel), labeled(t("settings.noteFont"), noteFontSel), labeled(t("settings.chordAccidental"), chordAccSel));
+    pHeader.append(labeled(t("settings.noteFont"), noteFontSel), labeled(t("settings.chordAccidental"), chordAccSel));
   }
 
   // 页眉四项的字体字号：各档共用（展开档原来单列的标题 / 词曲字号也并在这里）
@@ -675,7 +674,6 @@ export function showOptionsDialog(app: App): void {
         : undefined,
       color: argb, bgColor: colorValue(bgColor, app.bgColor),
       ...(isJianpu ? {
-        printStyle: isPrintStyle(styleSel.value) ? styleSel.value : undefined,
         ...(noteFontSel.value !== app.noteFont ? { noteFont: noteFontSel.value } : {}),
         ...(chordAccSel.value !== app.chordAccidental ? { chordAccidental: chordAccSel.value as "" | "before" | "after" } : {}),
       } : {}),

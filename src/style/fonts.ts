@@ -43,3 +43,10 @@ export function fontOfRole(
   if (!f) return base.size === size ? base : base.makeWithSize(size);
   return new Font(f.family || base.family, size, f.bold || base.bold, base.italic);
 }
+
+/** 设置面板「音符字体」能选的：字体族串与要不要加粗（空串 = 默认，按 print 主题）。 */
+export const NOTE_FONTS: readonly { id: string; family: string; bold: boolean }[] = [
+  { id: "pingfang", family: "PingFang SC, Microsoft YaHei, sans-serif", bold: true },
+  { id: "helvetica", family: "Helvetica Neue, Helvetica, Arial, PingFang SC, sans-serif", bold: true },
+  { id: "times", family: "Times New Roman, Times, serif", bold: false },
+];
