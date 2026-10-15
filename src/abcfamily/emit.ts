@@ -169,8 +169,11 @@ export function lyricLines(
       const joined = style.joinMulti ? style.joinMulti(hit.text) : needBrace ? `{${hit.text}}` : bare;
       body += (hit.leadingPunctuation ?? "") + joined + (hit.trailingPunctuation ?? "");
       prevSyllabic = hit.syllabic;
-      // 以转义字符收尾（`How\-`）同样会被下一个拉丁词粘上，也要空格
-      prevLatin = !hit.trailingPunctuation && (isLatinEnd(hit.text) || (!needBrace && /[/-]$/.test(bare) && bare !== hit.text));
+      // 以转义字符收尾（`How\-`）同样会被下一个拉丁词粘上，也要空格；
+      // 拉丁词后跟半角标点（`grace,`）读回不会粘，但照英文排版也空一格（`grace, how`），全角标点（`grace，`）照中文不空
+      prevLatin = hit.trailingPunctuation
+        ? isLatinEnd(hit.text) && /^[!-~]+$/.test(hit.trailingPunctuation)
+        : isLatinEnd(hit.text) || (!needBrace && /[/-]$/.test(bare) && bare !== hit.text);
       if (hit.extend) {
         body += sep + ext;
         extendConsumes = true;
