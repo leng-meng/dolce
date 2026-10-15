@@ -643,6 +643,8 @@ export function isLeadNoteBarline(l: Seg, nt: Sym, stf: Staff): boolean {
 /** 窄头挂干窗口的下限（格），与算窄的盒宽（格）。 */
 const STEM_WIN_MIN = 0.3;
 const STEM_WIN_NARROW = 1.15;
+/** 空心头盒里离缘这么多格以内的干也算贴缘（见 `findStems`）。 */
+export const HOLLOW_IN = 0.4;
 
 /**
  * `Page::findStems`：符头左右两侧、纵向相交的竖线就是符干。
@@ -687,14 +689,23 @@ export function findStems(pg: SPage): void {
       let dl = Math.abs(nt.box.left - l.cx), dr = Math.abs(nt.box.right - l.cx);
       if (inL && l.cx > nt.box.left && l.cx - nt.box.left <= inL) dl = 0;
       if (inR && l.cx < nt.box.right && nt.box.right - l.cx <= inR) dr = 0;
+      // 空心头的盒是内腔外扩一圈出来的，圈薄的那一侧盒缘比墨宽一两像素：干落在盒里、离缘不到 `HOLLOW_IN` 格也算贴缘
+      //（破碎 p12 m101 女高 D5 二分，干在盒左缘里 4.3 像素，窗口 4）
+      if (nt.code === "noteheadHalf" && l.cx > nt.box.left && l.cx < nt.box.right) {
+        if (l.cx - nt.box.left <= space * HOLLOW_IN) dl = Math.min(dl, lw / 2);
+        if (nt.box.right - l.cx <= space * HOLLOW_IN) dr = Math.min(dr, lw / 2);
+      }
       if (dl >= lw && dr >= lw) continue;
-      if (!overlapY(l.box, nt.box)) continue;
+      // 干贴头那几行横向变宽、竖段在头缘外一像素处截断（破碎 p4 m35 C4/G4/C5 二分和弦，干底离 C4 头盒 1px）：差一像素也算相交。
+      // 只放一像素（取整误差）：放到一个线宽时，上声部干底下 3px 紧贴着的下声部头也挂上来（以马内利来临歌 P2 m9 E3）
+      if (l.bottom < nt.box.top - 1 || nt.box.bottom < l.top - 1) continue;
       // **符头要在符干的某一端**，不能在中间：小节线也常常擦着符头过，
       // 那时符头落在它跨度的中段。不加这条，真小节线会被当成符干抢走
       // （实测 p227 每行只剩三个小节，音符全挤在一起）。
       const cy = (nt.box.top + nt.box.bottom) / 2;
       const side = dl <= dr ? 0 : 1;
-      if (Math.abs(cy - l.top) > space && Math.abs(cy - l.bottom) > space) continue;
+      // 余量半个窗口：干端常被竖向闭运算接上一截别的笔画（破碎 p12 m101 女高 D5，干顶接上弧尾，头心离干顶 1.03 格）
+      if (Math.abs(cy - l.top) > space + lw / 2 && Math.abs(cy - l.bottom) > space + lw / 2) continue;
       if (side === 0 && isLeadNoteBarline(l, nt, stf)) continue;
       cand.push({ l, side, d: Math.min(dl, dr) });
     }

@@ -1222,7 +1222,7 @@ export function hollowHeadsAlongStems(
   const out: { box: Rect; code: SmuflName; weak?: boolean }[] = [];
   const taken = heads.map((h) => h.box);
   const cyOf = (h: { box: Rect }) => h.box.y + h.box.h / 2;
-  const ranges: { ref: { box: Rect }; vx: number; y0: number; y1: number; end?: number; beyond?: boolean; third?: boolean; tip?: boolean; deep?: boolean }[] = [];
+  const ranges: { ref: { box: Rect }; vx: number; y0: number; y1: number; end?: number; beyond?: boolean; third?: boolean; tip?: boolean; deep?: boolean; flip?: boolean }[] = [];
   for (const v of stems) {
     const vx = (v.x0 + v.x1) / 2;
     const top = Math.min(v.y0, v.y1);
@@ -1249,6 +1249,10 @@ export function hollowHeadsAlongStems(
           ranges.push(nearBot ? { ref: h, vx, y0: hy - sp * 1.25, y1: hy - sp * 0.75, beyond: true, third: true } : { ref: h, vx, y0: hy + sp * 0.75, y1: hy + sp * 1.25, beyond: true, third: true });
         }
         if (!strict) continue;
+        // **二度错开在干另一侧的头**：二度和弦的两个头分挂干的两边，上下一级、到干的另一侧（镜像位置）找
+        //（破碎 p4 m41 钢琴右手 A3/D4/E4/A4 二分，E4 骑第一线错在干右侧，去线后两片、下片又粘着 D4）。门槛同「干外一格」
+        ranges.push({ ref: h, vx, y0: hy - sp * 0.75, y1: hy - sp * 0.25, beyond: true, flip: true });
+        ranges.push({ ref: h, vx, y0: hy + sp * 0.25, y1: hy + sp * 0.75, beyond: true, flip: true });
         // 头挂在干的一端：往另一端（自由端）找，到自由端往回 ALONG_FREE 格为止
         if (bot - top < sp * (ALONG_FREE + 1)) continue;
         if (nearBot) ranges.push({ ref: h, vx, y0: top + sp * ALONG_FREE, y1: hy - sp * 0.75 });
@@ -1276,9 +1280,9 @@ export function hollowHeadsAlongStems(
       }
     }
   }
-  for (const { ref, vx, y0, y1, end, beyond, third, tip, deep } of ranges) {
+  for (const { ref, vx, y0, y1, end, beyond, third, tip, deep, flip } of ranges) {
     if (y1 <= y0) continue;
-    const cx = ref.box.x + ref.box.w / 2;
+    const cx = flip ? 2 * vx - (ref.box.x + ref.box.w / 2) : ref.box.x + ref.box.w / 2;
     for (const st of stepsIn(y0, y1)) {
       // 干端那一级：干必挂着头，模板分放宽；干端以外的位置照常
       const atEnd = end !== undefined && Math.abs(st.y - end) <= sp * ALONG_END_TOL;
@@ -1318,7 +1322,8 @@ export function hollowHeadsAlongStems(
         // 干多伸出一格的那个端头：位置已由干钉死，模板分够高（`TIP_SCORE`）就不再要墨占比到「印糊」那一档
         if (b.s < ALONG_FILLED_SCORE || ink > ALONG_FILLED_INK_MAX || (ink < ALONG_FILLED_INK && !(tip && b.s >= TIP_SCORE)) || (near(1) && near(-1))) continue;
       }
-      if (clash(box, taken)) continue;
+      // 错开在干另一侧的那档本来就挨着参照头（二度），不跟它比
+      if (clash(box, flip ? taken.filter((t) => t !== ref.box) : taken)) continue;
       out.push({ box, code: "noteheadHalf", weak: true });
       taken.push(box);
     }

@@ -52,7 +52,7 @@ import { connectedComponents } from "../omrkit/ccl";
 import { areaClose, close, ellipseOpen } from "../omrkit/morph";
 import { type LineFrame, makePitchSteps, ledgerCandidates, makePitchGrid, sharedLegers, ownLegers } from "./pitchgrid";
 import { bridgeFaintBars, pastSysLine, joinThroughBars, inkSystemBarlines, bridgeFaintSysLines, dropLoneBarlines, voteSystemBarlines } from "./barvote";
-import { nearRestLine, restKind, nearStaffStart, fillAround, isEighthRest, symbolInk, isStackedPair, isBarRest, enclosedWhite, crossRuns, midOfStaff, offStaffRest, sharpCrossbars, tallStrokes, longestVRun, splitAt, sharpShape, wholesByShape, openCavities, STAFF_START } from "./restshape";
+import { nearRestLine, restKind, nearStaffStart, fillAround, isEighthRest, symbolInk, isStackedPair, isBarRest, enclosedWhite, crossRuns, midOfStaff, offStaffRest, sharpCrossbars, crossbarAccidental, crossbarAccidentalBox, tallStrokes, longestVRun, splitAt, sharpShape, wholesByShape, openCavities, STAFF_START } from "./restshape";
 import { sharpsByStrokes, dropCourtesyKeys, demoteMidKeys, extendKeyChains, dropHeadsInKey, pruneMidKeys, fixKeyNaturals, keySections, extendKeyByStrokes, shareSystemKeys, shareKeySignature, carrySystemKeys, extendKeyByCarry, findMidKeysByTemplate, shareMidKeys, dropBarsInKey, keyFromChords, fixFlatReadAsSix, attachAccidentalsByPitch, naturalsByStrokes, lastKey, KEY_GAP, KEY_GAP_FIRST, LOOSE_ACC_GAP } from "./keysig";
 import { vRunAt, snapHeadsToStems, splitSecondStems, splitVoiceStems, tagLooseStems, splitUnisons, markCrossStaff } from "./stems";
 import { type TimeColumn, shareSystemClefs, shareOctaveClefs, shareTimeSignature } from "./clefmeter";
@@ -985,7 +985,8 @@ export async function recognizeRasterPage(
     if (!inBand(b.y + b.h / 2)) continue;
     const full = fillAround(nl, b, unit);
     if (!full || full.box.h < b.h * 1.8) continue;
-    if (!isEighthRest(nl, full.box, full.area, unit)) continue;
+    // 斜笔下端压着谱线时去线后短一截（破碎 p7 m73 附点八分休止 1.69 格）：球连着往下的斜笔已是一道证据，高度下限按拼块那一档
+    if (!isEighthRest(nl, full.box, full.area, unit, EIGHTH_REST_H_PIECES)) continue;
     restIds.add(c.id);
     restSyms.push({ box: full.box, code: "rest8th" });
   }
@@ -1131,7 +1132,51 @@ export async function recognizeRasterPage(
       const gap = o.y > b.y ? o.y - (b.y + b.h) : b.y - (o.y + o.h);
       return ov >= Math.min(b.w, o.w) * 0.6 && gap >= 0 && gap <= unit.lineThick + 2;
     });
-  const holes = mergeHoles(rawHoles.filter((b) => !stackedCell(b)), unit, onLineOrGrid);
+  // **左右两侧都贴着贯通上下的竖墨**的格子：两根相邻的干与上下两条谱线围出的长方空当，不是内腔
+  //（破碎 p3 m29 钢琴右手两个十六分的干之间，读成一个 1.7 格宽的二分 D5）。真内腔是椭圆，两侧是圈的弧
+  const walledBy = (b: Rect, left: boolean) => {
+    const B = raster.bin;
+    const ink = (x: number, y: number) => x >= 0 && x < B.w && y >= 0 && y < B.h && !!B.data[y * B.w + x];
+    const cy = Math.round(b.y + b.h / 2);
+    for (const x of left ? [b.x - 1, b.x - 2] : [b.x + b.w, b.x + b.w + 1]) {
+      if (!ink(x, cy)) continue;
+      let y0 = cy, y1 = cy;
+      while (ink(x, y0 - 1)) y0--;
+      while (ink(x, y1 + 1)) y1++;
+      // 竖墨比格子高出一个线距以上：是干；内腔外的圈只比内腔高出一圈
+      if (y0 <= b.y - unit.space * 0.5 && y1 >= b.y + b.h + unit.space * 0.5) return true;
+    }
+    return false;
+  };
+  // 还要是方的：孔的外接框里白占九成以上。空心和弦的内腔两侧是圈，圈边接着别的头或干也成通长竖墨，但椭圆内腔四角是圈的墨
+  //（我一生要赞美你、恩友歌伴奏的二分和弦，不卡方的各丢两三个头）
+  const boxWhite = (b: Rect) => {
+    let k = 0;
+    for (let y = b.y; y < b.y + b.h; y++) for (let x = b.x; x < b.x + b.w; x++) if (!raster.bin.data[y * raster.bin.w + x]) k++;
+    return k / Math.max(1, b.w * b.h);
+  };
+  // 或者两侧的墙在孔上下半格处仍是细竖线（横向墨宽不过 0.25 格）：干、临时记号的竖笔是细线，空心和弦那一侧接的是别的头的圈
+  //（破碎 p8 m80 ♭ 竖笔与 ♯ 左竖之间的孔，♭ 的肚子伸进来、白只占七成，读成全音符 F4）
+  const thinWall = (b: Rect, left: boolean) => {
+    const x = left ? b.x - 1 : b.x + b.w;
+    const B = raster.bin;
+    const ink = (xx: number, y: number) => xx >= 0 && xx < B.w && y >= 0 && y < B.h && !!B.data[y * B.w + xx];
+    return [Math.round(b.y - unit.space * 0.5), Math.round(b.y + b.h + unit.space * 0.5)].every((y) => {
+      if (!ink(x, y)) return false;
+      let a = x, z = x;
+      while (ink(a - 1, y)) a--;
+      while (ink(z + 1, y)) z++;
+      return z - a + 1 <= unit.space * 0.25;
+    });
+  };
+  const stemCell = (b: Rect) => walledBy(b, true) && walledBy(b, false) && (boxWhite(b) >= 0.9 || (thinWall(b, true) && thinWall(b, false)));
+  // 隔一条谱线紧挨着一个剔掉的格子、两侧也贴着贯通竖墨的孔一并剔：杠与谱线之间那截白，留下来就单独成孔读出空心头（有一位神 m1 E5）
+  const cellSet = rawHoles.filter(stemCell);
+  const besideCell = (b: Rect) =>
+    walledBy(b, true) &&
+    walledBy(b, false) &&
+    cellSet.some((c) => c !== b && Math.abs(c.x - b.x) <= 2 && Math.abs(c.x + c.w - (b.x + b.w)) <= 2 && (Math.abs(c.y - (b.y + b.h)) <= unit.lineThick + 2 || Math.abs(b.y - (c.y + c.h)) <= unit.lineThick + 2));
+  const holes = mergeHoles(rawHoles.filter((b) => !stackedCell(b) && !cellSet.includes(b) && !besideCell(b)), unit, onLineOrGrid);
   // 和弦字母的**内腔**也是洞（`D`/`G`/`B`/`A` 都有），不挡住就从这一路漏回来
   // ——检测框一并算「已被占」。
   const takenBoxes = [...heads.map((h) => h.box), ...harmonyMasks];
@@ -1199,6 +1244,12 @@ export async function recognizeRasterPage(
   if (masks.length) {
     for (const c of blobs) {
       if (claimed.has(c.id)) continue;
+      // **四分休止不拆**：窄高的折线块按休止模板配得上、又没有通高直竖笔（干）的，留给后面字典那一路收。
+      // 拆块的模板是本页实心头自举的，样本一多一少，这种块就在「两个骑线头」与「拆不出」之间翻（破碎 p3 m17 三处）
+      if (c.bbox.w < unit.space * 1.3 && c.bbox.h >= unit.space * 2.2) {
+        const vr = longestVRun(raster.bin, c.bbox);
+        if (!(vr >= c.bbox.h * 0.85 && vr >= unit.space * 2.5) && matchTemplate(binSig(nl, c.bbox), c.bbox.w / unit.space, c.bbox.h / unit.space, restTpl)?.smufl === "restQuarter") continue;
+      }
       let parts = splitHeadCluster(noBeam, c.bbox, c.area, masksNB.length ? masksNB : masks, unit, pitchGrid, onLineY);
       // **上下贴着的两个头**（三度和弦，一个头宽、两个头高、很实）：模板要头的上下是白的，
       // 贴着就各扣一截，两个都卡在门槛下（《来敬拜荣耀王》低音谱表的 E3/G♯3 得 0.45 / 0.42，门槛 0.46）。
@@ -2048,8 +2099,10 @@ export async function recognizeRasterPage(
       if (vBot < b.y || vTop > b.y + b.h) continue;
       // 一端扎进实心头（横向落在头盒里、端点在头盒上下沿之间）的是符干，块是它的符尾：
       // 低分辨率页上干加八分尾拼成一个还原号（万福泉源歌 m4，G4/E♭4 带尾和弦的干被摘走）
+      // 端点离头缘差一两像素也算扎进去（破碎 p4 m32 D4 十六分：干下端停在头上沿外 1 像素，干 + 两道尾读成还原号）
       const tl = Math.max(1, unit.lineThick);
-      if (syms.some((h) => h.code === "noteheadBlack" && vx >= h.box.x - tl && vx <= h.box.x + h.box.w + tl && ((vBot >= h.box.y && vBot <= h.box.y + h.box.h) || (vTop >= h.box.y && vTop <= h.box.y + h.box.h)))) continue;
+      const tl2 = tl * 2;
+      if (syms.some((h) => h.code === "noteheadBlack" && vx >= h.box.x - tl && vx <= h.box.x + h.box.w + tl && ((vBot >= h.box.y - tl2 && vBot <= h.box.y + h.box.h) || (vTop >= h.box.y && vTop <= h.box.y + h.box.h + tl2)))) continue;
       const x0 = Math.min(b.x, Math.round(vx - v.maxLw / 2));
       const y0 = Math.min(b.y, Math.round(vTop));
       const box = {
@@ -3429,6 +3482,16 @@ export async function recognizeRasterPage(
     syms.push({ box: d, code: "augmentationDot" });
     ledger.claim(d, "dot:augmentationDot");
   }
+  // 附点休止：休止右边的点同一个窗口找（破碎 p4 m32 钢琴右手附点八分休止）
+  {
+    const rests = syms.filter((s0) => s0.code === "rest8th" || s0.code === "rest16th" || s0.code === "restQuarter");
+    if (rests.length)
+      for (const d of findDots(nl, syms, unit, staffYs, (y) => gridYs.some((ly) => Math.abs(ly - y) <= unit.lineThick), rests)) {
+        if (syms.some((s0) => s0.code === "augmentationDot" && overlapFrac(s0.box, d) > 0)) continue;
+        syms.push({ box: d, code: "augmentationDot" });
+        ledger.claim(d, "dot:augmentationDot");
+      }
+  }
 
   // **大半落在升降号盒里的符头不要**：调号升号认出来了，同一块又被拆块那一路拆出两个「头」
   //（《向主唱新歌》两行行首的 F♯ 各多出一个 G5）。临时记号只挨着符头左边，交叠不到七成。
@@ -3881,40 +3944,100 @@ export async function recognizeRasterPage(
       const ry0 = Math.max(0, Math.round(hcy - sp * ACC_PROBE_H)), ry1 = Math.min(nl.h - 1, Math.round(hcy + sp * ACC_PROBE_H));
       if (rx1 - rx0 < 3) continue;
       const W = rx1 - rx0 + 1, H = ry1 - ry0 + 1;
-      const local = { w: W, h: H, data: new Uint8Array(W * H) } as Binary;
-      for (let y = ry0; y <= ry1; y++)
-        for (let x = rx0; x <= rx1; x++) {
-          if (!nl.data[y * nl.w + x]) continue;
-          if (heads.some((o) => x >= o.box.x && x < o.box.x + o.box.w && y >= o.box.y && y < o.box.y + o.box.h)) continue;
-          local.data[(y - ry0) * W + (x - rx0)] = 1;
+      const fromNl = ((): { box: Rect; code: SmuflName } | null => {
+        const local = { w: W, h: H, data: new Uint8Array(W * H) } as Binary;
+        for (let y = ry0; y <= ry1; y++)
+          for (let x = rx0; x <= rx1; x++) {
+            if (!nl.data[y * nl.w + x]) continue;
+            if (heads.some((o) => x >= o.box.x && x < o.box.x + o.box.w && y >= o.box.y && y < o.box.y + o.box.h)) continue;
+            local.data[(y - ry0) * W + (x - rx0)] = 1;
+          }
+        // 窗里的干先抹掉：升号左竖连着邻音朝上的干和头，整块碰到窗左边、被当成邻音扣掉（破碎 p8 m84 C♯5）
+        for (const v of prims.vSegs) {
+          const vx = (v.x0 + v.x1) / 2, half = Math.max(1, v.maxLw / 2);
+          if (vx + half < rx0 || vx - half > rx1) continue;
+          // 只抹比窗还高出去的长竖段：临时记号自己的竖笔也可能被抽成竖段
+          const top = Math.min(v.y0, v.y1), bot = Math.max(v.y0, v.y1);
+          if (top > ry0 && bot < ry1) continue;
+          for (let y = Math.max(ry0, Math.round(top)); y <= Math.min(ry1, Math.round(bot)); y++)
+            for (let x = Math.max(rx0, Math.round(vx - half)); x <= Math.min(rx1, Math.round(vx + half)); x++) local.data[(y - ry0) * W + (x - rx0)] = 0;
         }
-      // 碰到窗左、上、下边的连通块是邻音的干、杠、尾，扣掉；剩下的并起来
-      let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
-      const labels = new Int32Array(W * H);
-      const drop = new Set<number>();
-      for (const cc of connectedComponents(local, 1, labels)) {
-        const q = cc.bbox;
-        if (q.x === 0 || q.y === 0 || q.y + q.h >= H || cc.area < sp * sp * 0.3) {
-          drop.add(cc.id);
-          continue;
+        // 碰到窗左、上、下边的连通块是邻音的干、杠、尾，扣掉；剩下的并起来
+        let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+        const labels = new Int32Array(W * H);
+        const drop = new Set<number>();
+        for (const cc of connectedComponents(local, 1, labels)) {
+          const q = cc.bbox;
+          if (q.x === 0 || q.y === 0 || q.y + q.h >= H || cc.area < sp * sp * 0.3) {
+            drop.add(cc.id);
+            continue;
+          }
+          x0 = Math.min(x0, q.x + rx0), x1 = Math.max(x1, q.x + q.w - 1 + rx0), y0 = Math.min(y0, q.y + ry0), y1 = Math.max(y1, q.y + q.h - 1 + ry0);
         }
-        x0 = Math.min(x0, q.x + rx0), x1 = Math.max(x1, q.x + q.w - 1 + rx0), y0 = Math.min(y0, q.y + ry0), y1 = Math.max(y1, q.y + q.h - 1 + ry0);
+        for (let i = 0; i < labels.length; i++) if (drop.has(labels[i])) local.data[i] = 0;
+        if (x1 < 0) return null;
+        const box = { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+        const w1 = box.w / sp, h1 = box.h / sp;
+        if (w1 < 0.3 || w1 > 1.1 || h1 < 1.5 || h1 > 3.2) return null;
+        if (Math.abs(box.y + box.h / 2 - hcy) > sp * 0.8) return null;
+        const lbox = { x: box.x - rx0, y: box.y - ry0, w: box.w, h: box.h };
+        const sig = binSig(local, lbox);
+        let code = look.lookup(sig, w1, h1);
+        // 字典认不出（去线、扣头后字形残了）：两根通高竖笔 + 两道横贯粗横是升号（模板不用：干加邻头的墨也配得上，我灵镇静 m22）
+        if (!code || !isAccidental(code)) {
+          // 结构判只认升号的个头（高不过 `ACC_PROBE_SHARP_H` 格）、里面不能有实心头大小的满墨：一根干加旁边头的墨也是「两竖两横」（我灵镇静 m22）
+          const isSharp = (img: Binary) => h1 <= ACC_PROBE_SHARP_H && !solidInside(img, lbox, sp) && (sharpShape(img, lbox) || (tallStrokes(img, lbox) === 2 && sharpCrossbars(img, lbox, unit)));
+          code = isSharp(local) ? "accidentalSharp" : null;
+          // 横笔正压在谱线上：去线图上两竖之间那段跟着线抹掉了（破碎 p8 m84 C♯5）。框里补回修补图上的线带像素（头盒、干照旧扣）再判一次
+          if (!code) {
+            const patched = { w: W, h: H, data: new Uint8Array(local.data) } as Binary;
+            for (let y = box.y; y < box.y + box.h; y++)
+              for (let x = box.x; x < box.x + box.w; x++) {
+                if (!repaired.data[y * repaired.w + x] || nl.data[y * nl.w + x]) continue;
+                if (heads.some((o) => x >= o.box.x && x < o.box.x + o.box.w && y >= o.box.y && y < o.box.y + o.box.h)) continue;
+                patched.data[(y - ry0) * W + (x - rx0)] = 1;
+              }
+            code = isSharp(patched) ? "accidentalSharp" : null;
+            // 最后一档：先找两道平行粗斜横，再按竖笔伸出横杠的方向分 ♯ / ♮（`restshape.ts::crossbarAccidental`）。
+            // 竖笔与邻音的干共用一列、或下半被邻头盖住时，上面几档都数不对竖笔或横笔（破碎 p7 m72 G♯4）
+            if (!code) code = crossbarAccidental(patched, lbox, unit);
+          }
+        }
+        return code && isAccidental(code) ? { box, code } : null;
+      })();
+      // 去线图那几档都不成：在**原图**整窗上找两道平行粗斜横（`restshape.ts::crossbarAccidentalBox`）。
+      // 临时记号常压在谱线上，去线时横笔跟着抹掉、碎块又小过碎点下限被扣光（破碎 p2 m7 低音 E♮3）；原图上谱线只有两三像素厚，过不了横杠的厚度下限。
+      // 头盒、比窗还高的干照旧扣掉
+      // 去线图那一路只认出半个（窄过 0.45 格，横杠压线被抹、只剩一竖）的当没认出，交给原图那一档（赞美三一真神 m12 低音 ♯）
+      let found = fromNl && fromNl.box.w >= sp * 0.45 ? fromNl : null;
+      if (!found) {
+        const img = { w: W, h: H, data: new Uint8Array(W * H) } as Binary;
+        for (let y = ry0; y <= ry1; y++)
+          for (let x = rx0; x <= rx1; x++) {
+            if (!raster.bin.data[y * raster.bin.w + x]) continue;
+            if (heads.some((o) => x >= o.box.x && x < o.box.x + o.box.w && y >= o.box.y && y < o.box.y + o.box.h)) continue;
+            img.data[(y - ry0) * W + (x - rx0)] = 1;
+          }
+        for (const v of prims.vSegs) {
+          const vx = (v.x0 + v.x1) / 2, half = Math.max(1, v.maxLw / 2);
+          const top = Math.min(v.y0, v.y1), bot = Math.max(v.y0, v.y1);
+          if (vx + half < rx0 || vx - half > rx1 || (top > ry0 && bot < ry1)) continue;
+          for (let y = Math.max(ry0, Math.round(top)); y <= Math.min(ry1, Math.round(bot)); y++)
+            for (let x = Math.max(rx0, Math.round(vx - half)); x <= Math.min(rx1, Math.round(vx + half)); x++) img.data[(y - ry0) * W + (x - rx0)] = 0;
+        }
+        const r = crossbarAccidentalBox(img, { x: 0, y: 0, w: W, h: H }, unit, true);
+        if (r) {
+          const box = { x: r.box.x + rx0, y: r.box.y + ry0, w: r.box.w, h: r.box.h };
+          // 框宽要够一个临时记号（还原号约 0.6 格、升号 0.7~0.9 格），也不碰窗的上下边：别的笔画截一半也凑得出两道横
+          const inside = r.box.y > 0 && r.box.y + r.box.h < H - 1;
+          if (inside && box.w >= sp * 0.55 && Math.abs(box.y + box.h / 2 - hcy) <= sp * 0.8 && box.h <= sp * 3.2) found = { box, code: r.code };
+        }
       }
-      for (let i = 0; i < labels.length; i++) if (drop.has(labels[i])) local.data[i] = 0;
-      if (x1 < 0) continue;
-      const box = { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
-      const w1 = box.w / sp, h1 = box.h / sp;
-      if (w1 < 0.3 || w1 > 1.1 || h1 < 1.5 || h1 > 3.2) continue;
-      if (Math.abs(box.y + box.h / 2 - hcy) > sp * 0.8) continue;
-      const lbox = { x: box.x - rx0, y: box.y - ry0, w: box.w, h: box.h };
-      const sig = binSig(local, lbox);
-      let code = look.lookup(sig, w1, h1);
-      // 字典认不出（去线、扣头后字形残了）：两根通高竖笔 + 两道横贯粗横是升号（模板不用：干加邻头的墨也配得上，我灵镇静 m22）
-      if (!code || !isAccidental(code)) {
-        // 结构判只认升号的个头（高不过 `ACC_PROBE_SHARP_H` 格）、里面不能有实心头大小的满墨：一根干加旁边头的墨也是「两竖两横」（我灵镇静 m22）
-        code = h1 <= ACC_PROBE_SHARP_H && !solidInside(local, lbox, sp) && (sharpShape(local, lbox) || (tallStrokes(local, lbox) === 2 && sharpCrossbars(local, lbox, unit))) ? "accidentalSharp" : null;
-      }
-      if (!code || !isAccidental(code)) continue;
+      // 窄过 0.45 格的不是临时记号（抹干后剩下的一根竖条也配得上升号，恩友歌伴奏 m1）；
+      // 与已认出的别的符号（行首调号、别的临时记号）交叠三成以上的是把它又截了一半（恩友歌伴奏 m13 行首调号的升号）
+      if (!found || found.box.w < sp * 0.45) continue;
+      if (syms.some((s0) => isAccidental(s0.code) && overlapFrac(found!.box, s0.box) > 0.3)) continue;
+      const { box, code } = found;
       syms.push({ box, code });
       accs.push({ box, code });
       ledger.claim(box, `accprobe:${code}`);
@@ -4542,6 +4665,7 @@ export async function recognizeRasterPage(
     // ——一行两三个，整首十来个假音。只剔**认得出汉字**的那几行、**中心**落在行内的；
     // 真的低音符头中心离谱表不过一两格，碰不到歌词行（行上沿在谱表下 1.8 格）。
     if (readRows.length) {
+      const stemSegsLyr = pg.segsWithTag("Stem");
       const inRow = (n: StaffNote) => {
         const cx = (n.sym.box.left + n.sym.box.right) / 2;
         const cy = (n.sym.box.top + n.sym.box.bottom) / 2;
@@ -4551,6 +4675,8 @@ export async function recognizeRasterPage(
         // 上方只看两格开外：一两格上的是上加线的真音，上一行谱的歌词紧贴着它（当我们回到天家末行八个高音、−2.7）
         // 只剔空心头（字里的口字框才围得出内腔）：实心的多半是高声部的真音（合唱谱扫描档 −0.15）
         if (!below && (cy > n.staff.box.top - unit.space * 2 || n.sym.code === "noteheadBlack")) return false;
+        // 谱表下的头挂着一根往上伸进谱表的干：字的笔画没有这种干（破碎 p10 m91 男低 B♮3，还原号的尾巴伸进「體」的字格，字格撑到了头心）
+        if (below && n.stemUp === true && stemSegsLyr.some((sg) => sg.top <= n.staff.box.bottom && sg.bottom >= n.sym.box.top && Math.abs(sg.cx - n.sym.box.right) <= unit.space * 0.3)) return false;
         // 中心要落在（贴着）某个字格上：字被拆散时，剩下的笔画就在旁边成了字格；
         // 真的低音符头旁边没有字格压着（合唱谱谱表间距窄，歌词行离低音符头常只有一格，
         // 只看「落在行里」实测会误删真音）

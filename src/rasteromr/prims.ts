@@ -810,21 +810,6 @@ export function findPrimitives(
       }
     return best;
   };
-  /** 从块上沿往上、下沿往下顺着 x 那一列（左右各让一列）走到墨断，取走得远的那头的 y。 */
-  const colEnd = (x: number, b: Rect): number => {
-    const at = (y: number) => [-1, 0, 1].some((d) => {
-      const xx = Math.round(x) + d;
-      return xx >= 0 && xx < w && y >= 0 && y < h && !!bin.data[y * w + xx];
-    });
-    let up = b.y;
-    while (at(up - 1) && b.y - up < unit.space * 6) up--;
-    let dn = b.y + b.h - 1;
-    while (at(dn + 1) && dn - (b.y + b.h - 1) < unit.space * 6) dn++;
-    return b.y - up >= dn - (b.y + b.h - 1) ? up : dn;
-  };
-  /** 杠两端的两根「干」通到同一个头：一根是干、另一根是弯回头边的符尾，块是符尾根部（破碎 p9 m87 低音 B3 朝下的八分）。
-   *  杠只架在两个音之间——两根干的末端隔开不到一个头宽、高低又差不到 0.6 格，就是同一个头 */
-  const sameHead = (xa: number, xb: number, b: Rect) => xb - xa < unit.space * 1.3 && Math.abs(colEnd(xa, b) - colEnd(xb, b)) < unit.space * 0.6;
   /** 两根干之间逐列量块的墨厚（这一列在块盒里最长的竖游程），取中位数。 */
   const midThick = (b: Rect, xa: number, xb: number): number => {
     const ts: number[] = [];
@@ -844,7 +829,7 @@ export function findPrimitives(
     if (c.bbox.w >= unit.space * SHORT_BEAM_W && c.bbox.w < unit.space * 1.5 && c.bbox.h <= unit.space * 1.2) {
       const xa = stemNear(c.bbox.x, c.bbox, tol) ?? inkStemNear(c.bbox.x, c.bbox, tol);
       const xb = stemNear(c.bbox.x + c.bbox.w - 1, c.bbox, tol) ?? inkStemNear(c.bbox.x + c.bbox.w - 1, c.bbox, tol);
-      if (xa !== null && xb !== null && xb - xa >= unit.space * 0.7 && !sameHead(xa, xb, c.bbox)) {
+      if (xa !== null && xb !== null && xb - xa >= unit.space * 0.7) {
         const t = midThick(c.bbox, xa + tol, xb - tol) / unit.space;
         shortBeam = t >= SHORT_BEAM_THICK[0] && t <= SHORT_BEAM_THICK[1];
       }
@@ -899,7 +884,7 @@ export function findPrimitives(
       }
       ts.sort((p, q) => p - q);
       const med = ts[ts.length >> 1] || 1;
-      if (ts.length >= unit.space && med > unit.space * BEAM_EVEN_MED && ts[Math.floor(ts.length * 0.1)] < med * BEAM_EVEN_LO) continue;
+      if (ts.length >= unit.space * 0.5 && med > unit.space * BEAM_EVEN_MED && ts[Math.floor(ts.length * 0.1)] < med * BEAM_EVEN_LO) continue;
     }
     beams.push({ ...line, box: c.bbox });
   }

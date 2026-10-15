@@ -15,6 +15,7 @@ import {
 } from "./model";
 import { accidentalAlter, flagLevel, isAccidental, isClef, isRest, restDuration, timeSigDigit } from "./glyphs";
 import { subPaths } from "./vecgeom";
+import { HOLLOW_IN } from "./page";
 
 // ── 全音阶序号 ──────────────────────────────────────────────────────────────
 //
@@ -489,10 +490,16 @@ export function buildStems(pg: SPage, sp: number): StemInfo[] {
   for (const seg of pg.segsWithTag("Stem")) {
     const notes: Sym[] = [];
     for (const nt of heads) {
-      if (!overlapY(seg.box, nt.box)) continue;
-      const dx0 = Math.abs(nt.box.left - seg.cx);
-      const dx1 = Math.abs(nt.box.right - seg.cx);
+      // 纵向差一像素也算相交，与 `findStems` 同口径
+      if (seg.bottom < nt.box.top - 1 || nt.box.bottom < seg.top - 1) continue;
+      let dx0 = Math.abs(nt.box.left - seg.cx);
+      let dx1 = Math.abs(nt.box.right - seg.cx);
       const win = win0(nt);
+      // 空心头盒里离缘不远的干也算贴缘，与 `findStems` 同口径
+      if (nt.code === "noteheadHalf" && seg.cx > nt.box.left && seg.cx < nt.box.right) {
+        if (seg.cx - nt.box.left <= sp * HOLLOW_IN) dx0 = Math.min(dx0, win / 2);
+        if (nt.box.right - seg.cx <= sp * HOLLOW_IN) dx1 = Math.min(dx1, win / 2);
+      }
       if (dx0 > win && dx1 > win) continue;
       notes.push(nt);
     }
