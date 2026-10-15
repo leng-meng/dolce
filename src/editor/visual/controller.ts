@@ -10,7 +10,7 @@ import { redo, undo } from "@codemirror/commands";
 import { type ChangeSpec, ChangeSet } from "@codemirror/state";
 import type { EditorView } from "@codemirror/view";
 import type { ElementId, Part, ScoreDoc, Song } from "../../model/doc";
-import { type BeatIssue, checkMeasureDurations, describeBeatIssue } from "../../model/beatcheck";
+import { type BeatIssue, beatTag, checkMeasureDurations, describeBeatIssue } from "../../model/beatcheck";
 import { GlyphCodes } from "../../smufl/smufl";
 import type { BreakMark, SyncEntry, SyncIndex } from "../sync";
 import { deleteBreak, insertBreak } from "./breaks";
@@ -92,8 +92,8 @@ export interface VisualHost {
   syncFresh(): boolean;
   setStatus(text: string): void;
   saveSettings(): void;
-  /** 识别核对时的可疑项导航（F8 与拍数不对的小节一起走）：做了返回 true；没有可疑项返回 false，控制器只走拍数。`beats` 是拍数问题的个数 */
-  nextDoubt?(dir: 1 | -1, beats: number): boolean;
+  /** 识别核对时的可疑项（F8 与拍数不对的小节按原文位置一起走）：各在原文的哪儿、怎么跳过去 */
+  doubtStops?(): { at: number; go(): void }[];
 }
 
 const XML_ENT: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" };
@@ -288,7 +288,7 @@ export class VisualEditController {
     return out.sort((a, b) => a.at - b.at);
   }
 
-  /** 计数标签（F8 / Shift+F8 同此）：选中下一处 / 上一处拍数不对的小节的第一个音；空小节把插入光标放进两条小节线中间。 */
+  /** 计数标签：选中下一处拍数不对的小节的第一个音；空小节把插入光标放进两条小节线中间。 */
   private nextBeatIssue(dir: 1 | -1 = 1): void {
     const marks = this.beatMarks();
     if (marks.length === 0) {
@@ -296,7 +296,10 @@ export class VisualEditController {
       return;
     }
     this.beatCursor = ((this.beatCursor < 0 && dir < 0 ? 0 : this.beatCursor) + dir + marks.length) % marks.length;
-    const m = marks[this.beatCursor]!;
+    this.goBeat(marks[this.beatCursor]!);
+  }
+
+  private goBeat(m: ReturnType<VisualEditController["beatMarks"]>[number]): void {
     if ("empty" in m) {
       this.select(m.empty.from + 1, m.empty.from + 1);
       this.host.setStatus(tr("beat.emptyCursor"));
@@ -451,7 +454,7 @@ export class VisualEditController {
 
   /** 拍数不对的小节：它的音符按行各圈一个淡红底；空小节圈前后两个音之间的空当。 */
   private drawBeatIssues(issues: readonly BeatIssue[], empties: readonly { from: number; to: number }[]): void {
-    const perPage = new Map<SVGSVGElement, { box: Box; title: string }[]>(this.pages.map((p) => [p, []]));
+    const perPage = new Map<SVGSVGElement, { box: Box; title: string; tag?: string }[]>(this.pages.map((p) => [p, []]));
     for (const issue of issues) {
       const boxes: { svg: SVGSVGElement; box: Box }[] = [];
       for (const id of issue.ids) {
@@ -463,7 +466,9 @@ export class VisualEditController {
         else boxes.push(hit);
       }
       const title = tr("beat.measure", { n: issue.measureIndex + 1, issue: describeBeatIssue(issue) });
-      for (const b of boxes) perPage.get(b.svg)?.push({ box: b.box, title });
+      const tag = beatTag(issue);
+      // 一小节跨了几处（换行、几行谱）只在第一处标差额
+      boxes.forEach((b, k) => perPage.get(b.svg)?.push({ box: b.box, title, ...(k === 0 ? { tag } : {}) }));
     }
     // 空小节：谱面上没有它的音符，框住前后两个音之间的空当（前后不在同一行就在前一个音后面留一格）
     const notes = empties.length ? this.host.sync.ordered().filter((e) => e.kind === "note") : [];
@@ -2288,10 +2293,22 @@ export class VisualEditController {
     return true;
   }
 
-  /** F8 / Shift+F8：下一处 / 上一处问题。识别核对时可疑项与拍数不对的小节一起走（`VisualHost.nextDoubt`），否则只走拍数。 */
+  /**
+   * F8 / Shift+F8：下一处 / 上一处问题（PhotoScore 的坏小节导航）。拍数不对的小节与识别核对的可疑项（`VisualHost.doubtStops`）
+   * 并成一张按原文位置排的表，从当前选区往后 / 往前找，到头绕回。
+   */
   private nextIssue(dir: 1 | -1): boolean {
-    if (this.host.nextDoubt?.(dir, this.beatMarks().length)) return true;
-    this.nextBeatIssue(dir);
+    const stops: { at: number; go(): void }[] = [
+      ...this.beatMarks().map((m) => ({ at: m.at, go: () => this.goBeat(m) })),
+      ...(this.host.doubtStops?.() ?? []),
+    ].sort((a, b) => a.at - b.at);
+    if (!stops.length) {
+      this.host.setStatus(tr("issue.none"));
+      return true;
+    }
+    const sel = this.host.view.state.selection.main;
+    const pick = dir > 0 ? stops.find((x) => x.at > sel.from) ?? stops[0]! : [...stops].reverse().find((x) => x.at < sel.from) ?? stops[stops.length - 1]!;
+    pick.go();
     return true;
   }
 

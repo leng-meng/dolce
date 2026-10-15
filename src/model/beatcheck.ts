@@ -139,3 +139,15 @@ export function describeBeatIssue(i: BeatIssue): string {
   const diff = i.got - i.want;
   return t(diff < 0 ? "beat.short" : "beat.over", { d: beatText(Math.abs(diff)), want: beatText(i.want), got: beatText(i.got) });
 }
+
+/** 红框角上标的差额（识谱软件那样一眼看出差多少：`−♩`、`+♪`、`+𝅗𝅥.`）；凑不成一个音符的写拍数（`−1 1/3`）。 */
+export function beatTag(i: BeatIssue): string {
+  const diff = i.got - i.want;
+  const sign = diff < 0 ? "−" : "+";
+  const q = Math.abs(diff);
+  const NOTES: [number, string][] = [
+    [4, "\u{1D15D}"], [3, "\u{1D15E}."], [2, "\u{1D15E}"], [1.5, "♩."], [1, "♩"], [0.75, "♪."], [0.5, "♪"], [0.25, "\u{1D161}"],
+  ];
+  const hit = NOTES.find(([v]) => Math.abs(v - q) < EPS);
+  return sign + (hit ? hit[1] : beatText(q));
+}

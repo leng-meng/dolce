@@ -449,7 +449,7 @@ function buildHitLayer(score: RecognizedScore, stats: Stats, inserted: Reproject
 export function renderRecognitionSvg(
   bin: Binary, score: RecognizedScore, view: RecogView = "inplace",
   /** 小节时值自检报出的小节（`omr/beats.ts`）：各视图都标出，悬停显示说明 */
-  beatMarks: readonly { boxes: readonly Rect[]; text: string }[] = [],
+  beatMarks: readonly { boxes: readonly Rect[]; text: string; tag?: string }[] = [],
   /** 核对时改过的东西（`reproject.ts`）：`score` 已是重投影过的那份，这里给新插的音与改过的歌词 */
   edits?: Pick<Reprojected, "inserted" | "lyricFixes">,
 ): SVGSVGElement {
@@ -462,13 +462,24 @@ export function renderRecognitionSvg(
     g.setAttribute("class", "omr-beat");
     const pad = stats.noteH * 0.35;
     for (const m of beatMarks) {
-      for (const b of m.boxes) {
+      m.boxes.forEach((b, k) => {
         const r = svgRect(b.x - pad, b.y - pad, b.w + pad * 2, b.h + pad * 2, { rx: String(pad) });
         const t = document.createElementNS(SVG_NS, "title");
         t.textContent = m.text;
         r.appendChild(t);
         g.appendChild(r);
-      }
+        // 差额标在第一处框的右上角（`−♩`），同可视化编辑的红框
+        if (k === 0 && m.tag) {
+          const tx = document.createElementNS(SVG_NS, "text");
+          tx.setAttribute("x", String(b.x + b.w + pad));
+          tx.setAttribute("y", String(b.y - pad * 1.2));
+          tx.setAttribute("text-anchor", "end");
+          tx.setAttribute("font-size", String(stats.noteH * 0.6));
+          tx.setAttribute("class", "omr-beat-tag");
+          tx.textContent = m.tag;
+          g.appendChild(tx);
+        }
+      });
     }
     svg.appendChild(g);
   }

@@ -190,13 +190,13 @@ export function clearOverlay(svgs: Iterable<SVGSVGElement>, kind?: string, keep?
 
 /** 一页上拍数不对的红框整组换新。与上次画的一样就不动——焦点一进谱面就会重画叠加层，
  *  若把按下鼠标时点中的红框换掉，这一下点击就丢了（`click` 要求按下与抬起落在同一节点上）。 */
-export function setBeatIssues(svg: SVGSVGElement, items: readonly { box: Box; title: string }[]): void {
+export function setBeatIssues(svg: SVGSVGElement, items: readonly { box: Box; title: string; tag?: string }[]): void {
   const layer = layerOf(svg);
-  const sig = JSON.stringify(items.map((i) => [i.box.x, i.box.y, i.box.w, i.box.h, i.title].map((v) => (typeof v === "number" ? Math.round(v * 10) : v))));
+  const sig = JSON.stringify(items.map((i) => [i.box.x, i.box.y, i.box.w, i.box.h, i.title, i.tag ?? ""].map((v) => (typeof v === "number" ? Math.round(v * 10) : v))));
   if (layer.dataset.beats === sig) return;
   layer.dataset.beats = sig;
-  for (const el of [...layer.querySelectorAll(".vis-beat")]) el.remove();
-  for (const i of items) drawBeatIssue(svg, i.box, i.title);
+  for (const el of [...layer.querySelectorAll(".vis-beat, .vis-beat-tag")]) el.remove();
+  for (const i of items) drawBeatIssue(svg, i.box, i.title, i.tag);
 }
 
 function el<K extends keyof SVGElementTagNameMap>(tag: K, attrs: Record<string, string | number>): SVGElementTagNameMap[K] {
@@ -255,8 +255,8 @@ export function drawBlock(svg: SVGSVGElement, box: Box): void {
   }));
 }
 
-/** 拍数对不上的小节：淡红底，悬停显示说明。 */
-function drawBeatIssue(svg: SVGSVGElement, box: Box, title: string): void {
+/** 拍数对不上的小节：淡红底，悬停显示说明；右上角标差额（`tag`，如 `−♩`）。 */
+function drawBeatIssue(svg: SVGSVGElement, box: Box, title: string, tag?: string): void {
   const pad = box.h * 0.2;
   const r = el("rect", {
     class: "vis-beat",
@@ -268,6 +268,11 @@ function drawBeatIssue(svg: SVGSVGElement, box: Box, title: string): void {
   // 垫在叠加层最底下，不挡光标与方块；点击由 `hitThroughOverlay` 透过它落到音符上
   const layer = layerOf(svg);
   layer.insertBefore(r, layer.firstChild);
+  if (tag) {
+    const tx = el("text", { class: "vis-beat-tag", x: box.x + box.w + pad, y: box.y - pad * 1.2, "text-anchor": "end", "font-size": box.h * 0.55 });
+    tx.textContent = tag;
+    layer.appendChild(tx);
+  }
 }
 
 /** 事件点中的谱面元素，透过拍数不对的红框（红框要接 hover 显示说明，点击却该落到框里的音符上）。 */

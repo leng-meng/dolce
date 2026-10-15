@@ -7,6 +7,7 @@ import { defaultKeymap, history, historyKeymap } from "@codemirror/commands";
 import { sniffDialect, type Dialect } from "../pu";
 import type { ElementId, ScoreDoc } from "../model/doc";
 import { applyBreaks } from "../model/breaks";
+import { locate } from "../model/edit";
 import { JpwFile, LayoutSection } from "../jpword/jpwfile";
 import { measureDocument, PaintResources, ScorePainter, type SyncPaintRequest } from "../layout/painter";
 import { computeStyle, sanitizeLayer, upsertRule, type StyleRule } from "../style/cascade";
@@ -1126,6 +1127,11 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return this._syncEntryAt(target);
   }
 
+  /** F8 导航：识别核对的可疑项（`OmrController.doubtStops`） */
+  doubtStops(): { at: number; go(): void }[] {
+    return this.omr.doubtStops();
+  }
+
   noteEl(id: ElementId): SVGGraphicsElement | null {
     if (this.mode === "recognize") return this.omr.hitFor("note", id);
     if (this.mode === "mixed") {
@@ -1208,6 +1214,12 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   private _recognizeElOf(entry: SyncEntry): SVGGraphicsElement | null {
     if (entry.kind === "note") return this.omr.hitFor("note", entry.id);
     if (entry.kind === "lyric") return this.omr.hitFor("lyric", entry.id, entry.verse ?? 0);
+    // 五线谱对照：小节末那条线（条目借本小节最后一个音的 id）按「收尾的是第几小节」对到源图上的那条
+    if (entry.kind === "barline" && entry.edge !== "before" && this.omr.hasStaffResult) {
+      const doc = this.syncDoc();
+      const l = doc ? locate(doc, entry.id) : null;
+      return l ? this.omr.barlineHit(l.mi) : null;
+    }
     return null;
   }
 

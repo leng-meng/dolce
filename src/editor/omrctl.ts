@@ -8,6 +8,7 @@
 // omr/emit.ts 的 emitter，绝不重跑识别。输出格式的下拉与打开文件后切格式是同一个
 // （`formatswitch.ts`），这里作为它的一种来源（`FormatSource`）。
 import { recognizedBeatIssues, type RecognizedBeatIssue } from "../omr/beats";
+import { beatTag } from "../model/beatcheck";
 import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
@@ -16,7 +17,8 @@ import {
   type OmrFormat, type RecogView,
 } from "../omr";
 import type { Binary, JpwMeta, RecognizedScore } from "../omr";
-import type { ElementId, ScoreDoc } from "../model/doc";
+import type { Chord, ElementId, ScoreDoc } from "../model/doc";
+import type { StaffBarMark, StaffMark } from "../rasteromr/overlay";
 import type { PlayPoint } from "./player";
 import type { DocFormatId } from "./formats";
 import { confirmDiscardEdits, type FormatOption, type FormatSource, type FormatSwitch } from "./formatswitch";
@@ -975,7 +977,7 @@ export class OmrController implements FormatSource {
     this.renderSeq++;
     const score = this.shown?.score ?? this.score;
     // 可视化编辑开着时拍数红框由它按当前模型画（随改随变）；识别完那一份只在不能编辑时画
-    const marks = this.host.visualEnabled() ? [] : this.beatMarks;
+    const marks = this.host.visualEnabled() ? [] : this.beatMarks.map((m) => ({ ...m, tag: beatTag(m.issue) }));
     this.host.renderPagesWith(1, () => renderRecognitionSvg(bin, score, this.view, marks, this.shown ?? undefined), {
       aspectRatio: () => `${bin.w} / ${bin.h}`,
       position: "relative", // 浮窗绝对定位相对此容器
@@ -1008,6 +1010,32 @@ export class OmrController implements FormatSource {
     el.textContent = t("omr.doubts", { n });
   }
 
+  /** F8 导航用：各处可疑项在原文的位置（按点选映射）与跳过去的办法（同点命中框）。不在核对视图、没有映射时为空 */
+  doubtStops(): { at: number; go(): void }[] {
+    const score = this.shown?.score ?? this.score;
+    if (!score || this.host.mode !== "recognize" || !this.meta) return [];
+    const items = doubtItems(score, this.shown?.lyricFixes ?? []);
+    const pane = document.getElementById("score-pane");
+    const out: { at: number; go(): void }[] = [];
+    items.forEach((it, k) => {
+      const sel = it.verse === null
+        ? `.omr-hits rect[data-kind="note"][data-i="${it.i}"]`
+        : `.omr-hits rect[data-kind="lyric"][data-i="${it.i}"][data-verse="${it.verse}"]`;
+      const hit = pane?.querySelector<SVGRectElement>(sel);
+      const range = hit ? this.rangeOfHit(hit) : null;
+      if (!hit || !range) return;
+      out.push({ at: range.from, go: () => this.jumpDoubt(hit, k, items.length, it) });
+    });
+    return out;
+  }
+
+  private jumpDoubt(hit: SVGRectElement, k: number, n: number, it: { i: number; verse: number | null }): void {
+    hit.scrollIntoView({ block: "center", inline: "nearest" });
+    const r = hit.getBoundingClientRect();
+    hit.dispatchEvent(new MouseEvent("click", { bubbles: true, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }));
+    this.host.setStatus(t("omr.doubtAt", { i: k + 1, n }) + `${hit.closest("svg")?.querySelector(`.omr-doubt-box[data-i="${it.i}"]${it.verse === null ? ":not([data-verse])" : `[data-verse="${it.verse}"]`} title`)?.textContent ?? ""}`);
+  }
+
   /** 跳到下一处标黄的音 / 字：选中它（同点命中框）并滚到眼前。 */
   nextDoubt(): void {
     const score = this.shown?.score ?? this.score;
@@ -1031,44 +1059,152 @@ export class OmrController implements FormatSource {
   /** 当前模型的和弦 id → 它写在 `<note id>` 里的识别 id（对照框按它认） */
   private staffIdOf = new Map<ElementId, string>();
 
-  /** 逐页画：页面位图 + 每个识别出的音一个框，框上标它现在的音名（改过标青、删掉划掉）。 */
+  /** 识别（或上次重建）刚落地时各音的样子（识别 id → 音高 + 时值的签名）：对照视图按它判「改过」。按原文缓存 */
+  private staffBase: { text: string; sig: Map<string, string> } | null = null;
+
+  private staffBaseSig(loadDoc: (xml: string) => ScoreDoc, surfaceOf: (o: object) => Element | undefined): Map<string, string> | null {
+    const text = this.staffEmitted;
+    if (text === null) return null;
+    if (this.staffBase?.text !== text) {
+      const sig = new Map<string, string>();
+      try {
+        for (const part of loadDoc(text).songs[0]?.parts ?? []) for (const m of part.measures) for (const el of m.elements) {
+          if (el.kind !== "chord") continue;
+          const id = surfaceOf(el)?.getAttribute("id");
+          if (id) sig.set(id, chordSig(el));
+        }
+      } catch {
+        return null;
+      }
+      this.staffBase = { text, sig };
+    }
+    return this.staffBase.sig;
+  }
+
+  /** 逐页画：页面位图 + 每个识别出的音一个框，框上标它现在的音名（改过标青、删掉划掉、新插的插值画虚框）；小节线一条竖线。 */
   private async renderStaffPages(): Promise<void> {
     const res = this.staffResult;
     if (!res) return;
     const { renderStaffRecognitionPage } = await import("../rasteromr/overlay");
     const { surfaceOf } = await import("../model/xmlsurface");
+    const { loadScoreDoc } = await import("../model/fromxml");
     const doc = this.host.currentScoreDoc();
+    const base = this.staffBaseSig(loadScoreDoc, surfaceOf);
     const now = new Map<string, { label: string; changed: boolean }>();
+    const pitchLabel = (p: { step: string; alter: number; octave: number } | undefined): string =>
+      p ? `${p.step}${p.alter > 0 ? "♯".repeat(p.alter) : "♭".repeat(-p.alter)}${p.octave}` : t("omr.restLabel");
     this.staffIdOf.clear();
+    /** 和弦 id → 全曲第几小节（小节线按它认）；识别 id（和弦里每个音各一个）→ 和弦 id */
+    const measureOf = new Map<ElementId, number>();
+    const chordOfOmr = new Map<string, ElementId>();
+    /** 没有识别 id 的（新插的）：按前后有框的音插值画 */
+    const inserted: { id: ElementId; label: string; prev: string | null; next: string | null; nth: number; diat: number | null }[] = [];
+    const DIAT: Record<string, number> = { C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6 };
+    const diatOf = (p: { step: string; octave: number } | undefined): number | null => (p ? p.octave * 7 + DIAT[p.step]! : null);
     for (const part of doc?.songs[0]?.parts ?? []) {
-      for (const m of part.measures) {
+      const lastWithId = new Map<number, string>();
+      const pending = new Map<number, typeof inserted>();
+      part.measures.forEach((m, mi) => {
         for (const el of m.elements) {
           if (el.kind !== "chord") continue;
+          measureOf.set(el.id, mi);
           const nodes: (Element | undefined)[] = el.notes.length ? el.notes.map((n) => surfaceOf(n) ?? surfaceOf(el)) : [surfaceOf(el)];
+          let first: string | null = null;
           nodes.forEach((node, k) => {
             const id = node?.getAttribute("id");
             if (!id || !res.noteBoxes.has(id)) return;
+            if (first === null) first = id;
             if (k === 0) this.staffIdOf.set(el.id, id);
+            chordOfOmr.set(id, el.id);
             const orig = res.noteBoxes.get(id)!;
             const p = el.notes[k]?.pitch;
-            const label = el.rest || !p ? t("omr.restLabel") : `${p.step}${p.alter > 0 ? "♯".repeat(p.alter) : "♭".repeat(-p.alter)}${p.octave}`;
-            const changed = el.rest ? !orig.rest : !p || orig.rest || p.step !== orig.step || p.octave !== orig.octave || p.alter !== orig.alter;
+            const label = el.rest ? t("omr.restLabel") : pitchLabel(p);
+            // 有识别落地时的样子就整个和弦比（音高、时值、附点、连音、倚音、和弦音数）；没有（项目重开）只比音高
+            const was = k === 0 ? base?.get(id) : undefined;
+            const changed = was !== undefined ? was !== chordSig(el)
+              : el.rest ? !orig.rest : !p || orig.rest || p.step !== orig.step || p.octave !== orig.octave || p.alter !== orig.alter;
             if (!now.has(id)) now.set(id, { label, changed });
           });
+          const voice = el.voice;
+          if (first !== null) {
+            for (const x of pending.get(voice) ?? []) x.next = first;
+            pending.delete(voice);
+            lastWithId.set(voice, first);
+          } else if (!el.grace) {
+            const list = pending.get(voice) ?? [];
+            const it = { id: el.id, label: el.rest ? t("omr.restLabel") : pitchLabel(el.notes[0]?.pitch), prev: lastWithId.get(voice) ?? null, next: null, nth: list.length, diat: diatOf(el.notes[0]?.pitch) };
+            list.push(it);
+            pending.set(voice, list);
+            inserted.push(it);
+          }
         }
-      }
+      });
     }
+    // 新插的音的框：同页前后两个有框的音之间等分（不在同一行时接在前一个后面）；纵向按与前一个音的音级差、本行谱线间距挪
+    const omrPitch = new Map<string, number | null>();
+    for (const part of doc?.songs[0]?.parts ?? []) for (const m of part.measures) for (const el of m.elements) {
+      if (el.kind === "chord" && this.staffIdOf.has(el.id)) omrPitch.set(this.staffIdOf.get(el.id)!, diatOf(el.notes[0]?.pitch));
+    }
+    const insertedByPage = new Map<number, StaffMark[]>();
+    for (const it of inserted) {
+      const pb = it.prev ? res.noteBoxes.get(it.prev) : undefined;
+      const nb = it.next ? res.noteBoxes.get(it.next) : undefined;
+      const ref = pb ?? nb;
+      if (!ref) continue;
+      const w = ref.box.right - ref.box.left;
+      const hgt = ref.box.bottom - ref.box.top;
+      const sameRow = pb && nb && pb.page === nb.page && Math.abs((pb.box.top + pb.box.bottom) / 2 - (nb.box.top + nb.box.bottom) / 2) < hgt * 6 && nb.box.left > pb.box.right;
+      const count = inserted.filter((x) => x.prev === it.prev && x.next === it.next).length;
+      const cx = sameRow ? pb!.box.right + ((nb!.box.left - pb!.box.right) * (it.nth + 1)) / (count + 1)
+        : pb ? pb.box.right + w * (1.6 + it.nth * 1.4) : nb!.box.left - w * (1.6 + (count - 1 - it.nth) * 1.4);
+      const refDiat = omrPitch.get((pb ? it.prev : it.next)!) ?? null;
+      const k = res.pages[ref.page]?.scale ?? 1;
+      const cyRef = (ref.box.top + ref.box.bottom) / 2;
+      const st = (res.pages[ref.page]?.result.page.staves ?? []).find((s) => s.lineYs.length >= 5 && cyRef / k > s.lineYs[0]! - (s.lineYs[4]! - s.lineYs[0]!) && cyRef / k < s.lineYs[4]! + (s.lineYs[4]! - s.lineYs[0]!));
+      const half = st ? ((st.lineYs[4]! - st.lineYs[0]!) / 8) * k : hgt / 2;
+      const cy = it.diat !== null && refDiat !== null ? cyRef - (it.diat - refDiat) * half : cyRef;
+      const list = insertedByPage.get(ref.page) ?? [];
+      list.push({ id: "", elementId: it.id, box: { left: cx - w / 2, right: cx + w / 2, top: cy - hgt / 2, bottom: cy + hgt / 2 }, label: it.label, state: "inserted" });
+      insertedByPage.set(ref.page, list);
+    }
+    // 小节线：识别出的每一小节的右端。按小节里最后一个音现在落在第几小节认；它与下一小节的第一个音落在同一小节 = 这条线删掉了（并小节）
+    const boxKey = (pg: number, b: { left: number; top: number }): string => `${pg}:${Math.round(b.left)}:${Math.round(b.top)}`;
+    const idAt = new Map<string, string>();
+    for (const [id, b] of res.noteBoxes) idAt.set(boxKey(b.page, b.box), id);
+    const measureOfSym = (pg: number, k: number, box: { left: number; top: number } | undefined): number | undefined => {
+      const id = box ? idAt.get(boxKey(pg, { left: box.left * k, top: box.top * k })) ?? idAt.get(boxKey(pg, box)) : undefined;
+      const ch = id ? chordOfOmr.get(id) : undefined;
+      return ch === undefined ? undefined : measureOf.get(ch);
+    };
+    const barsByPage = new Map<number, StaffBarMark[]>();
+    res.pages.forEach((pg, i) => {
+      const k = pg.scale ?? 1;
+      const out: StaffBarMark[] = [];
+      for (const st of pg.result.page.staves) {
+        if (st.lineYs.length < 5) continue;
+        // 小节里的音按横坐标取最右 / 最左那个（`Bar.notes` 不按横坐标排）
+        const edge = (bar: (typeof st.bars)[number] | undefined, right: boolean): { left: number; top: number } | undefined =>
+          bar?.notes.reduce<(typeof bar.notes)[number] | undefined>((a, b) => (!a || (right ? b.box.left > a.box.left : b.box.left < a.box.left) ? b : a), undefined)?.box;
+        st.bars.forEach((bar, bi) => {
+          const last = measureOfSym(i, k, edge(bar, true));
+          if (last === undefined) return;
+          const nextFirst = measureOfSym(i, k, edge(st.bars[bi + 1], false));
+          out.push({ x: bar.right * k, top: st.lineYs[0]! * k, bottom: st.lineYs[4]! * k, measure: nextFirst !== undefined && nextFirst === last ? null : last });
+        });
+      }
+      barsByPage.set(i, out);
+    });
     const pages = res.pages;
     const view = this.view;
     this.host.renderPagesWith(pages.length, (i) => {
       const bin = pages[i]!.result.raster!.bin;
-      const marks = [...res.noteBoxes].filter(([, b]) => b.page === i).map(([id, b]) => {
+      const marks: StaffMark[] = [...res.noteBoxes].filter(([, b]) => b.page === i).map(([id, b]) => {
         const cur = now.get(id);
         return cur
           ? { id, box: b.box, label: cur.label, ...(cur.changed ? { state: "edited" as const } : {}) }
           : { id, box: b.box, label: b.rest ? t("omr.restLabel") : `${b.step}${b.octave}`, state: "deleted" as const };
       });
-      return renderStaffRecognitionPage(bin, marks, view);
+      return renderStaffRecognitionPage(bin, [...marks, ...(insertedByPage.get(i) ?? [])], view, barsByPage.get(i) ?? []);
     }, {
       aspectRatio: (i) => `${pages[i]!.result.raster!.bin.w} / ${pages[i]!.result.raster!.bin.h}`,
       onPage: (svg) => this.wireStaffInteraction(svg),
@@ -1077,6 +1213,19 @@ export class OmrController implements FormatSource {
   }
 
   private wireStaffInteraction(svg: SVGSVGElement): void {
+    // 悬停：指针下的命中框描橙（同简谱核对）
+    let hovered: Element | null = null;
+    svg.addEventListener("mousemove", (e) => {
+      const r = e.target instanceof Element ? e.target.closest(".omr-hits rect") : null;
+      if (r === hovered) return;
+      hovered?.classList.remove("omr-hover");
+      hovered = r;
+      hovered?.classList.add("omr-hover");
+    });
+    svg.addEventListener("mouseleave", () => {
+      hovered?.classList.remove("omr-hover");
+      hovered = null;
+    });
     svg.addEventListener("click", (e) => {
       const r = e.target instanceof Element ? e.target.closest<SVGRectElement>(".omr-hits rect") : null;
       const omrId = r?.getAttribute("data-omr");
@@ -1151,8 +1300,10 @@ export class OmrController implements FormatSource {
   hitFor(kind: "note" | "lyric", id: ElementId, verse = 0): SVGGraphicsElement | null {
     const pane = document.getElementById("score-pane");
     if (this.staffResult) {
-      const omrId = kind === "note" ? this.staffIdOf.get(id) : undefined;
-      return omrId ? pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-omr="${omrId}"]`) ?? null : null;
+      if (kind !== "note") return null;
+      const omrId = this.staffIdOf.get(id);
+      return omrId ? pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-omr="${omrId}"]`) ?? null
+        : pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-id="${id}"]`) ?? null;
     }
     const i = this.idMapOf(this.host.currentScoreDoc())?.toI.get(id);
     if (kind === "lyric") {
@@ -1160,6 +1311,12 @@ export class OmrController implements FormatSource {
     }
     if (i !== undefined) return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-i="${i}"]`) ?? null;
     return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-id="${id}"]`) ?? null;
+  }
+
+  /** 五线谱对照：第 `mi` 小节收尾那条小节线的命中框（几个谱表各一条，取第一条）。 */
+  barlineHit(mi: number): SVGGraphicsElement | null {
+    if (!this.staffResult) return null;
+    return document.getElementById("score-pane")?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="barline"][data-measure="${mi}"]`) ?? null;
   }
 
   /** 页眉命中框（标题、著作者），按字对上索引里的页眉条目（同 `App._bindHeader`）。 */
@@ -1467,6 +1624,13 @@ export class OmrController implements FormatSource {
     this.host.syncViewModes();
     this.syncSide(null);
   }
+}
+
+/** 一个和弦在对照视图里算不算「改过」的签名：音高（各音）、休止、时值、附点、连音、倚音。 */
+function chordSig(c: Chord): string {
+  const ps = c.rest ? "r" : c.notes.map((n) => (n.pitch ? `${n.pitch.step}${n.pitch.alter}${n.pitch.octave}` : "?")).join(",");
+  const tm = c.duration.timeMod ? `${c.duration.timeMod.actual}:${c.duration.timeMod.normal}` : "";
+  return `${ps}/${c.duration.type ?? ""}${c.duration.dots}/${tm}/${c.grace ? "g" : ""}`;
 }
 
 const flatOrderCache = new WeakMap<RecognizedScore, number[]>();
