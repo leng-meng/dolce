@@ -3,6 +3,7 @@
 // 这是位图路的第一块判据，后面所有几何门槛都按这里量出来的线距写
 // ——与矢量路同一个口径（`page.ts`：「一切长度都是小节线高度 H 的比例」）。
 import type { Binary } from "../omrkit/types";
+import { definePortable } from "./portablefn";
 
 /** 页面的基本单位。musicpp `omr/pixel.cpp::findUnit` 量的就是这两个。 */
 export interface RasterUnit {
@@ -258,6 +259,33 @@ export function groupStaves(lines: StaffLineRun[]): StaffGroup[] {
  * 量不到的桶从两侧插值、一侧都没有就取最近的。返回 `x → 五条线的 y`（桶中心之间线性插值）。
  */
 export function localLineModel(bin: Binary, lineYs: number[], left: number, right: number, unit: RasterUnit): (x: number) => number[] {
+  return lineModelAt(localLineData(bin, lineYs, left, right, unit));
+}
+
+/** `localLineModel` 量出来的数据（普通对象，可跨线程传）：`sm` 为空表示一桶都没量到、五线取整行的 `lineYs`。 */
+export interface LineModelData {
+  lineYs: number[];
+  x0: number;
+  bw: number;
+  sm: Float64Array | null;
+}
+
+/** 按数据造 `x → 五条线的 y`（桶中心之间线性插值）。 */
+export const lineModelAt = definePortable("lineModel", (m: LineModelData): ((x: number) => number[]) => {
+  const { lineYs, x0, bw, sm } = m;
+  if (!sm) return () => lineYs;
+  const nb = sm.length;
+  return (x: number) => {
+    const t = (x - x0) / bw - 0.5;
+    const i = Math.max(0, Math.min(nb - 1, Math.floor(t)));
+    const j = Math.min(nb - 1, i + 1);
+    const f = Math.max(0, Math.min(1, t - i));
+    const d = sm[i] + (sm[j] - sm[i]) * f;
+    return lineYs.map((y) => y + d);
+  };
+});
+
+function localLineData(bin: Binary, lineYs: number[], left: number, right: number, unit: RasterUnit): LineModelData {
   const sp = unit.space;
   const bw = Math.max(4, Math.round(sp));
   const x0 = Math.max(0, Math.round(left));
@@ -301,7 +329,7 @@ export function localLineModel(bin: Binary, lineYs: number[], left: number, righ
     if (ds.length >= 3) shift[b] = ds[ds.length >> 1];
   }
   const idx = [...shift.keys()].filter((i) => !isNaN(shift[i]));
-  if (!idx.length) return () => lineYs;
+  if (!idx.length) return { lineYs, x0, bw, sm: null };
   for (let i = 0; i < nb; i++) {
     if (!isNaN(shift[i])) continue;
     const lo = idx.filter((j) => j < i).pop();
@@ -310,14 +338,7 @@ export function localLineModel(bin: Binary, lineYs: number[], left: number, righ
   }
   // 相邻三桶取中位，压掉单桶的跳变
   const sm = shift.map((_, i) => [shift[Math.max(0, i - 1)], shift[i], shift[Math.min(nb - 1, i + 1)]].sort((a, c) => a - c)[1]);
-  return (x: number) => {
-    const t = (x - x0) / bw - 0.5;
-    const i = Math.max(0, Math.min(nb - 1, Math.floor(t)));
-    const j = Math.min(nb - 1, i + 1);
-    const f = Math.max(0, Math.min(1, t - i));
-    const d = sm[i] + (sm[j] - sm[i]) * f;
-    return lineYs.map((y) => y + d);
-  };
+  return { lineYs, x0, bw, sm };
 }
 
 /** 按**相邻两条线的相对位置**把 y 换成音级位置：第一线为 0、往下每半格 +1；线外按最近的线距外推。 */

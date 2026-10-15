@@ -14,6 +14,7 @@ import { recognizeRasterSong, type RasterSongResult } from "./song";
 import { ocrHarmonyStrips, ocrJianpuStrips, ocrLabelStrips, ocrLyricStrips, ocrTimeStrips, ocrWordStrips, ocrHeaderStrips, detectPageTexts } from "./ocrlive";
 import type { TimeStrip } from "./timesig";
 import { isPdf } from "../omrkit/pdf";
+import { PagePool, type FromWorker, type PagePort } from "./pagepool";
 
 // 在线 OCR 要推理运行时：自己装上，不靠编辑器先 import 了 `omr/index`
 installBrowserOmr();
@@ -164,14 +165,20 @@ export async function recognizeRasterPdfs(
     cancelled?: () => boolean;
     /** 第一份底本判路时栅格化过的页（`probeRasterStaff`）：用一次就丢 */
     firstPages?: Map<number, RasterPage | null>;
+    /** 并行路数（缺省按核数，见 `pagePoolSize`；1 = 逐页串行） */
+    workers?: number;
   } = {},
 ): Promise<RasterSongResult> {
   const look = await glyphLookup();
   const ocr = paddleOcrBackend();
   const sources = [];
   for (const b of pdfs) sources.push(await openRasterPdf(b));
+  // 多页并行（`pagepool.ts`）：一页的不开；起不来 Worker 就串行
+  const pageCount = sources.reduce((n, s) => n + (s.pdf.numPages as number), 0);
+  const pool = pageCount > 1 ? browserPagePool(Math.min(pageCount, opts.workers ?? pagePoolSize())) : null;
   try {
     return await recognizeRasterSong(sources.map((s) => ({ pdf: s.pdf, OPS: s.OPS })), look, {
+      pool: pool ?? undefined,
       title: opts.title,
       onPage: opts.onPage,
       cancelled: opts.cancelled,
@@ -194,7 +201,32 @@ export async function recognizeRasterPdfs(
       },
     });
   } finally {
+    pool?.terminate();
     for (const s of sources) s.pdf.destroy?.();
+  }
+}
+
+/** 并行路数：留一个核给主线程（OCR、pdf.js 取图在主线程），最多 4 路（每页在途要几百 MB 的整页数组）。 */
+function pagePoolSize(): number {
+  const hw = globalThis.navigator?.hardwareConcurrency ?? 4;
+  return Math.max(1, Math.min(4, hw - 1));
+}
+
+/** 起 `n` 个页 Worker；起不来（不支持 module Worker 等）回 null，调用方串行。 */
+function browserPagePool(n: number): PagePool | null {
+  if (n < 2 || typeof Worker === "undefined") return null;
+  try {
+    const ports: PagePort[] = Array.from({ length: n }, () => {
+      const w = new Worker(new URL("./pageworker.ts", import.meta.url), { type: "module" });
+      let handler: ((m: FromWorker) => void) | null = null;
+      w.onmessage = (e: MessageEvent<FromWorker>) => handler?.(e.data);
+      w.onerror = (e) => handler?.({ t: "crash", error: e.message || "Worker 出错" });
+      return { post: (m) => w.postMessage(m), onMessage: (h) => (handler = h), terminate: () => w.terminate() };
+    });
+    return new PagePool(ports);
+  } catch (e) {
+    console.warn("[OMR] 页 Worker 起不来，改逐页识别：", e);
+    return null;
   }
 }
 

@@ -365,8 +365,8 @@ function noteXmlRaw(n: StaffNote, dur: number, staffNo = 0, withVoice = false, v
   const stopNo = (n.slurStopFrom && partStaffNo.get(n.slurStopFrom)) || slurNo;
   // 带弧号的（`markSlurNotes` 给的）先写成临时的 `arc` 属性，整个声部写完后由 `renumberSlurs` 配对、重编号
   // 落单半截再带上 `edge`、`ab`（几何位置与朝向，见 `slurOrphans`）
-  const arcs = (ids: number[] | undefined) => (ids?.length ? ids : [0]);
-  const arcAttr = (id: number) => {
+  const arcs = (ids: string[] | undefined) => (ids?.length ? ids : [""]);
+  const arcAttr = (id: string) => {
     if (!id) return "";
     const o = n.slurOrphans?.find((x) => x.id === id);
     return ` arc="${id}"` + (o ? ` edge="${o.edge}" ab="${o.above ? 1 : 0}"` : "");
@@ -456,7 +456,7 @@ const ARTICULATION: Record<string, string> = {
  * 没有弧号的（不走 `markSlurNotes` 的路）原样不动。
  */
 export function renumberSlurs(body: string, sysOfBar?: number[]): string {
-  const re = /<slur type="(start|stop)" number="(\d+)" arc="(\d+)"(?: edge="(\w+)" ab="(\d)")?([^>]*)\/>/g;
+  const re = /<slur type="(start|stop)" number="(\d+)" arc="([\d.]+)"(?: edge="(\w+)" ab="(\d)")?([^>]*)\/>/g;
   // 第几小节（按 `<measure` 计数）
   const bars = [...body.matchAll(/<measure[ >]/g)].map((m) => m.index!);
   const barAt = (at: number) => {
@@ -465,7 +465,7 @@ export function renumberSlurs(body: string, sysOfBar?: number[]): string {
     return k;
   };
   const toks = [...body.matchAll(re)].map((m) => ({
-    type: m[1], staff: m[2], arc: Number(m[3]), edge: m[4], above: m[5] === "1", rest: m[6], at: m.index!, len: m[0].length, bar: barAt(m.index!),
+    type: m[1], staff: m[2], arc: m[3], edge: m[4], above: m[5] === "1", rest: m[6], at: m.index!, len: m[0].length, bar: barAt(m.index!),
   }));
   if (!toks.length) return body;
   // 某小节所在系统之后，这个声部下一个出现的系统
@@ -475,9 +475,9 @@ export function renumberSlurs(body: string, sysOfBar?: number[]): string {
   };
   const starts = new Set(toks.filter((t) => t.type === "start").map((t) => t.arc));
   const stops = new Set(toks.filter((t) => t.type === "stop").map((t) => t.arc));
-  const alias = new Map<number, number>(); // 后半截的弧号 → 接上的前半截弧号
-  const orphan = new Set<number>();
-  const pending = new Map<string, { arc: number; bar: number; above: boolean }[]>(); // 谱表号 → 还没接上的 `end` 半截
+  const alias = new Map<string, string>(); // 后半截的弧号 → 接上的前半截弧号
+  const orphan = new Set<string>();
+  const pending = new Map<string, { arc: string; bar: number; above: boolean }[]>(); // 谱表号 → 还没接上的 `end` 半截
   for (const t of toks) {
     if (t.type === "start" && !stops.has(t.arc)) {
       orphan.add(t.arc);
@@ -498,7 +498,7 @@ export function renumberSlurs(body: string, sysOfBar?: number[]): string {
       }
     }
   }
-  const num = new Map<number, number>();
+  const num = new Map<string, number>();
   const used = new Set<number>();
   let out = "";
   let last = 0;

@@ -398,9 +398,9 @@ export function reconnectSlurs(pg: SPage, arcs: SlurArc[]): void {
 }
 
 /** 弧号：写出时给 `<slur>` 配对用（`toxml.ts::renumberSlurs`）。按弧对象记住，同一个弧对象再标一次时号不变。 */
-const slurIdOf = new WeakMap<SlurArc, number>();
+const slurIdOf = new WeakMap<SlurArc, string>();
 let nextSlurId = 1;
-const pushId = (a: number[] | undefined, id: number) => (a?.includes(id) ? a : [...(a ?? []), id]);
+const pushId = (a: string[] | undefined, id: string) => (a?.includes(id) ? a : [...(a ?? []), id]);
 
 /**
  * 只认出一端的弧，悬空那端在哪：跨行弧的前半，右端伸到本行**最后一小节**或谱表右缘之外（`end`）；
@@ -415,13 +415,17 @@ function orphanEdge(sl: SlurArc, n: StaffNote): "end" | "begin" | "mid" {
   return sl.lx <= (b0.left + b0.right) / 2 ? "begin" : "mid";
 }
 
-/** 弧 → 挂到音符上的标记。一个音符可以同时是上一条的收尾与下一条的起头。 */
-export function markSlurNotes(arcs: SlurArc[]): void {
+/**
+ * 弧 → 挂到音符上的标记。一个音符可以同时是上一条的收尾与下一条的起头。
+ * `newId` 发新弧号（只当写出端配对的键，`toxml.ts::renumberSlurs`）：缺省取进程里的全局计数；位图路按「页码.页内序号」发
+ * （多页并行时各 Worker 的计数互不相知，单用计数会跨页撞号、被写出端配成一条）。
+ */
+export function markSlurNotes(arcs: SlurArc[], newId: () => string = () => String(nextSlurId++)): void {
   // **两端落在同一处的弧算同一条**：同一条圆滑线常被检出两个弧对象（牵我的手每条都是两份），
   // 还有一头挂在和弦的不同成员上的（我灵镇静 m4 E4→A4、E4→F4，A4/F4 同一个和弦）。
   // 原来只记布尔值，又按谱表号编号，两条同号、读入端只留一条，碰巧是对的；按弧号逐条写出就成了两条。
   // 「同一处」= 同一个音，或同一行谱上横向差不到半个符头宽（同一和弦）。两份总在同一批里，按这一批去重
-  const ends: { id: number; from?: StaffNote; to?: StaffNote }[] = [];
+  const ends: { id: string; from?: StaffNote; to?: StaffNote }[] = [];
   const near = (a?: StaffNote, b?: StaffNote) =>
     a === b || (!!a && !!b && a.staff === b.staff && Math.abs(a.x - b.x) < (a.sym.box.right - a.sym.box.left) * 0.5);
   for (const sl of arcs) {
@@ -429,7 +433,7 @@ export function markSlurNotes(arcs: SlurArc[]): void {
       let id = slurIdOf.get(sl);
       if (id === undefined) {
         id = ends.find((e) => near(e.from, sl.from) && near(e.to, sl.to))?.id;
-        if (id === undefined) ends.push({ id: (id = nextSlurId++), from: sl.from, to: sl.to });
+        if (id === undefined) ends.push({ id: (id = newId()), from: sl.from, to: sl.to });
         slurIdOf.set(sl, id);
       }
       if (sl.from) sl.from.slurStartIds = pushId(sl.from.slurStartIds, id);

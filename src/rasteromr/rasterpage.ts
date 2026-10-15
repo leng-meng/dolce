@@ -74,9 +74,37 @@ const INK_FLIP_RATIO = 0.5;
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function rasterizePage(page: any, OPS: any): Promise<RasterPage | null> {
+  const img = await pageImageOf(page, OPS);
+  return img ? rasterizeImage(img) : null;
+}
+
+/** 一页最大的那张内嵌位图与页面几何（普通数据，可跨线程传）：`rasterizePage` 拆出的 pdf.js 那一半。 */
+export interface PageImage {
+  width: number;
+  height: number;
+  data: Uint8Array | Uint8ClampedArray;
+  /** pdf.js 的图像种类（1 = GRAYSCALE_1BPP） */
+  kind?: number;
+  /** 图在页面上的变换 */
+  ctm: number[];
+  /** `page.view` */
+  view?: number[];
+  pageWidth: number;
+  pageHeight: number;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function pageImageOf(page: any, OPS: any): Promise<PageImage | null> {
   const found = await largestPageImageAt(page, OPS, (o) => (o.data && o.width && o.height ? o.width * o.height : null));
   if (!found) return null;
-  const best = found.obj;
+  const vp = page.getViewport({ scale: 1 });
+  const { width, height, data, kind } = found.obj;
+  return { width, height, data, kind, ctm: [...found.ctm], view: page.view ? [...page.view] : undefined, pageWidth: vp.width, pageHeight: vp.height };
+}
+
+/** 位图 → 识别用的二值图（解码、二值化、去网、推平、纠斜……）：`rasterizePage` 不碰 pdf.js 的那一半。 */
+export function rasterizeImage(img: PageImage): RasterPage | null {
+  const best = img;
 
   const w: number = best.width;
   const h: number = best.height;
@@ -194,8 +222,7 @@ export async function rasterizePage(page: any, OPS: any): Promise<RasterPage | n
   //（歌词 75% → 45%），而它本来就不是网点印刷。
   if (halftone == null) halftone = cleanTexture(bin, false);
 
-  const vp = page.getViewport({ scale: 1 });
-  return { bin, kind, halftone: halftone ?? 0, faint, gray, lyricGray, scale: vp.width / bin.w, pageWidth: vp.width, pageHeight: vp.height, imageRect: imageRectOf(found.ctm, page.view, vp.width, vp.height) };
+  return { bin, kind, halftone: halftone ?? 0, faint, gray, lyricGray, scale: img.pageWidth / bin.w, pageWidth: img.pageWidth, pageHeight: img.pageHeight, imageRect: imageRectOf(img.ctm, img.view, img.pageWidth, img.pageHeight) };
 }
 
 /**

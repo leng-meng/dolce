@@ -9,6 +9,8 @@ export * from "../omrkit/vector";
 export * from "../omrkit/vectext";
 export * from "../staffomr/index";
 export * from "../rasteromr/index";
+// 整曲识别换成按 `RASTER_WORKERS` 多页并行的版本（显式导出盖过上面 `export *` 里的同名者）
+export { recognizeRasterSong, nodeRasterPool, rasterWorkerCount } from "./rasterpool";
 export { connectedComponents } from "../omrkit/ccl";
 export * from "../omr/bookprofile";
 export * from "../omr/inventory";

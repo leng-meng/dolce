@@ -1,8 +1,9 @@
 // Node CLI 构建：把 src/ 里不碰 DOM 的模块打成 Node ESM 产物，供**不起浏览器**的脚本 import。
-// 与 app 共用同一份源码，避免逻辑分叉成两份。三个入口：
+// 与 app 共用同一份源码，避免逻辑分叉成两份。四个入口：
 //   out/cli/index.js —— 矢量 PDF 版面那一摊（page-report.mjs / pdf-diff.mjs 等）
 //   out/cli/omr.js   —— 位图简谱识别（omr-cli.mjs、measure-all.mjs 等）
 //   out/cli/j123.js  —— 123 格式与语义模型（j123-check.mjs、j123-migrate.mjs）
+//   out/cli/rasterworker.js —— 位图五线谱多页并行的页 Worker（index.js 里的 `recognizeRasterSong` 起它）
 import { defineConfig } from "vite";
 
 export default defineConfig({
@@ -14,7 +15,7 @@ export default defineConfig({
     target: "node20",
     minify: false,
     rollupOptions: {
-      input: { index: "src/cli/index.ts", omr: "src/cli/omr.ts", j123: "src/cli/j123.ts" },
+      input: { index: "src/cli/index.ts", omr: "src/cli/omr.ts", j123: "src/cli/j123.ts", rasterworker: "src/cli/rasterworker.ts" },
       output: { entryFileNames: "[name].js", chunkFileNames: "[name].js" },
     },
   },

@@ -6,7 +6,10 @@
 
 import type { RasterGlyphLookup } from "./rasterglyphs";
 import type { RasterPage } from "./rasterpage";
-import { recognizeRasterPage, type CarryKey, type RasterLiveOcr, type RasterPageResult } from "./recognize";
+import { recognizeRasterPage, type CarryKey, type PageCarry, type RasterLiveOcr, type RasterPageResult } from "./recognize";
+import { pageImageOf, type PageImage } from "./rasterpage";
+import { composeHeaderStrip } from "./pagecompose";
+import type { PagePool } from "./pagepool";
 import type { OcrChar } from "./lyric";
 import type { JianpuRow } from "./jianpufuse";
 import type { HeaderCredit, WordLine } from "../omrkit/headertext";
@@ -53,6 +56,8 @@ export async function recognizeRasterSong(
     cancelled?: () => boolean;
     /** 判路时已栅格化过的页（第几份底本、第几页 → 结果）：识别那一页时直接用 */
     rastered?: (source: number, pn: number) => RasterPage | null | undefined;
+    /** 多页并行（`pagepool.ts`）：给了就各页分给 Worker 跑，结果与串行逐字一致 */
+    pool?: PagePool;
     /** 给每个 `<note>` 写 `id="omr<k>"` 并记下源图框（编辑器的识别对照用；回归脚本不开，产物逐字节不变） */
     noteIds?: boolean;
   } = {},
@@ -79,52 +84,115 @@ export async function recognizeRasterSong(
   let headerPage: SPage | null = null;
   /** 整页文字框：离线给的缓存，在线识别时逐页现检补进来 */
   const pageTexts = opts.pageTexts ?? new Map<string, Rect[]>();
-  for (const [si, { pdf, OPS }] of sources.entries()) {
-    for (let pn = 1; pn <= (pdf.numPages as number); pn++) {
+  const caches: RasterOcrCaches = { lyricOcr: opts.lyricOcr, labelOcr: opts.labelOcr, timeOcr: opts.timeOcr, harmonyOcr: opts.harmonyOcr, jianpuOcr: opts.jianpuOcr, wordOcr: opts.wordOcr, headerOcr: opts.headerOcr, pageTexts };
+  /** 收一页结果（按页序）：记账、留页，交出下一页的沿用 */
+  const consume = (r: RasterPageResult, si: number, pn: number, wantHeader: boolean): void => {
+    if (r.jianpuFix) for (const k of Object.keys(stats.jianpuFix) as (keyof RasterSongStats["jianpuFix"])[]) stats.jianpuFix[k] += r.jianpuFix[k];
+    carryTime = r.carryTime;
+    carryKey = r.carryKey;
+    if (r.hasStaff) {
+      if (wantHeader) {
+        header = r.header;
+        headerPage = r.page;
+      }
+      // 页眉带近乎半页像素，读完就不留
+      r.headerStrips = [];
+      stats.pages++;
+      stats.notes += r.notes.length;
+      stats.harmonies += r.harmonies?.length ?? 0;
+      stats.lyricLines += r.lyricLines.length;
+      for (const k of Object.keys(stats.lyricStats) as (keyof RasterSongStats["lyricStats"])[]) stats.lyricStats[k] += r.lyricStats?.[k] ?? 0;
+      stats.bars += r.bars.length;
+      barPages.push({ page: r.page, bars: r.bars });
+      stats.unknown += r.unknown;
+      stats.staves += r.page.staves.length;
+      stats.halftone ??= r.raster?.halftone ?? null;
+      stats.kind ??= r.raster?.kind ?? null;
+      entries.push({ page: r.page, ctx: r.ctx });
+      markLyricsBelow(r.page, r.lyricLines, lyricsBelow);
+      for (const st of r.page.staves) {
+        const lb = r.staffLabels.get(st.index);
+        if (lb) labelOf.set(st, lb);
+      }
+      for (const n of r.notes) {
+        const a = notesByStaff.get(n.staff) ?? [];
+        a.push(n);
+        notesByStaff.set(n.staff, a);
+      }
+      pages.push({ source: si, pn, result: r });
+    }
+  };
+  const order = sources.flatMap(({ pdf }, si) => Array.from({ length: pdf.numPages as number }, (_, i) => ({ si, pn: i + 1 })));
+  if (!opts.pool) {
+    for (const [k, { si, pn }] of order.entries()) {
       if (opts.cancelled?.()) throw new Error("已取消");
+      const { pdf, OPS } = sources[si];
       const page = await pdf.getPage(pn);
       try {
-        const caches: RasterOcrCaches = { lyricOcr: opts.lyricOcr, labelOcr: opts.labelOcr, timeOcr: opts.timeOcr, harmonyOcr: opts.harmonyOcr, jianpuOcr: opts.jianpuOcr, wordOcr: opts.wordOcr, headerOcr: opts.headerOcr, pageTexts };
         const wantHeader = header === null;
-        const r = await recognizeRasterPage(page, OPS, look, pn, { carryTime, carryKey, ...caches, live: opts.live, raster: opts.rastered?.(si, pn), wantHeader });
-        if (r.jianpuFix) for (const k of Object.keys(stats.jianpuFix) as (keyof RasterSongStats["jianpuFix"])[]) stats.jianpuFix[k] += r.jianpuFix[k];
-        carryTime = r.carryTime;
-        carryKey = r.carryKey;
-        if (r.hasStaff) {
-          if (wantHeader) {
-            header = r.header;
-            headerPage = r.page;
-          }
-          // 页眉带近乎半页像素，读完就不留
-          r.headerStrips = [];
-          stats.pages++;
-          stats.notes += r.notes.length;
-          stats.harmonies += r.harmonies?.length ?? 0;
-          stats.lyricLines += r.lyricLines.length;
-          for (const k of Object.keys(stats.lyricStats) as (keyof RasterSongStats["lyricStats"])[]) stats.lyricStats[k] += r.lyricStats?.[k] ?? 0;
-          stats.bars += r.bars.length;
-          barPages.push({ page: r.page, bars: r.bars });
-          stats.unknown += r.unknown;
-          stats.staves += r.page.staves.length;
-          stats.halftone ??= r.raster?.halftone ?? null;
-          stats.kind ??= r.raster?.kind ?? null;
-          entries.push({ page: r.page, ctx: r.ctx });
-          markLyricsBelow(r.page, r.lyricLines, lyricsBelow);
-          for (const st of r.page.staves) {
-            const lb = r.staffLabels.get(st.index);
-            if (lb) labelOf.set(st, lb);
-          }
-          for (const n of r.notes) {
-            const a = notesByStaff.get(n.staff) ?? [];
-            a.push(n);
-            notesByStaff.set(n.staff, a);
-          }
-          pages.push({ source: si, pn, result: r });
-        }
+        const r = await recognizeRasterPage(page, OPS, look, pn, { carryTime, carryKey, ...caches, live: opts.live, raster: opts.rastered?.(si, pn), wantHeader, pageSeq: k });
+        consume(r, si, pn, wantHeader);
       } finally {
         page.cleanup?.();
       }
-      opts.onPage?.(++done, total);
+      done++;
+      opts.onPage?.(done, total);
+    }
+  } else {
+    // 多页并行（`pagepool.ts`）：在途页数不超过池大小；按页序收结果，收到一页就把下一页的沿用交出去
+    const pool = opts.pool;
+    pool.init(look, caches, opts.live);
+    const carries = order.map(() => {
+      let resolve!: (c: PageCarry) => void;
+      const promise = new Promise<PageCarry>((r) => (resolve = r));
+      return { promise, resolve };
+    });
+    carries[0]?.resolve({ carryTime, carryKey, wantHeader: true });
+    const start = async (k: number): Promise<RasterPageResult> => {
+      const { si, pn } = order[k];
+      const { pdf, OPS } = sources[si];
+      const raster = opts.rastered?.(si, pn);
+      let image: PageImage | null | undefined;
+      if (raster === undefined) {
+        const page = await pdf.getPage(pn);
+        try {
+          image = await pageImageOf(page, OPS);
+        } finally {
+          page.cleanup?.();
+        }
+      }
+      const host = {
+        live: opts.live,
+        composeHeader: async (binW: number) => {
+          const page = await pdf.getPage(pn);
+          try {
+            return await composeHeaderStrip(page, OPS, binW);
+          } finally {
+            page.cleanup?.();
+          }
+        },
+      };
+      return pool.run({ index: pn, seq: k, image, raster }, carries[k].promise, host);
+    };
+    const running: Promise<RasterPageResult>[] = [];
+    let next = 0;
+    const fill = () => {
+      while (next < order.length && next - done < pool.size) {
+        const p = start(next++);
+        p.catch(() => undefined); // 由按页序的 await 接住
+        running.push(p);
+      }
+    };
+    fill();
+    for (let k = 0; k < order.length; k++) {
+      if (opts.cancelled?.()) throw new Error("已取消");
+      const r = await running[k];
+      const wantHeader = header === null;
+      consume(r, order[k].si, order[k].pn, wantHeader);
+      carries[k + 1]?.resolve({ carryTime, carryKey, wantHeader: header === null });
+      done++;
+      opts.onPage?.(done, total);
+      fill();
     }
   }
   // 自检：凑满拍的，加上结构上的半截小节（弱起、乐句中间劈开的两半，见 `notedata.ts::markSplitBars`）

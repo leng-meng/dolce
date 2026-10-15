@@ -12,6 +12,7 @@ import type { Binary } from "../omrkit/types";
 import { timeDigit, timeKey, timeStripOf, type TimeStrip } from "./timesig";
 import type { Component, Rect } from "../omrkit/types";
 import { inkTextSize, smallCapsCase, TEXT_INK_EM } from "./textsize";
+import { definePortable } from "./portablefn";
 import { findBarlines, findNoteheads, findStaves, findStems, findTails, makeBars, makeSystems, tagSystemBarlines, unknownObjs } from "../staffomr/page";
 import { isAccidental, isClef, timeSigDigit, type SmuflName } from "../staffomr/glyphs";
 import { buildNotes, checkBars, findClefKeyTime, keyFifths, lastTimeSignature, type BeamShape, type StaffContext, type StaffNote, type StemInfo, type BarCheck } from "../staffomr/notedata";
@@ -158,6 +159,19 @@ export interface CarryKey {
   clefs?: ClefTally;
 }
 
+/** 一页从前面各页接过来的东西：沿用的拍号、调号，以及前面还没有页眉（这一页要切页眉带）。 */
+export interface PageCarry {
+  carryTime?: { beats: number; beatType: number };
+  carryKey?: CarryKey;
+  wantHeader?: boolean;
+}
+
+/** 一页的来源：栅格化、拼页眉带（曲首页的页眉印在谱图之外时）。串行路由 pdf.js 页对象实现，Worker 里另有实现。 */
+export interface PageSource {
+  raster(): Promise<RasterPage | null>;
+  composeHeader(binW: number): Promise<{ strip: WordStrip; texts: WordLine[] } | null>;
+}
+
 /** 键是「行数:各行高低音谱号的排法」（如 `7:gggffgf`）；`seen` 是见过几个这样的系统，`g8[i]` 是第 i 行读成低八度谱号的次数。 */
 export type ClefTally = Record<string, { seen: number; g8: number[] }>;
 
@@ -192,6 +206,9 @@ const empty = (page: SPage, raster: RasterPage | null, unit: RasterUnit | null, 
   carryTime,
   carryKey,
 });
+
+/** 按本页位图量文字墨高（`SPage.inkTextSize`）；可重建，页结果才传得过线程（`pagetransfer.ts`）。 */
+const inkTextSizeOn = definePortable("inkTextSize", (bin: Binary) => (box: { x: number; y: number; w: number; h: number }, text: string) => inkTextSize(bin, box, text));
 
 /** 记账时算「这条段有主」的标记。见 `makeBars` 之后那一段。 */
 const SEG_TAGS: Tag[] = ["Staff", "Leger", "Stem", "BarLine", "SysLine", "Tail", "Beam", "Bracket"];
@@ -481,6 +498,15 @@ export async function recognizeRasterPage(
     carryTime?: { beats: number; beatType: number };
     carryKey?: CarryKey;
     /**
+     * 跨页沿用（上一页的 `carryTime` / `carryKey`、前面有没有页眉）**晚到**的版本：给了它就不看同名的三个同步字段，
+     * 识别走到第一处要用沿用的地方（`shareOctaveClefs` 之前）才 await。多页并行时前段不等上一页（见 `pagepool.ts`）。
+     */
+    carry?: () => Promise<PageCarry>;
+    /** 这一页在整曲里的序号（从 0 起，跨几份底本连续数）：弧号带上它（「页码.页内序号」），见 `markSlurNotes`。 */
+    pageSeq?: number;
+    /** 页源：给了就不碰 `pdfPage` / `OPS`（Worker 里没有 pdf.js 页对象，见 `pagepool.ts`）。 */
+    source?: PageSource;
+    /**
      * 歌词条的 OCR 结果，**按条的内容指纹寻址**（`stripKey`）。
      *
      * 直接用 OCR 的文本，不做形状聚类——聚类那一版实测把四成多的字格丢在
@@ -527,11 +553,19 @@ export async function recognizeRasterPage(
     staffBandOnly?: boolean;
   } = {},
 ): Promise<RasterPageResult> {
-  const raster = opts.raster !== undefined ? opts.raster : await rasterizePage(pdfPage, OPS);
+  const source: PageSource = opts.source ?? { raster: () => rasterizePage(pdfPage, OPS), composeHeader: (binW) => composeHeaderStrip(pdfPage, OPS, binW) };
+  let carryP: Promise<PageCarry> | null = null;
+  const carryOf = (): Promise<PageCarry> => (carryP ??= opts.carry ? opts.carry() : Promise.resolve({ carryTime: opts.carryTime, carryKey: opts.carryKey, wantHeader: opts.wantHeader }));
+  /** 没认出谱的页照样把沿用原样交下去 */
+  const emptyPage = async (page: SPage, raster: RasterPage | null, unit: RasterUnit | null): Promise<RasterPageResult> => {
+    const c = await carryOf();
+    return empty(page, raster, unit, c.carryTime, c.carryKey);
+  };
+  const raster = opts.raster !== undefined ? opts.raster : await source.raster();
   const blank = buildRasterPage({ index, width: raster?.bin.w ?? 1, height: raster?.bin.h ?? 1, unit: { lineThick: 1, space: 1, height: 4 }, staffLines: [], hSegs: [], vSegs: [] });
-  if (!raster) return empty(blank, null, null, opts.carryTime, opts.carryKey);
+  if (!raster) return emptyPage(blank, null, null);
   const unit = estimateUnit(raster.bin);
-  if (!unit) return empty(blank, raster, null, opts.carryTime, opts.carryKey);
+  if (!unit) return emptyPage(blank, raster, null);
   // 整页文字框（找谱线之前就要）：缓存按页指纹查，查不到且要在线检测的把位图带出去
   const live = opts.live;
   const textKey = opts.pageTexts || opts.wantTextBin || live?.textDet ? pageTextKey(raster.bin) : undefined;
@@ -551,7 +585,7 @@ export async function recognizeRasterPage(
   const textLines = new Set(textStaves.flatMap((g) => g.lines));
   const groups = found.groups.filter((g) => !textStaves.includes(g));
   const lines = found.lines.filter((l) => !textLines.has(l));
-  if (!groups.length) return withText(empty(blank, raster, unit, opts.carryTime, opts.carryKey));
+  if (!groups.length) return withText(await emptyPage(blank, raster, unit));
   // 谱线左端顺着线再往左追（弯页左段落在横带外，见 `traceLeft`）。一行谱五条线的左端
   // 本该一致，追的时候中间几条常被谱号挡住（齐来称颂第一行追到 153/209/216/193/153），
   // 取**至少两条吻合的最小左端**统一给五条线——下游一律拿五条线左端的最大值当谱行左缘。
@@ -3712,8 +3746,8 @@ export async function recognizeRasterPage(
   // 一像素合一点以上（不到 80dpi）：多半是图片封的单页 PDF（`jpegToPdf` 一像素记一点），页面尺寸不可信
   pg.sizeKnown = pg.ptPerUnit < LOW_DPI_SCALE;
   pg.textEm = 1 / TEXT_INK_EM;
-  pg.inkTextSize = (box, text) => inkTextSize(raster.bin, box, text);
-  if (!findStaves(pg)) return withText(empty(pg, raster, unit, opts.carryTime, opts.carryKey));
+  pg.inkTextSize = inkTextSizeOn(raster.bin);
+  if (!findStaves(pg)) return withText(await emptyPage(pg, raster, unit));
   // 读音高按该处实测的五线、相邻两线间的相对位置（`Staff.middleStep`）
   for (const stf of pg.staves) {
     if (stf.lineYs.length !== 5) continue;
@@ -3742,7 +3776,9 @@ export async function recognizeRasterPage(
   // 小节线的 x 先交给调号（`keyChanges` 分行首与行中转调要用，这时还没切小节）
   for (const [st, c] of ctx) c.barXs = pg.segs.filter((l) => l.isV && l.hasTag("BarLine") && l.bottom > st.box.top && l.top < st.box.bottom).map((l) => l.cx);
   shareSystemClefs(pg, ctx, unit);
-  const clefTally = shareOctaveClefs(pg, ctx, opts.carryKey?.clefs);
+  // 从这里起要用上一页的沿用（并行时这里才等上一页交出来）
+  const carry = await carryOf();
+  const clefTally = shareOctaveClefs(pg, ctx, carry.carryKey?.clefs);
   dropCourtesyKeys(pg, ctx, unit.space);
   demoteMidKeys(pg, ctx);
   extendKeyChains(pg, ctx);
@@ -3756,11 +3792,11 @@ export async function recognizeRasterPage(
     shareKeySignature(sec, settled);
     carrySystemKeys(pg, sec, settled);
   }
-  extendKeyByCarry(ctx, opts.carryKey, raster.bin, unit.space);
+  extendKeyByCarry(ctx, carry.carryKey, raster.bin, unit.space);
   findMidKeysByTemplate(pg, ctx, raster.bin, unit);
   shareMidKeys(pg, ctx, unit.space);
   dropHeadsInKey(pg, ctx, true);
-  shareTimeSignature(pg, ctx, timeCols, unit, raster.bin, !!opts.carryTime);
+  shareTimeSignature(pg, ctx, timeCols, unit, raster.bin, !!carry.carryTime);
   dropBarsInKey(pg, ctx, unit.space);
   keyFromChords(pg, ctx, harmonies.map((h) => h.text), unit);
   fixFlatReadAsSix(harmonies, ctx);
@@ -4010,7 +4046,7 @@ export async function recognizeRasterPage(
   splitUnisons(notes, stems, beams, raster.bin, unit.space);
   markCrossStaff(pg, notes, stems, unit.space);
   fixDottedPairs(notes, unit.space);
-  fixQuartersByBarSum(pg, ctx, notes, opts.carryTime, unit.space);
+  fixQuartersByBarSum(pg, ctx, notes, carry.carryTime, unit.space);
   findTuplets(pg, beams, stems, notes);
 
   // ── 演奏法与力度 ─────────────────────────────────────────────────────────
@@ -4294,7 +4330,7 @@ export async function recognizeRasterPage(
   // 缺了它写出来的 MusicXML 就没有 `<time>`。按**第一声部每小节的时值和**取众数推一个 n/4，
   // 造成两个拍号数字放进首行的 ctx——写出端、跨页传递（`lastTimeSignature`）照常走。
   // 只推 2~9 拍的整拍（拍号字形只有一位数），至少要三个小节撑着。
-  if (!opts.carryTime && pg.staves.every((st) => !(ctx.get(st)?.time.length))) {
+  if (!carry.carryTime && pg.staves.every((st) => !(ctx.get(st)?.time.length))) {
     const sums: number[] = [];
     for (const st of pg.staves)
       for (const bar of st.bars) {
@@ -4323,7 +4359,7 @@ export async function recognizeRasterPage(
       const dn = makeSymObj(pg.objs.length + 1, { box: { x, y: Math.round(mid), w, h: Math.round(first.box.bottom - mid) }, code: "timeSig4" }, first.box.bottom - first.box.top);
       c0.time.push(up.sym, dn.sym);
       // 拍号是这里才推出来的：「按小节拍数把四分纠回八分」那一步前面因为没有拍号跳过了，补跑一遍
-      fixQuartersByBarSum(pg, ctx, notes, opts.carryTime, unit.space);
+      fixQuartersByBarSum(pg, ctx, notes, carry.carryTime, unit.space);
     }
   }
 
@@ -4364,11 +4400,11 @@ export async function recognizeRasterPage(
   const wordOcr = opts.wordOcr ?? (live?.word ? await live.word([...wordStrips, ...nameStrips]) : undefined);
   if (wordOcr) pg.partNames = partNameLines(pg, nameStrips, wordOcr);
   // 页眉（曲首页）：标题、词曲作者。认字同文字指示带，缓存另放
-  let headerStrip: HeaderStrip | null = opts.wantHeader ? findHeaderStrip(raster.bin, pg.staves, unit) : null;
+  let headerStrip: HeaderStrip | null = carry.wantHeader ? findHeaderStrip(raster.bin, pg.staves, unit) : null;
   // 谱图里切不出页眉带、谱图又没顶到页顶的（排版软件出的 PDF，标题是另贴的小图块与文字层）：拼出谱图上方那一段（`pagecompose.ts`）
   let layerLines: WordLine[] = [];
-  if (opts.wantHeader && !headerStrip) {
-    const comp = await composeHeaderStrip(pdfPage, OPS, raster.bin.w);
+  if (carry.wantHeader && !headerStrip) {
+    const comp = await source.composeHeader(raster.bin.w);
     if (comp) (headerStrip = comp.strip), (layerLines = comp.texts);
   }
   const headerOcr = opts.headerOcr ?? (headerStrip && live?.header ? await live.header([headerStrip]) : undefined);
@@ -4700,7 +4736,9 @@ export async function recognizeRasterPage(
   reconnectSlurs(pg, slurs);
   attachEdgeSlurStarts(slurs, notes, unit.space, new Set(index > 1 ? (pg.systems[0]?.staves ?? []) : []));
   const chordTies = tieChords(slurs, notes, unit.space);
-  markSlurNotes(slurs);
+  // 弧号「页码.页内序号」（页码按 `pageSeq` 数）：只当配对的键用，跨页不能撞号
+  let slurSeq = 0;
+  markSlurNotes(slurs, opts.pageSeq !== undefined ? () => `${opts.pageSeq! + 1}.${++slurSeq}` : undefined);
   for (const [a, b] of chordTies) (a.tieStart = true), (b.tieStop = true);
   markLyricExtends(notes);
 
@@ -4713,7 +4751,7 @@ export async function recognizeRasterPage(
     ctx,
     beams,
     notes,
-    bars: checkBars(pg, ctx, notes, opts.carryTime),
+    bars: checkBars(pg, ctx, notes, carry.carryTime),
     lyricLines,
     contours: cmap,
     ledger,
@@ -4741,9 +4779,9 @@ export async function recognizeRasterPage(
     debugPrims: opts.debug ? prims : undefined,
     debugGroups: opts.debug ? groups.map((g) => ({ top: g.lines[0].y, bottom: g.lines[4].y, space: g.space })) : undefined,
     debugRest: opts.debug ? blobImage(nl, prims, unit, onGrid) : undefined,
-    carryTime: lastTimeSignature(pg, ctx, opts.carryTime),
+    carryTime: lastTimeSignature(pg, ctx, carry.carryTime),
     // 没有调号的页也要把谱号的见证带下去：个数记零（`extendKeyByCarry` 见零不补）
-    carryKey: { ...(lastKey(pg, ctx, opts.carryKey) ?? { code: "accidentalFlat", n: 0 }), clefs: clefTally },
+    carryKey: { ...(lastKey(pg, ctx, carry.carryKey) ?? { code: "accidentalFlat", n: 0 }), clefs: clefTally },
   };
 }
 /**
