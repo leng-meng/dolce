@@ -1536,7 +1536,10 @@ export class OmrController implements FormatSource {
     if (kind === "chord") {
       const ch = doc ? locate(doc, id)?.chord : undefined;
       const place = ch ? harmonyPlacesOf(ch)[verse]?.place : undefined;
-      return i === undefined || place === undefined ? null : pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="chord"][data-i="${i}"][data-slot="${place}"]`) ?? null;
+      if (place === undefined) return null;
+      // 源图上有框的按框序认，核对时新加的（`chordAdds`）按元素 id 认
+      return (i === undefined ? null : pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="chord"][data-i="${i}"][data-slot="${place}"]`)) ??
+        pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="chord"][data-id="${id}"][data-slot="${place}"]`) ?? null;
     }
     if (i !== undefined) return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-i="${i}"]`) ?? null;
     return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-id="${id}"]`) ?? null;

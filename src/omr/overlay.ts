@@ -288,7 +288,7 @@ function computeStats(score: RecognizedScore): Stats {
 function buildOverlayGroup(
   score: RecognizedScore,
   stats: Stats,
-  opts?: { rows?: number[]; header?: boolean; lyrics?: boolean; edits?: Pick<Reprojected, "inserted" | "lyricFixes" | "chordFixes"> },
+  opts?: { rows?: number[]; header?: boolean; lyrics?: boolean; edits?: Pick<Reprojected, "inserted" | "lyricFixes" | "chordFixes" | "chordAdds"> },
 ): SVGGElement {
   const g = document.createElementNS(SVG_NS, "g");
   g.setAttribute("class", "omr-overlay");
@@ -313,6 +313,11 @@ function buildOverlayGroup(
     else if (fix === null) renderHeaderRegion(g, r, "omr-chord omr-chord-deleted");
     else renderHeaderRegion(g, { text: fix, bbox: { ...r.bbox, w: r.bbox.w * Math.max(1, fix.length / Math.max(1, r.text.length)) } }, "omr-chord omr-chord-fixed");
   });
+  // 核对时新加的和弦（源图上没有框）：按插值出的框画，标蓝
+  for (const a of opts?.edits?.chordAdds ?? []) {
+    if (rowSet && !score.rows.some((row, ri) => rowSet.has(ri) && rcy(a.bbox) > row.topY - noteH * 3 && rcy(a.bbox) < row.topY)) continue;
+    renderHeaderRegion(g, { text: a.text, bbox: a.bbox }, "omr-chord omr-chord-fixed");
+  }
   score.rows.forEach((row, ri) => {
     if (rowSet && !rowSet.has(ri)) return;
     const fit = rowFits[ri];
@@ -401,7 +406,7 @@ function lyricAnchors(score: RecognizedScore, stats: Stats): (i: number, v: numb
 
 /** 透明命中层 `<g.omr-hits>`：每个可点选对象一个透明 rect，带 data 属性供 app 定位到 jpwabc 代码。
  *  音符 data-i=第i个音符（== flatten 顺序 == JpwMeta 索引）；歌词 data-i/data-verse；页眉 data-kind=title/author。 */
-function buildHitLayer(score: RecognizedScore, stats: Stats, inserted: Reprojected["inserted"] = []): SVGGElement {
+function buildHitLayer(score: RecognizedScore, stats: Stats, inserted: Reprojected["inserted"] = [], chordAdds: Reprojected["chordAdds"] = []): SVGGElement {
   const g = document.createElementNS(SVG_NS, "g");
   g.setAttribute("class", "omr-hits");
   const flat = score.rows.flatMap((row, ri) => row.nums.map((n) => ({ n, ri })));
@@ -441,6 +446,8 @@ function buildHitLayer(score: RecognizedScore, stats: Stats, inserted: Reproject
 
   // 新插的音（核对时插的，框是插值出来的）：按元素 id 认
   for (const ins of inserted) hit(ins.num.bbox, { "data-kind": "note", "data-id": String(ins.id), class: "omr-hit" });
+  // 新加的和弦：按元素 id 与落点认
+  for (const a of chordAdds) hit(a.bbox, { "data-kind": "chord", "data-id": String(a.id), "data-slot": a.place, class: "omr-hit" });
 
   const title = (score.title ?? "").trim();
   for (const r of score.headerRegions ?? []) {
@@ -461,7 +468,7 @@ export function renderRecognitionSvg(
   /** 小节时值自检报出的小节（`omr/beats.ts`）：各视图都标出，悬停显示说明 */
   beatMarks: readonly { boxes: readonly Rect[]; text: string; tag?: string }[] = [],
   /** 核对时改过的东西（`reproject.ts`）：`score` 已是重投影过的那份，这里给新插的音与改过的歌词 */
-  edits?: Pick<Reprojected, "inserted" | "lyricFixes" | "chordFixes">,
+  edits?: Pick<Reprojected, "inserted" | "lyricFixes" | "chordFixes" | "chordAdds">,
 ): SVGSVGElement {
   const svg = pageSvg(bin, "omr-recognize");
 
@@ -495,7 +502,7 @@ export function renderRecognitionSvg(
   }
   const doubt = buildDoubtLayer(score, stats, edits?.lyricFixes ?? []);
   if (doubt) svg.appendChild(doubt);
-  svg.appendChild(buildHitLayer(score, stats, edits?.inserted));
+  svg.appendChild(buildHitLayer(score, stats, edits?.inserted, edits?.chordAdds));
   return svg;
 }
 
@@ -586,7 +593,7 @@ function popupSvg(bin: Binary, vb: { x: number; y: number; w: number; h: number 
 /** 浮窗：单行识别数据（干净渲染）。横向用整幅源图宽（列与源图对齐），竖向裁到该行+其下方歌词带。
  *  返回 svg 及该行内容在源图的竖向范围（srcTop/srcBottom），供 app 定位到当前 system 之下（不盖歌词）。 */
 export function renderRowPopup(
-  bin: Binary, score: RecognizedScore, rowIndex: number, edits?: Pick<Reprojected, "inserted" | "lyricFixes" | "chordFixes">,
+  bin: Binary, score: RecognizedScore, rowIndex: number, edits?: Pick<Reprojected, "inserted" | "lyricFixes" | "chordFixes" | "chordAdds">,
 ): { svg: SVGSVGElement; srcTop: number; srcBottom: number } {
   const stats = computeStats(score);
   const g = buildOverlayGroup(score, stats, { rows: [rowIndex], header: false, lyrics: true, ...(edits ? { edits } : {}) });
