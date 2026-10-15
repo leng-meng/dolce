@@ -6,7 +6,8 @@
 import { SIMPLE_DIVISIONS, type Chord, type Element, type Key, type Note, type Song } from "../model/doc";
 import { AbcFamilyEmitter, type MarkIndex } from "./emit";
 import { harmonyText } from "../model/jianpu";
-import { keySpelling, nominalQuarters } from "../model/jianpu";
+import { nominalQuarters } from "../model/jianpu";
+import { tonicSpelling } from "../model/keyshift";
 import { isXmlShaped } from "../model/xmlproject";
 import { directionsAsMarks } from "../model/directionmarks";
 import { withAbcPitches } from "./abcpitch";
@@ -191,9 +192,9 @@ export class EmitterAbc extends AbcFamilyEmitter {
   protected keyValue(k: Key): string {
     if (k.spelling === "none") return "none";
     // 123 那侧的拼写是前置形（`bB`/`#F`），ABC 是后置形（`Bb`/`F#`）
-    const sp = keySpelling(k, "mode").replace(/^([#b])([A-G])$/, "$2$1");
+    const sp = tonicSpelling(k).replace(/^([#b])([A-G])$/, "$2$1");
     const mode = k.mode && k.mode !== "major" && k.mode !== "ionian" ? k.mode.slice(0, 3)
-      : !k.mode && k.spelling ? (MODE_OF_DEGREE[k.tonicDegree ?? "1"] ?? "") : "";
+      : !k.mode ? (MODE_OF_DEGREE[k.tonicDegree ?? "1"] ?? "") : "";
     return sp + (mode === "min" ? "m" : mode);
   }
 }

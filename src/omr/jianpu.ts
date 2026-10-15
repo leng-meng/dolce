@@ -1343,6 +1343,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
         const inLastSys = lastSys !== undefined && sysOf.get(m)?.sys === lastSys;
         if (rowLast && (thick || m === staff[staff.length - 1] || inLastSys)) {
           (m as { finalBarline?: "end" }).finalBarline = "end";
+          if (!thick) (m as { finalBarlineThin?: boolean }).finalBarlineThin = true;
           continue;
         }
         // 行中出现细+粗：宁可当普通线，别把终止线形态乱扣到曲中。**连谱号括着的声部行**例外：四声部本子
@@ -1848,6 +1849,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
     });
     const row: StaffRow = { topY: m.topY, bottomY: m.botY, barlineXs: m.barlineXs, nums,
       finalBarline: (m as { finalBarline?: "end" }).finalBarline,
+      finalBarlineThin: (m as { finalBarlineThin?: boolean }).finalBarlineThin,
       doubleBarXs: (m as { doubleBarXs?: number[] }).doubleBarXs,
       endBarXs: (m as { endBarXs?: number[] }).endBarXs };
     const sv = sysOf.get(m);
@@ -1953,7 +1955,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
             a.barlineXs = [...new Set([...a.barlineXs, ...b.barlineXs])].sort((p, q) => p - q);
             if (b.doubleBarXs) a.doubleBarXs = [...(a.doubleBarXs ?? []), ...b.doubleBarXs].sort((p, q) => p - q);
             if (b.endBarXs) a.endBarXs = [...(a.endBarXs ?? []), ...b.endBarXs].sort((p, q) => p - q);
-            if (b.finalBarline) a.finalBarline = b.finalBarline;
+            if (b.finalBarline) { a.finalBarline = b.finalBarline; a.finalBarlineThin = b.finalBarlineThin; }
             a.topY = Math.min(a.topY, b.topY); a.bottomY = Math.max(a.bottomY, b.bottomY);
             drop.add(b);
           }
@@ -2171,7 +2173,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
   // det 框里那个真和弦 `Am` 不会被 header 采纳，故不在禁区里。
   let title: string | undefined, subtitle: string | undefined, credits: string[] | undefined;
   let number: string | undefined, numberSide: RecognizedScore["numberSide"];
-  let fifths = 0, tempo: number | undefined, tempoBeat: RecognizedScore["tempoBeat"];
+  let fifths = 0, minor: boolean | undefined, tempo: number | undefined, tempoBeat: RecognizedScore["tempoBeat"];
   let beats = 4, beatType = 4;
   let meters: RecognizedScore["meters"], meterNote: string | undefined;
   let headerRegions: RecognizedScore["headerRegions"];
@@ -2180,6 +2182,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
       headerMeters.sort((a, b) => a.bbox.x - b.bbox.x));
     title = h.title; subtitle = h.subtitle; number = h.number; numberSide = h.numberSide; credits = h.credits.length ? h.credits : undefined;
     if (h.fifths !== undefined) fifths = h.fifths;
+    if (h.minor) minor = true;
     if (h.beats !== undefined && h.beatType !== undefined) { beats = h.beats; beatType = h.beatType; }
     meters = h.meters; meterNote = h.meterNote;
     tempo = h.tempo; tempoBeat = h.tempoBeat;
@@ -2320,6 +2323,6 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
 
   const dotDiam = dotSizes.length ? median(dotSizes) : undefined;
 
-  return { key: "C", fifths, beats, beatType, meters, meterNote, rows: useRows, number, numberSide, title, subtitle, credits, tempo, tempoBeat, headerRegions, lyricRegions, chordRegions, stanzaRegions, dotDiam, lyricCheck };
+  return { key: "C", fifths, minor, beats, beatType, meters, meterNote, rows: useRows, number, numberSide, title, subtitle, credits, tempo, tempoBeat, headerRegions, lyricRegions, chordRegions, stanzaRegions, dotDiam, lyricCheck };
 }
 

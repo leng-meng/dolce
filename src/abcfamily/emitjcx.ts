@@ -13,6 +13,7 @@ import { systemRanges } from "../model/emitutil";
 import { isXmlShaped } from "../model/xmlproject";
 import { LETTER_OF_DEGREE } from "./dialectjcx";
 import { assignDegrees, keySpelling } from "../model/jianpu";
+import { tonicSpelling } from "../model/keyshift";
 import { projectForJianpu } from "../model/jianpuproject";
 import { getMeta } from "../model/metakeys";
 import { parseLyricLine } from "../j123/parse";
@@ -171,7 +172,7 @@ export class EmitterJcx extends AbcFamilyEmitter {
   protected keyValue(k: Key): string {
     if (k.spelling === "none") return "C";
     const mode = k.mode && k.mode !== "major" && k.mode !== "ionian" ? k.mode.slice(0, 3) : "";
-    if (mode) return keySpelling(k, "mode") + (mode === "min" || mode === "aeo" ? "m" : mode);
+    if (mode) return tonicSpelling(k) + (mode === "min" || mode === "aeo" ? "m" : mode);
     // 首调写成「5=D」这类（主音唱名不是 1、又没有调式）：Muse 写不出，按调号写 1 的音
     if (k.tonicDegree && k.tonicDegree !== "1") return keySpelling({ fifths: k.fifths });
     return keySpelling(k);

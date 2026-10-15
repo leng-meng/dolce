@@ -564,6 +564,7 @@ export const en: Record<MsgKey, string> = {
   "feat.style": "Style sheet reference",
   "feat.layoutDirectives": "Layout directives (font size, margins, etc.)",
   "feat.keyChange": "Key changes",
+  "feat.tonicDegree": "Tonic degree (6=E style keys become the 1= major key with the same signature)",
   "feat.multiVerse": "Multiple verses",
   "feat.volta": "Volta brackets",
   "feat.grace": "Grace notes",

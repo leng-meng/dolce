@@ -563,6 +563,7 @@ export const zh = {
   "feat.style": "样式表引用",
   "feat.layoutDirectives": "版面指令（字号、页边距等）",
   "feat.keyChange": "曲中转调",
+  "feat.tonicDegree": "主音唱名（6=E 这类写法，会改写成同调号的 1= 大调）",
   "feat.multiVerse": "多段歌词",
   "feat.volta": "房号",
   "feat.grace": "倚音",

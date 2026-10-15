@@ -128,7 +128,9 @@ function headerLines(song: Song, d: DialectSpec, opts: EmitPuOptions): string[] 
   const key = keyText(song.key, h.keyStyle);
   const meter = meterText(song);
   if (h.keyMeter === "split") {
-    L.push(`${h.keyField}:${key}`);
+    // 番茄的 `D:` 只写音名、没有主音唱名：`6=E` 写成 `D:E` 会读成 E 大调，退成同调号的 `1=` 大调名（音高不变，唱名标签丢，见丢失清单）
+    const tonicLost = song.key?.tonicDegree !== undefined && song.key.tonicDegree !== "1";
+    L.push(`${h.keyField}:${tonicLost ? keyText({ fifths: songFifths(song) }, h.keyStyle) : key}`);
     if (meter) L.push(`${h.meterField}:${meter}`);
   } else {
     const tonic = song.key?.tonicDegree ?? "1";

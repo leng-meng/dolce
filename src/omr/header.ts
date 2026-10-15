@@ -30,6 +30,8 @@ export interface HeaderInfo {
   credits: string[];
   /** 调号五度圈数（识别到 "1=♭B" 等时给出，否则 undefined→上游用默认 0）。 */
   fifths?: number;
+  /** 印的是小调（`Em 4/4`、「A 小调」）：`fifths` 已是关系大调的，主音唱名 6。 */
+  minor?: boolean;
   /** 速度（♩=NN）→ `Song.tempos`。 */
   tempo?: number;
   /** 速度的拍单位（`♩.=60` 为 3/8）；缺省即四分 1/4。→ `Song.tempoBeat`。 */
@@ -68,7 +70,7 @@ interface SlashGroup { slash: Component; left: Component[]; right: Component[] }
 /** 从页眉小字区解析调号("1=♭B")与速度("♩=76")。OCR 常把 ♭→b、♩→J；页眉碎片散落，
  *  故按碎片就地匹配、必要时空间最近邻配对，避免跨列拼接误配。 */
 interface MetaInfo {
-  fifths?: number; tempo?: number; tempoDotted?: boolean; beats?: number; beatType?: number;
+  fifths?: number; minor?: boolean; tempo?: number; tempoDotted?: boolean; beats?: number; beatType?: number;
   meters?: { beats: number; beatType: number }[]; meterNote?: string;
   fifthsLine?: HLine; tempoLine?: HLine; timeBBox?: Rect;
 }
@@ -113,6 +115,7 @@ function parseMeta(lines: HLine[]): MetaInfo {
       if (g < -7 || g > 7) continue;
       probe("key.cjkName");
       res.fifths = g;
+      if (m[4] === "小调") res.minor = true;
       res.fifthsLine = l;
       break;
     }
@@ -143,13 +146,16 @@ function parseMeta(lines: HLine[]): MetaInfo {
       if (t.length > 8) continue;
       // 升降号在音名右上角的（`E♭ 3/4`，det 读成 "Eb3/4"）一并认下：这一路本就靠「右边紧跟着
       // 一个合法拍号」定位，音名与拍号之间夹的那一个字符只可能是升降号（5《我今来就你》）。
-      const m = t.match(/(?:^|[^A-Za-z])([A-G])([b#♭♯]?)(\d{1,2})[/／](\d{1,2})(?![0-9])/);
+      // 小调印成和弦名式的 `Em 4/4`（青年诗歌 2《真爱》，det 读成 "Em4/4"）：音名后多一个 `m`，调号退到关系大调
+      const m = t.match(/(?:^|[^A-Za-z])([A-G])([b#♭♯]?)(m?)(\d{1,2})[/／](\d{1,2})(?![0-9])/);
       if (!m || !(m[1] in NAT_FIFTHS)) continue;
-      if (!validBeats(Number(m[3])) || !validBeatType(Number(m[4]))) continue;
-      const f = m[2] ? toFifths(m[1], m[2]) : NAT_FIFTHS[m[1]];
-      if (f === undefined) continue;
-      probe("key.bareNote");
+      if (!validBeats(Number(m[4])) || !validBeatType(Number(m[5]))) continue;
+      const f0 = m[2] ? toFifths(m[1], m[2]) : NAT_FIFTHS[m[1]];
+      const f = f0 !== undefined && m[3] ? f0 - 3 : f0;
+      if (f === undefined || f < -7) continue;
+      probe(m[3] ? "key.bareNote.minor" : "key.bareNote");
       res.fifths = f;
+      if (m[3]) res.minor = true;
       res.fifthsLine = l;
       break;
     }
@@ -363,6 +369,36 @@ function joinRowPieces(ls: readonly HLine[]): HLine[] {
     out.push(cur);
   }
   return out;
+}
+
+/** 拉开字距排的标题（青年诗歌 2「真　　爱」）：det 一字一框、框距近两个字高，`joinRowPieces` 的 1.5 字高门槛并不上，
+ *  单字又过不了「至少两个汉字」的标题门。**同一排、字号相近、页上最大一号的单个汉字**逐个并成一行——
+ *  只并单字框，带别的字符的框（书眉「002—青年诗歌」、调号）不动。 */
+function joinSpacedTitleChars(ls: readonly HLine[]): HLine[] {
+  const maxH = Math.max(0, ...ls.map((l) => l.charH));
+  const single = (l: HLine) => /^[一-鿿]$/.test(l.text.trim()) && l.charH >= maxH * 0.8;
+  const sorted = ls.filter(single).sort((a, b) => a.bbox.x - b.bbox.x);
+  const used = new Set<HLine>();
+  const merged: HLine[] = [];
+  for (const a of sorted) {
+    if (used.has(a)) continue;
+    let cur = a;
+    let n = 1;
+    for (const b of sorted) {
+      if (used.has(b) || b === a) continue;
+      const h = Math.max(cur.charH, b.charH);
+      const gap = b.bbox.x - (cur.bbox.x + cur.bbox.w);
+      if (Math.abs(b.cy - cur.cy) > h * 0.3 || h > Math.min(cur.charH, b.charH) * 1.25 || gap < 0 || gap > h * 4) continue;
+      if (n === 1) used.add(a);
+      used.add(b);
+      n += 1;
+      const bbox = unionRect(cur.bbox, b.bbox);
+      const chars = cur.chars && b.chars ? [...cur.chars, ...b.chars] : undefined;
+      cur = { text: cur.text.trim() + b.text.trim(), charH: h, cx: bbox.x + bbox.w / 2, cy: bbox.y + bbox.h / 2, n: cur.n + b.n, bbox, chars };
+    }
+    if (n > 1) merged.push(cur);
+  }
+  return merged.length ? [...ls.filter((l) => !used.has(l)), ...merged] : [...ls];
 }
 
 function mergeStackedColumns(comps: Component[], numH: number): Component[] {
@@ -888,7 +924,8 @@ export async function recognizeHeader(
     return !!ch && (geoMeters ?? []).some((m) => ch.cx >= m.bbox.x && ch.cx <= m.bbox.x + m.bbox.w && overlapRatioY(m.bbox, ln.bbox) > 0.5);
   }
 
-  async function classify(ls: HLine[]) {
+  async function classify(lines: HLine[]) {
+    const ls = joinSpacedTitleChars(lines);
     const creditRe = CREDIT_PREFIX_RE;
     const creditSuffixRe = CREDIT_SUFFIX_RE;
     const creditRoleTailRe = CREDIT_ROLE_TAIL_RE;
@@ -965,6 +1002,9 @@ export async function recognizeHeader(
       // 竖排拍号又把 det 框撑到两排字高（1717《不怕劳累 不怕饥寒》79px，真标题才 49px），
       // 按字号比一比就把标题顶掉了。
       if (/[1１]\s*[=＝]/.test(txt)) continue;
+      // 书眉「页码—书名」（青年诗歌每页左上「002—青年诗歌」，下面还压一道线）不当标题：破折号连着页码，
+      // 曲号前缀只用「.」「、」或紧贴（见下）。拉开字距的真标题「真　　爱」框宽反比它窄，按宽度会输。
+      if (/^\d{1,4}\s*[—–－-]{1,2}\s*[一-鿿]|[一-鿿]\s*[—–－-]{1,2}\s*\d{1,4}$/.test(txt)) { probe("header.runningHead"); continue; }
       // 标题 = 最大字号的中文行；**字号差不多（15% 以内）时取更宽的那一行**。det 给的框高
       // 只是个近似，同一本书里印在右上角的出版方（迦南诗选每页都印着「迦南诗歌」）会因框
       // 松紧不同，忽而比标题矮（2157：61 vs 77）、忽而比它高（2156：79 vs 68）——单看框高，
@@ -1103,6 +1143,8 @@ export async function recognizeHeader(
       }));
     }
     out.fifths = meta.fifths;
+    // 小调只有文本路认得出；字形路读出的调号（只认 `1=X`）顶替了文本路的，就不再是小调
+    if (meta.minor && !g) out.minor = true;
     if (tg) {
       probe("tempo.glyphs");
       out.tempo = tg.bpm;

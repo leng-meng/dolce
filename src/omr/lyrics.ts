@@ -46,6 +46,8 @@ const JUMP_MARK_RE = /(?<![A-Za-z])(D\s*[.,·]\s*[CS]\s*[.,·]?|D\s*[CS](?![A-Za
 // 还会被当成一个英文音节占掉一个音符位、把后面的歌词整体挤偏。故含汉字的块也扫，但只认**形态
 // 明确**的写法：完整词 Fine / To Coda、带点的 D.C. D.S.；裸 `DC`/`DS` 不认——那在真歌词里太容易撞。
 const INLINE_JUMP_RE = /(?<![A-Za-z])(D\s*[.,·]\s*[CS]\s*[.,·]?|Fine|To\s*Coda)(?![A-Za-z])/i;
+// 和弦行里只认的严格写法：完整词 Fine、两个点都在的 D.C. / D.S.（和弦名连写凑不出）。
+const CHORD_ROW_JUMP_RE = /(D\s*\.\s*[CS]\s*\.|Fine)(?![a-z])/;
 // 记号连同其修饰后缀（`D.C. al Fine`）在原文里的跨度：这整段都不该进歌词。
 const JUMP_SPAN_RE = /^(D\s*[.,·]?\s*[CS]\s*[.,·]?(?:\s*al\s*[.,·]?\s*(?:Fine|Coda))?|Fine|To\s*Coda)/i;
 const normalizeJump = (s: string): string => {
@@ -795,14 +797,17 @@ export async function recognizeLyrics(
     // 含汉字的块用严格写法（见 INLINE_JUMP_RE），无汉字的注记块沿用宽松写法。
     let jumpSpan: [number, number] | null = null;
     if (!chunks[s].above) {
-      const hit = (/[一-鿿]/.test(rawText) ? INLINE_JUMP_RE : JUMP_MARK_RE).exec(rawText);
+      // 和弦行先按严格写法找：det 常把记号与前面的和弦连成一片（`EmD.C.`），不能要求前面断开
+      const strictHit = chordKeys.has(key) ? CHORD_ROW_JUMP_RE.exec(rawText) : null;
+      const hit = strictHit ?? (/[一-鿿]/.test(rawText) ? INLINE_JUMP_RE : JUMP_MARK_RE).exec(rawText);
       if (hit) {
         let acc = 0, xf = 0;
         if (textsPos) for (const c of textsPos[s]) { if (acc >= hit.index) { xf = c.xFrac; break; } acc += c.ch.length; }
         const jy = (Math.min(...cells.map((c) => c.y)) + Math.max(...cells.map((c) => rbottom(c)))) / 2;
-        // 和弦行里捞出的记号是误检（连写的 `G/D C` → `DC`，「立定心志」因此被展开成十遍）：
-        // 整行既然不是歌词，记号也不作数。真的 D.C./Fine 印在音符下方自己那一小块里。
-        if (!chordKeys.has(key)) jumps.push({ rowIdx, word: normalizeJump(hit[0]), x: textsPos ? fracToSrcX(xf) : cells[0].x, y: jy, key });
+        // 和弦行里捞出的记号多是误检（连写的 `G/D C` → `DC`，「立定心志」因此被展开成十遍）：整行既然不是歌词，
+        // 宽松写法不作数。但也有本子把 Fine / D.C. 就印在和弦行里（青年诗歌 2《真爱》`Em Fine`、`Em D.C.`）——
+        // 完整的 `Fine`、两个点都在的 `D.C.` 和弦名凑不出来，这两种照收。
+        if (!chordKeys.has(key) || strictHit) jumps.push({ rowIdx, word: normalizeJump(hit[0]), x: textsPos ? fracToSrcX(xf) : cells[0].x, y: jy, key });
         const span = JUMP_SPAN_RE.exec(rawText.slice(hit.index));
         jumpSpan = [hit.index, hit.index + (span?.[0].length ?? hit[0].length)];
       }

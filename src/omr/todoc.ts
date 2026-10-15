@@ -204,7 +204,7 @@ export function recognizedToDoc(score: RecognizedScore, numOf?: Map<ElementId, J
   const title = score.title;
   const song: Song = {
     work: { subtitles: score.subtitle ? [score.subtitle] : [] },
-    key: { fifths: score.fifths },
+    key: score.minor ? { fifths: score.fifths, mode: "minor", tonicDegree: "6" } : { fifths: score.fifths },
     time: { beats: score.beats, beatType: score.beatType },
     parts,
     marks,
@@ -245,6 +245,7 @@ function measuresOfRows(rows: readonly StaffRow[], score: RecognizedScore, ids: 
   const allMeasures: JpNum[][] = [];
   const rowStartIdx = new Set<number>();
   const endStyleIdx = new Set<number>();   // 右边界是终止线（‖）的小节
+  const thinEndIdx = new Set<number>();    // 其中只按位置认的（两根没分出粗细）
   const doubleIdx = new Set<number>();     // 右边界是复纵线（细细双线 ‖）的小节
   const silentIdx = new Set<number>();     // 声部整小节不唱（写整小节隐形休止）
   // 行首段号（`1.`）挂到该行每段第一个有词的音符上（`Lyric.verseLabel`）
@@ -279,6 +280,7 @@ function measuresOfRows(rows: readonly StaffRow[], score: RecognizedScore, ids: 
       if (m.silent) silentIdx.add(allMeasures.length - 1);
     }
     if (row.finalBarline === "end") endStyleIdx.add(allMeasures.length - 1);
+    if (row.finalBarline === "end" && row.finalBarlineThin) thinEndIdx.add(allMeasures.length - 1);
     openTail = !rowEndsClosed(row);
   }
 
@@ -430,7 +432,8 @@ function measuresOfRows(rows: readonly StaffRow[], score: RecognizedScore, ids: 
       const b: Barline = { location: "right" };
       // 反复线与终止线不叠（终止线由 StaffRow.finalBarline 另管）
       if (repeatBackward) { b.style = "light-heavy"; b.repeat = "backward"; }
-      else if (endingStop === undefined && endStyleIdx.has(idx)) b.style = "light-heavy";
+      // 按位置认的终止线又挂着 D.C./D.S.：曲终在别处（Fine），这道是复纵线
+      else if (endingStop === undefined && endStyleIdx.has(idx)) b.style = thinEndIdx.has(idx) && (jump === "D.C." || jump === "D.S.") ? "light-light" : "light-heavy";
       // 复纵线与房尾**可以同时出现**（76《天上有粮》一房末就是 `[1 … ||`，图上没画反复冒号），
       // 故不像终止线那样给 endingStop 让位。
       else if (doubleIdx.has(idx)) b.style = "light-light";

@@ -124,6 +124,9 @@ export interface StaffRow {
   // 行末那道小节线是不是**终止线**（细+粗两根并排 ‖）。→ 右线 `style: "light-heavy"`（123 `|]`）、
   // 文本谱 `|||`（诗歌本）/`||`（番茄）。反复线由 JpNum.repeatBackward 另管，两者不叠。
   finalBarline?: "end";
+  // 上面那道终止线只是按「末行行末两根并排」认的、没量出一根更粗：行末又挂着 D.C./D.S. 时曲子并不在这里结束，
+  // 写复纵线（青年诗歌 2《真爱》，曲终在 Fine）。
+  finalBarlineThin?: boolean;
   // 本行里的**复纵线**（细细双线 ‖）位置，取并排两根中**右侧**那根的 x（与 barlineXs 里的值同源）。
   // → 右线 `style: "light-light"`（123 `||`）、文本谱 `||`。反复线 `:‖` 的两根也会落进来，
   // 下游一律让 repeatBackward 优先，两者不叠。
@@ -155,6 +158,8 @@ export interface TextRegion {
 export interface RecognizedScore {
   key: string; // 如 "C"
   fifths: number;
+  // 页眉印的是小调（`Em 4/4`）：`fifths` 是关系大调的，主音唱名 6
+  minor?: boolean;
   beats: number;
   beatType: number;
   // 混合拍：页眉并排印着的**全部**拍号（首个即 beats/beatType），只印一个时长度为 1。

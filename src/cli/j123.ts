@@ -29,6 +29,7 @@ export { emitPu, emitPuSong, keyNameOf, puArcLosses } from "../model/topu";
 export { emitJly } from "../model/tojly";
 export { scanMusicLine, scanWord, JlyLosses, parseJly, isJlyMusicLine, rewrapJlyText } from "../model/fromjly";
 export { projectForJianpu } from "../model/jianpuproject";
+export { songFifths } from "../model/keyshift";
 export { AccidentalCarry } from "../model/jianpu";
 // 文本谱与 `.jpwabc` 读入：迁移工具要拿它们当输入
 export { parsePu, parsePuAst, sniffDialect } from "../pu";

@@ -25,6 +25,21 @@ export function keyFifths(k: Key): number {
   return fifthsOfSpelling(k.spelling, k.tonicDegree) ?? 0;
 }
 
+/** 调式 → 主音唱名（MusicXML `<mode>` 全名） */
+const MODE_DEGREE: Readonly<Record<string, number>> = {
+  major: 1, ionian: 1, dorian: 2, phrygian: 3, lydian: 4, mixolydian: 5, minor: 6, aeolian: 6, locrian: 7,
+};
+
+/** 主音的音名（前置升降号形，`bB`）：有拼写用拼写；否则按主音唱名（或调式推出的唱名）在调号里取 */
+export function tonicSpelling(k: Key): string {
+  if (k.spelling) return k.spelling;
+  const n = Number(k.tonicDegree ?? MODE_DEGREE[k.mode ?? ""] ?? 1);
+  let f = k.fifths + (n >= 1 && n <= 7 ? DEGREE_FIFTHS[n - 1]! : 0);
+  while (f > 7) f -= 12;
+  while (f < -7) f += 12;
+  return MusicCommon.keys[f + 7]!;
+}
+
 /** 首调号的 fifths */
 export function songFifths(song: Song): number {
   return song.key ? keyFifths(song.key) : 0;

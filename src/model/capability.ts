@@ -36,6 +36,7 @@ export type Feature =
   | "style"          // 样式表引用
   | "layoutDirectives" // 文档内的版面指令（文本谱的 `FontSize:` / `Margin:` / `Space:` / `Off:`）
   | "keyChange"      // 曲中转调
+  | "tonicDegree"    // 主音唱名不是 1（首调 `6=E`、`K:Em`）
   | "multiVerse"     // 多段歌词
   | "volta"          // 房号
   | "grace"          // 倚音
@@ -65,6 +66,7 @@ export const FEATURE_NAMES: Readonly<Record<Feature, string>> = {
   style: "样式表引用",
   layoutDirectives: "版面指令（字号、页边距等）",
   keyChange: "曲中转调",
+  tonicDegree: "主音唱名（6=E 这类写法，会改写成同调号的 1= 大调）",
   multiVerse: "多段歌词",
   volta: "房号",
   grace: "倚音",
@@ -125,11 +127,12 @@ export const FORMAT_CAPS: Readonly<Record<TargetFormat, ReadonlySet<Feature>>> =
   abc: allBut("style", "playOrder", "rhythmNote", "verseLabel", "harmonyOffset", "lyricOnRest", "pageBreak"),
   // `.jpwabc` 的语法**刻意不扩**：和弦、力度、多声部都写不进去。
   // 音符堆：写出端只留最高音、删 voice > 1
-  jpwabc: allBut("harmony", "harmonyOffset", "slur", "dynamics", "multiVoice", "noteStack", "style", "layoutDirectives", "multiSong", "grace", "meta", "paper", "nestedArc", "oddTuplet"),
+  jpwabc: allBut("tonicDegree", "harmony", "harmonyOffset", "slur", "dynamics", "multiVoice", "noteStack", "style", "layoutDirectives", "multiSong", "grace", "meta", "paper", "nestedArc", "oddTuplet"),
   // 文本谱：展开档谱面不画和弦/力度/多声部，但文本谱**原文**装得下和弦、力度（`&f`、`<`…`!`）——
   // 这里算的是「另存为之后还在不在」，所以按解析器的能力写。
   // 番茄另外没有页眉页脚与版面指令字段（写了会被嗅探成诗歌本，见 `pu/dialect.ts::EmitStyle.pageFields`）
-  tomato: allBut(...PU_GONE, "pageText", "layoutDirectives"),
+  // 番茄的调号字段 `D:` 只有音名、没有主音唱名（诗歌本的 `6=E4/4` 写得出）
+  tomato: allBut(...PU_GONE, "pageText", "layoutDirectives", "tonicDegree"),
   shige: allBut(...PU_GONE),
   // jianpu-ly 装不下什么，依据 `docs/格式/jianpu-ly.md` 与 `tojly.ts` 的 `warnings`：
   //   · 多声部/多曲只写第一路（`NextScore` 本版不写）；扩展 meta、纸、样式表、页面文字没有字段；
@@ -138,15 +141,16 @@ export const FORMAT_CAPS: Readonly<Record<TargetFormat, ReadonlySet<Feature>>> =
   //   · 房号只能两房（第 3 房起退化）；换页能写 `\pageBreak`，但**再读回来**会降级成换行；
   //   · 版面指令只认它自己那几个开关（`NoBarNums` 等），文本谱那套 `fontsize`/`margin` 写不出。
   jly: allBut("multiVoice", "multiSong", "meta", "paper", "style", "pageText", "playOrder",
-    "layoutDirectives", "dynamics", "verseLabel"),
+    "layoutDirectives", "dynamics", "verseLabel", "tonicDegree"),
   // Muse `.jcx`（`emitjcx.ts`，说明书 §3.2）：一个文件一首；没有样式表、演唱顺序、扩展 meta（只留「来源」`S:`）、
   // 纸张字段（Muse 的 `%%` 排版参数与本项目的不是一套）；页面文字只有左上 `I:` 与右上 `C:`，页脚没有；
   // 力度没有对应的装饰名（渐强渐弱的 `(<` `<)` 写得出）；歌词没有印刷段号、休止不跟词（同 ABC）；换页退成换行
   jcx: allBut("multiSong", "style", "playOrder", "meta", "paper", "pageText", "layoutDirectives", "dynamics",
-    "verseLabel", "lyricOnRest", "harmonyOffset", "pageBreak"),
+    "verseLabel", "lyricOnRest", "harmonyOffset", "pageBreak", "tonicDegree"),
   // MusicXML 装不下的两样：`playOrder` 的 skip/limit（`<ending>` 只能整小节）与样式引用。
-  // 见 `docs/模块/模型-scoredoc.md` 的关键判据。
-  musicxml: allBut("playOrder", "style", "layoutDirectives", "nestedArc", "oddTuplet"),
+  // 见 `docs/模块/模型-scoredoc.md` 的关键判据。主音唱名（`6=E`）只有 `<fifths>`/`<mode>`，读回不记唱名。
+  // jianpu-ly、Muse、`.jpwabc` 的调号也只写 `1=` 大调 / 调号，主音唱名同样写不出。
+  musicxml: allBut("playOrder", "style", "layoutDirectives", "nestedArc", "oddTuplet", "tonicDegree"),
 };
 
 /** 文本谱认的版面指令（`pu/parse.ts` 的头部字段）。123/ABC 读进来是小写（`I:fontsize`）。 */
@@ -170,6 +174,7 @@ export function featuresUsed(doc: ScoreDoc): Set<Feature> {
     if (songPage(song) || songStaffSize(song) || songLyricSize(song) || Object.keys(songHeaderFonts(song)).length) used.add("paper");
     if (song.remarks?.length) used.add("textLine");
     if (verseCount(song) > 1) used.add("multiVerse");
+    if (song.key?.tonicDegree && song.key.tonicDegree !== "1") used.add("tonicDegree");
     for (const m of song.marks ?? []) {
       if (m.type === "slur") used.add("slur");
       if (m.type === "wedge") used.add("dynamics"); // 渐强渐弱

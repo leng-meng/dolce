@@ -5,7 +5,8 @@ import { AbcFamilyEmitter, type MarkIndex } from "./emit";
 import { BARE_CHORD_RE } from "./dialect123";
 import { directionsAsMarks } from "../model/directionmarks";
 import { projectForJianpu } from "../model/jianpuproject";
-import { clefName, harmonyText, keySpelling, melodyLane, topNote } from "../model/jianpu";
+import { clefName, harmonyText, melodyLane, topNote } from "../model/jianpu";
+import { tonicSpelling } from "../model/keyshift";
 
 /** 倚音时值相对八分：下标 = `_` 个数（八分不写，`{2_}` 十六分）。四分倚音写不出，按八分 */
 const GRACE_TYPES = ["eighth", "16th", "32nd", "64th"];
@@ -119,12 +120,12 @@ export class Emitter123 extends AbcFamilyEmitter {
     return s;
   }
 
-  /** 主音唱名非 1 时写简谱首调形（`6=E`），否则写 `1=X`。 */
+  /** 写了调式的照 ABC 调式形写回（`Em`、`Ddor`），否则写简谱首调形 `1=X` / `6=E`。 */
   protected keyValue(k: Key): string {
     if (k.spelling === "none") return "none";
-    const sp = keySpelling(k);
-    const degree = k.tonicDegree ?? "1";
-    return `${degree}=${sp}`;
+    const sp = tonicSpelling(k);
+    if (k.mode && k.mode !== "major" && k.mode !== "ionian") return sp + (k.mode === "minor" ? "m" : k.mode.slice(0, 3));
+    return `${k.tonicDegree ?? "1"}=${sp}`;
   }
 }
 
