@@ -81,6 +81,16 @@ const SHORT: Record<string, string> = {
   "bar.single": "\u2502", "bar.double": "\u2016", "bar.final": "\u2502\u258C", "bar.repeatStart": "\u2016:", "bar.repeatEnd": ":\u2016",
   "volta.1": "\u23B41.", "volta.2": "\u23B42.",
   "jump.segno": "\u{1D10B}", "jump.coda": "\u{1D10C}", "jump.dc": "D.C.", "jump.ds": "D.S.", "jump.fine": "Fine",
+  "move.prev": "\u21E0", "move.next": "\u21E2", // ⇠ ⇢
+  "move.measPrev": "\u21C7", "move.measNext": "\u21C9", // ⇇ ⇉
+  "span.endPrev": "\u2322\u2190", "span.endNext": "\u2322\u2192", // ⌢← ⌢→
+  "sel.beamGroup": "\u266B", // ♫
+  "issue.prev": "\u2190!", "issue.next": "!\u2192",
+  "deco.staccato": "\u2022", "deco.tenuto": "\u2012", "deco.marcato": "^", "deco.staccatissimo": "\u25BE",
+  "deco.fermataInv": "\u{1D111}", "deco.trill": "tr", "deco.mordent": "\u223F", "deco.turn": "\u223D",
+  "wedge.cresc": "\u{1D192}", "wedge.dim": "\u{1D193}", // 𝆒 𝆓
+  "grace.toggle": "\u266A\u0338", // ♪̸
+  "meas.keyReread": "1=\u21BB", "meas.clef": "\u{1D11E}", "meas.clefReread": "\u{1D11E}\u21BB",
   "view.formatMarks": "\u00B6", // ¶
   "nav.gotoMeasure": "\u2192\u2116", // →№
   "edit.transpose": "\u21C5", // ⇅
@@ -147,12 +157,15 @@ function actionsFor(target: MenuTarget, mode: VisualMode): VisualAction[] {
   const all = listed().filter((a) => usable(a, mode));
   switch (target) {
     case "mark":
+      // 记号、歌词字：删、挪（识谱软件「拖到别的音上」的键盘版）
+      return all.filter((a) => a.id === "del.forward" || a.id.startsWith("edit.") || a.id.startsWith("move.") || a.id.startsWith("span."));
     case "break":
       return all.filter((a) => a.id === "del.forward" || a.id.startsWith("edit."));
     case "caret":
       return all.filter((a) => ["note.digit", "note.letter", "voice.set", "sus.add", "bar.insert", "brk.line", "brk.page", "del.forward", "del.back", "mode.edit", "dur.halve", "dur.double", "edit.paste"].includes(a.id) || a.group === SUBMENU_GROUP);
     case "note":
-      return all.filter((a) => !["mode.edit", "del.back", "view.formatMarks", "voice.set"].includes(a.id));
+      return all.filter((a) => !["mode.edit", "del.back", "view.formatMarks", "voice.set", "issue.next", "issue.prev"].includes(a.id) &&
+        !a.id.startsWith("move.") && !a.id.startsWith("span."));
     default:
       return all.filter((a) => a.id.startsWith("edit.") || a.id === "view.formatMarks" || a.group === SUBMENU_GROUP);
   }

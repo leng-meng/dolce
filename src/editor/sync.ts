@@ -67,8 +67,9 @@ export interface SyncEntry {
   /** `barline`：这条线画在 `id` 那个音符**之前**还是**之后**（对应模型的 `location`）。
    *  小节线没有自己的 id，两个排版器都按「相邻音符 id + edge」索引它的 `<g>` */
   edge?: "before" | "after";
-  /** `mark`：挂的是什么（`AttachedSource.kind`，或 slur 的 `"slur"`）与记号名 */
-  markKind?: AttachedSource["kind"] | "slur";
+  /** `mark`：挂的是什么（`AttachedSource.kind`，或 slur 的 `"slur"`）与记号名。`.musicxml` 另有延音线 `"tied"`、
+   *  `<direction>` 里力度以外的那些 `"dir"`（渐强渐弱、速度、踏板…，`name` 是 `Direction.type`） */
+  markKind?: AttachedSource["kind"] | "slur" | "tied" | "dir";
   name?: string;
   /** slur：终点音符（Tab 在起点、终点上都能轮到它） */
   end?: ElementId;
@@ -76,6 +77,8 @@ export interface SyncEntry {
   pair?: { from: number; to: number };
   /** `break`：换页 */
   page?: boolean;
+  /** `.musicxml` 的 `<direction>`（力度、文字、渐强渐弱…）：第几声部第几小节 `directions` 里第几条（模型那一路按它改） */
+  dir?: { pi: number; mi: number; index: number };
   /** `header`：调号、拍号、两样写在一处（`header.ts::HeaderRole`）；文字字段缺省 */
   headerRole?: "key" | "time" | "keytime";
 }
@@ -220,8 +223,37 @@ export class SyncIndex {
               const from = box.from + m2.index + m2[0].indexOf(">") + 1;
               out.push({ kind: "lyric", from, to: from + m2[1].length, id: el.id, verse: ly.number - 1, verseNo: ly.number });
             }
+            // 音符上的记号（`<notations>` 里的奏法、装饰、延长号）：一个记号一条，名字同 `model/edit.ts::DecoKind`
+            for (const n of el.notes) {
+              const ne = surfaceOf(n) ?? (n === el.notes[0] ? surfaceOf(el) : undefined);
+              for (const nt of [...(ne?.children ?? [])].filter((c) => c.tagName === "notations")) {
+                for (const c of [...nt.children]) {
+                  const items = c.tagName === "articulations" || c.tagName === "ornaments" ? [...c.children] : c.tagName === "fermata" ? [c] : [];
+                  for (const it of items) {
+                    const sp = spanOf(it, it.tagName);
+                    if (!sp) continue;
+                    const name = it.tagName === "fermata" && it.getAttribute("type") === "inverted" ? "fermata-inverted" : it.tagName;
+                    out.push({ kind: "mark", ...sp, id: el.id, verse: null, markKind: "deco", name });
+                  }
+                }
+              }
+            }
+            if (el.harmony) {
+              const sp = spanOf(surfaceOf(el.harmony), "harmony");
+              if (sp) out.push({ kind: "mark", ...sp, id: el.id, verse: null, markKind: "harmony", name: el.harmony.text ?? "" });
+            }
             lastId = el.id;
           }
+          // `<direction>`：挂在 `afterElements` 指的那个音前（之后第一个和弦；小节末的借最后一个和弦）
+          (m.directions ?? []).forEach((d, index) => {
+            const sp = spanOf(surfaceOf(d), "direction");
+            const k = Math.max(0, d.afterElements ?? 0);
+            const host = m.elements.slice(k).find((e) => e.kind === "chord" && (d.voice === undefined || e.voice === d.voice)) ??
+              [...m.elements].reverse().find((e) => e.kind === "chord");
+            if (!sp || !host) return;
+            const markKind = d.type === "dynamics" ? "dynamic" : d.type === "words" || d.type === "rehearsal" ? "annotation" : "dir";
+            out.push({ kind: "mark", ...sp, id: host.id, verse: null, markKind, name: markKind === "dir" ? d.type : d.text ?? d.type, dir: { pi, mi, index } });
+          });
           // 小节边界就是这一小节的 `</measure>`
           const box = spanOf(surfaceOf(m), "measure");
           if (box && lastId !== null) out.push({ kind: "barline", from: box.to - "</measure>".length, to: box.to, id: lastId, verse: null, edge: "after" });
@@ -238,11 +270,12 @@ export class SyncIndex {
         }
       }
       for (const mk of song.marks) {
-        if (mk.type !== "slur") continue;
-        const open = spanOf(surfaceOf(mk, "start"), "slur");
-        const close = spanOf(surfaceOf(mk, "stop"), "slur");
+        if (mk.type !== "slur" && mk.type !== "tied") continue;
+        const tag: "slur" | "tied" = mk.type === "slur" ? "slur" : "tied";
+        const open = spanOf(surfaceOf(mk, "start"), tag);
+        const close = spanOf(surfaceOf(mk, "stop"), tag);
         if (!open) continue;
-        const base = { kind: "mark" as const, id: mk.start, end: mk.end, verse: null, markKind: "slur" as const, name: "slur" };
+        const base = { kind: "mark" as const, id: mk.start, end: mk.end, verse: null, markKind: tag, name: tag };
         out.push({ ...base, ...open, ...(close ? { pair: close } : {}) });
         if (close) out.push({ ...base, ...close, pair: open });
       }

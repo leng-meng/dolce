@@ -8,7 +8,7 @@
 // 语义对齐文本格式那一路（`ops.ts`）：唱名按调号换算、八度点不变；删音符就是删，不补休止（不满的小节由拍数自检标红）；
 // 增时线 = 多一拍；小节线 = 把这一小节在光标处劈成两节（所有声部一起劈）。
 
-import type { Accidental, Chord, Direction, ElementId, Key, Mark, Measure, Note, NoteType, Part, Pitch, ScoreDoc, Song, Time } from "./doc";
+import type { Accidental, Chord, Clef, Direction, ElementId, Key, Mark, Measure, Note, NoteType, Part, Pitch, ScoreDoc, Song, Time } from "./doc";
 import { SIMPLE_DIVISIONS } from "./doc";
 import { degreeFromPitch, pitchFromDegree } from "./jianpu";
 import { t as tr } from "../i18n";
@@ -781,22 +781,38 @@ export function toggleTie(doc: ScoreDoc, id: ElementId): ModelEdit {
   return { select: [l.chord] };
 }
 
-/** 延长号 / 重音：有就去掉，没有就加上。 */
-export function toggleDeco(doc: ScoreDoc, ids: readonly ElementId[], kind: "fermata" | "accent"): ModelEdit {
+/** 音符上的记号：延长号（`fermata` / 倒置 `fermata-inverted`）、奏法（accent、staccato、tenuto…）、装饰（trill-mark、mordent、turn…）。 */
+export type DecoKind = "fermata" | "fermata-inverted" | (typeof ARTICULATIONS)[number] | (typeof ORNAMENTS)[number];
+export const ARTICULATIONS = ["accent", "staccato", "tenuto", "strong-accent", "staccatissimo", "detached-legato", "breath-mark"] as const;
+export const ORNAMENTS = ["trill-mark", "mordent", "inverted-mordent", "turn", "inverted-turn"] as const;
+
+function hasDeco(c: Chord, kind: DecoKind): boolean {
+  const n = c.notations;
+  if (kind === "fermata") return !!n?.fermata && !n.fermataInverted;
+  if (kind === "fermata-inverted") return !!n?.fermata && !!n.fermataInverted;
+  return (ARTICULATIONS as readonly string[]).includes(kind) ? !!n?.articulations?.includes(kind) : !!n?.ornaments?.includes(kind);
+}
+
+/** 音符记号：有就去掉，没有就加上（选中几个音时，全都有才算有）。 */
+export function toggleDeco(doc: ScoreDoc, ids: readonly ElementId[], kind: DecoKind): ModelEdit {
   const locs = chordsOf(doc, ids);
   if (locs.length === 0) return { error: tr("ve.selectNote") };
-  const has = (c: Chord): boolean => (kind === "fermata" ? !!c.notations?.fermata : !!c.notations?.articulations?.includes("accent"));
-  const on = locs.every((l) => has(l.chord));
+  const on = locs.every((l) => hasDeco(l.chord, kind));
   for (const { chord: c } of locs) {
     const n = { ...(c.notations ?? {}) };
-    if (kind === "fermata") {
-      if (on) delete n.fermata;
-      else n.fermata = true;
+    if (kind === "fermata" || kind === "fermata-inverted") {
+      delete n.fermata;
+      delete n.fermataInverted;
+      if (!on) {
+        n.fermata = true;
+        if (kind === "fermata-inverted") n.fermataInverted = true;
+      }
     } else {
-      const arts = (n.articulations ?? []).filter((a) => a !== "accent");
-      if (!on) arts.push("accent");
-      if (arts.length) n.articulations = arts;
-      else delete n.articulations;
+      const field = (ARTICULATIONS as readonly string[]).includes(kind) ? "articulations" : "ornaments";
+      const list = (n[field] ?? []).filter((a) => a !== kind);
+      if (!on) list.push(kind);
+      if (list.length) n[field] = list;
+      else delete n[field];
     }
     if (Object.keys(n).length) c.notations = n;
     else delete c.notations;
@@ -1477,4 +1493,457 @@ export function pasteClip(doc: ScoreDoc, anchor: InsertAnchor, items: readonly C
     at = { after: last.id };
   }
   return added.length ? { select: added } : { error: tr("me.clipNoNotes") };
+}
+
+// ───────────────────────── 识别修正：重读与挪动 ─────────────────────────
+//
+// 识谱软件里改谱号、改调号是**纠正认错**（PhotoScore、SmartScore 默认符头不动、按新谱号 / 调号重读音高），
+// 与打谱软件的「保音高、挪符头」相反，两种都给（`reread`）。挪动类（连线端点、力度文字、和弦名、歌词）一次挪一个音，
+// 对齐识谱软件「拖到最近的音上吸附」那一下。
+
+const DIATONIC: Record<string, number> = { C: 0, D: 1, E: 2, F: 3, G: 4, A: 5, B: 6 };
+const ACC_ALTER: Record<Accidental, number> = { "double-flat": -2, flat: -1, natural: 0, sharp: 1, "double-sharp": 2 };
+
+/** 谱号最下面那条线是第几个自然音级（八度 × 7 + 音级）：G 谱号第二线 G4、F 谱号第四线 F3、C 谱号第三线 C4。 */
+function clefBottom(c: Clef): number {
+  const ref = c.sign === "F" ? 3 * 7 + 3 : c.sign === "C" ? 4 * 7 : 4 * 7 + 4;
+  const line = c.line ?? (c.sign === "F" ? 4 : c.sign === "C" ? 3 : 2);
+  return ref + 7 * (c.octaveChange ?? 0) - 2 * (line - 1);
+}
+
+const staffOf = (c: { staff?: number }): number => c.staff ?? 1;
+
+/** 第 `mi` 小节开头第 `staff` 谱表生效的谱号（含本小节 `attrs`、不含小节中间的）。 */
+function clefAt(part: Part, mi: number, staff: number): Clef {
+  let cur: Clef = { sign: "G", line: 2 };
+  for (let i = 0; i <= mi && i < part.measures.length; i++) {
+    const m = part.measures[i]!;
+    if (i > 0) for (const la of part.measures[i - 1]!.laterAttrs ?? []) for (const c of la.attrs.clefs ?? []) if (staffOf(c) === staff) cur = c;
+    for (const c of m.attrs?.clefs ?? []) if (staffOf(c) === staff) cur = c;
+  }
+  return cur;
+}
+
+/**
+ * 重读一小节里（某谱表上、`keep` 放行的）音的升降：印了临时记号的照记号，没印的按本小节前面同音级同八度印过的、
+ * 再按延音线接过来的（`carry`，上一小节末的连音起点），最后按调号——即读谱的人怎么读。返回本小节末仍连着的音，给下一小节当 `carry`。
+ */
+function rereadAlters(m: Measure, key: Key, staff: number | null, keep: (ch: Chord, at: number) => boolean, carry: Map<string, number>): Map<string, number> {
+  const at = onsets(m);
+  const items: { at: number; order: number; note: Note; staff: number; ch: Chord }[] = [];
+  m.elements.forEach((el, order) => {
+    if (el.kind !== "chord" || (staff !== null && el.staff !== staff)) return;
+    for (const n of el.notes) if (n.pitch) items.push({ at: at.get(el) ?? 0, order, note: n, staff: el.staff, ch: el });
+  });
+  items.sort((a, b) => a.at - b.at || a.order - b.order);
+  const state = new Map<string, number>();
+  const out = new Map<string, number>();
+  for (const it of items) {
+    const p = it.note.pitch!;
+    const k = `${it.staff}:${p.step}:${p.octave}`;
+    if (keep(it.ch, it.at)) {
+      const alter = it.note.accidental ? ACC_ALTER[it.note.accidental]
+        : it.note.tie?.stop && carry.has(k) ? carry.get(k)!
+          : state.get(k) ?? keyAlter(p.step, key.fifths);
+      it.note.pitch = { ...p, alter };
+    }
+    state.set(k, it.note.pitch!.alter);
+    if (it.note.tie?.start) out.set(k, it.note.pitch!.alter);
+  }
+  return out;
+}
+
+/**
+ * 换谱号：第 `pi` 声部第 `staff` 谱表自第 `mi` 小节起改成 `clef`，到这一谱表下一次换谱号为止。
+ * `reread`：符头在谱表上的位置不动、按新谱号重读音高（识别认错谱号的纠正）；否则音高不动（谱面上符头跟着挪）。
+ */
+export function setClefAt(doc: ScoreDoc, si: number, pi: number, mi: number, staff: number, clef: Clef, reread: boolean, hooks: EditHooks = {}): ModelEdit {
+  const song = doc.songs[si];
+  const part = song?.parts[pi];
+  const m0 = part?.measures[mi];
+  if (!song || !part || !m0) return { error: tr("me.noMeasure") };
+  const old = clefAt(part, mi, staff);
+  const nc: Clef = { ...clef, ...(staff > 1 || (part.staffCount ?? 1) > 1 ? { staff } : {}) };
+  m0.attrs = { ...(m0.attrs ?? {}), clefs: [...(m0.attrs?.clefs ?? []).filter((c) => staffOf(c) !== staff), nc] };
+  // 保音高：音不动，谱面上符头跟着谱号挪（临时记号印法与谱号无关，不用重算）
+  if (reread) {
+    const shift = clefBottom(nc) - clefBottom(old);
+    let carry = new Map<string, number>();
+    for (let i = mi; i < part.measures.length; i++) {
+      const m = part.measures[i]!;
+      if (i > mi && m.attrs?.clefs?.some((c) => staffOf(c) === staff)) break;
+      // 小节中间换了这一谱表的谱号：那之后的音不归这一段
+      const cut = (m.laterAttrs ?? []).filter((la) => la.attrs.clefs?.some((c) => staffOf(c) === staff)).map((la) => la.onset ?? Infinity);
+      const stop = cut.length ? Math.min(...cut) : Infinity;
+      const keep = (_: Chord, at: number): boolean => at < stop;
+      const at = onsets(m);
+      for (const el of m.elements) {
+        if (el.kind !== "chord" || el.staff !== staff || !keep(el, at.get(el) ?? 0)) continue;
+        for (const n of el.notes) {
+          if (!n.pitch) continue;
+          const d = n.pitch.octave * 7 + DIATONIC[n.pitch.step]! + shift;
+          n.pitch = { step: STEPS[((d % 7) + 7) % 7]!, alter: n.pitch.alter, octave: Math.floor(d / 7) };
+        }
+        hooks.forgetStem?.(el);
+      }
+      // 印出来的临时记号就是谱面上的，重读不改它的印法（不跑 `respellMeasure`，否则提醒记号会被当成多余的去掉）
+      carry = rereadAlters(m, measureCtx(song, part, i).key, staff, keep, carry);
+      if (stop !== Infinity) break;
+    }
+  }
+  hooks.forgetLayout?.(song);
+  return { select: [] };
+}
+
+/**
+ * 换调号并**重读**：自第 `mi` 小节起各声部改成 `fifths`，到下一次换调号为止，没印临时记号的音按新调号重读升降
+ * （印了的照记号；同小节前面印过的、延音线接过来的照前面）。保音高那一种见 `setKeyAt`。
+ */
+export function rereadKeyAt(doc: ScoreDoc, si: number, mi: number, fifths: number, hooks: EditHooks = {}): ModelEdit {
+  const song = doc.songs[si];
+  if (!song) return { error: tr("me.noMeasure") };
+  for (const part of song.parts) {
+    const m0 = part.measures[mi];
+    if (!m0) continue;
+    m0.attrs = { ...(m0.attrs ?? {}), key: { ...(m0.attrs?.key ?? {}), fifths } };
+    if (mi === 0) song.key = { ...(song.key ?? {}), fifths };
+    let carry = new Map<string, number>();
+    for (let i = mi; i < part.measures.length; i++) {
+      const m = part.measures[i]!;
+      if (i > mi && m.attrs?.key) break;
+      const key = measureCtx(song, part, i).key;
+      carry = rereadAlters(m, key, null, () => true, carry);
+      for (const el of m.elements) if (el.kind === "chord") hooks.forgetStem?.(el);
+    }
+  }
+  hooks.forgetLayout?.(song);
+  return { select: [] };
+}
+
+/** 同一声部同一声线里 `loc` 前 / 后第一个和弦（可跨小节；`skip` 放过的不算，如休止、倚音）。 */
+function stepInVoice(l: ChordLoc, delta: number, skip: (c: Chord) => boolean): ChordLoc | null {
+  const dir = delta > 0 ? 1 : -1;
+  let mi = l.mi;
+  let i = l.index + dir;
+  for (;;) {
+    const m = l.part.measures[mi];
+    if (!m) return null;
+    if (i < 0 || i >= m.elements.length) {
+      mi += dir;
+      const nm = l.part.measures[mi];
+      if (!nm) return null;
+      i = dir > 0 ? 0 : nm.elements.length - 1;
+      continue;
+    }
+    const e = m.elements[i]!;
+    if (e.kind === "chord" && e.voice === l.chord.voice && !skip(e)) return { ...l, mi, measure: m, chord: e, index: i };
+    i += dir;
+  }
+}
+
+/** 先后：同一声部里谁在前（小节、小节内下标）。 */
+const before = (a: ChordLoc, b: ChordLoc): boolean => a.mi < b.mi || (a.mi === b.mi && a.index < b.index);
+
+/**
+ * 连线（圆滑线、三连音以外的跨音记号）一端挪一个音：`which` 哪一端、`delta` 往后 +1 / 往前 −1；`which` 为 `both` 整条一起挪。
+ * 挪到的音不能越过另一端。延音线只连相邻同音，不挪（删了在对的地方重加）。
+ */
+export function moveMarkEnd(doc: ScoreDoc, type: Mark["type"], startId: ElementId, endId: ElementId, which: "start" | "end" | "both", delta: number): ModelEdit & { moved?: MovedMark } {
+  const a = locate(doc, startId);
+  const b = locate(doc, endId);
+  if (!a || !b) return { error: tr("me.noNote") };
+  const mk = a.song.marks.find((m) => m.type === type && m.start === startId && m.end === endId);
+  if (!mk) return { error: tr("me.noMark") };
+  if (type === "tied") return { error: tr("me.tieNoMove") };
+  const skip = (c: Chord): boolean => !!c.grace || !!c.rest;
+  let na = a;
+  let nb = b;
+  if (which !== "end") {
+    const x = stepInVoice(a, delta, skip);
+    if (!x) return { error: tr("me.noNeighbour") };
+    na = x;
+  }
+  if (which !== "start") {
+    const x = stepInVoice(b, delta, skip);
+    if (!x) return { error: tr("me.noNeighbour") };
+    nb = x;
+  }
+  if (!before(na, nb)) return { error: tr("me.markCollapse") };
+  mk.start = na.chord.id;
+  mk.end = nb.chord.id;
+  delete mk.startNote;
+  delete mk.endNote;
+  return { select: [na.chord, nb.chord], moved: { markOn: na.chord, kind: "slur" } };
+}
+
+/** 小节里第 `i` 个元素之前、按写出端的游标（文档序）缺省落在哪一刻（见 `toxml.ts` 的 `end`）。 */
+function defaultOnsetBefore(m: Measure, i: number): number {
+  let cursor = 0;
+  for (let k = 0; k < i && k < m.elements.length; k++) {
+    const el = m.elements[k]!;
+    const start = el.onset ?? cursor;
+    cursor = start + (el.kind === "chord" ? (el.grace ? 0 : el.duration.divisions) : (el.duration?.divisions ?? 0));
+  }
+  return cursor;
+}
+
+/** 一条 `<direction>` 的位置：第几首、第几声部、第几小节、`directions` 里第几条。 */
+export interface DirRef {
+  si: number;
+  pi: number;
+  mi: number;
+  index: number;
+}
+
+/** 这条记号挂在哪个音前（`afterElements` 指的那个和弦；挂在小节末的取最后一个和弦）。 */
+function dirAnchor(doc: ScoreDoc, r: DirRef): { loc: ChordLoc; dir: Direction } | null {
+  const song = doc.songs[r.si];
+  const part = song?.parts[r.pi];
+  const m = part?.measures[r.mi];
+  const dir = m?.directions?.[r.index];
+  if (!song || !part || !m || !dir) return null;
+  const k = Math.min(dir.afterElements ?? 0, m.elements.length - 1);
+  // 往后找第一个和弦（同声线优先）
+  for (let i = Math.max(0, k); i < m.elements.length; i++) {
+    const e = m.elements[i]!;
+    if (e.kind === "chord" && (dir.voice === undefined || e.voice === dir.voice)) return { loc: { si: r.si, pi: r.pi, mi: r.mi, song, part, measure: m, chord: e, index: i }, dir };
+  }
+  for (let i = m.elements.length - 1; i >= 0; i--) {
+    const e = m.elements[i]!;
+    if (e.kind === "chord") return { loc: { si: r.si, pi: r.pi, mi: r.mi, song, part, measure: m, chord: e, index: i }, dir };
+  }
+  return null;
+}
+
+/** 把一条 `<direction>` 挂到 `to` 那个和弦前（可换小节）。 */
+function placeDirection(from: Measure, dir: Direction, to: ChordLoc): void {
+  from.directions = (from.directions ?? []).filter((d) => d !== dir);
+  if (!from.directions.length) delete from.directions;
+  dir.afterElements = to.index;
+  delete dir.offset;
+  const want = onsets(to.measure).get(to.chord) ?? 0;
+  if (want === defaultOnsetBefore(to.measure, to.index)) delete dir.onset;
+  else dir.onset = want;
+  (to.measure.directions ??= []).push(dir);
+}
+
+/** 选中的记号挪了之后要选回它：挂在哪个和弦上、是什么（模型那一路重写读回后按和弦位置 + 种类认回，`modelops.ts`）。 */
+export type MovedMark =
+  | { markOn: Chord; kind: "dir"; dirType: string }
+  | { markOn: Chord; kind: "harmony" | "slur" }
+  | { lyricOf: Chord; verse: number };
+
+/**
+ * 力度、表情文字、速度、渐强渐弱的一端（都是 `<direction>`）挪一个音：`delta` +1 往后、−1 往前，`byMeasure` 时挪到前 / 后一小节的同一拍
+ * （那一小节里起点最近的音）。渐强渐弱的起点与终点各是一条，`pair` 给了就两条一起挪（整条挪）。
+ */
+export function moveDirection(doc: ScoreDoc, r: DirRef, delta: number, byMeasure = false, pair?: DirRef): ModelEdit & { moved?: MovedMark } {
+  const refs = [r, ...(pair ? [pair] : [])];
+  const anchors = refs.map((x) => dirAnchor(doc, x));
+  if (anchors.some((x) => !x)) return { error: tr("me.noMark") };
+  const targets: ChordLoc[] = [];
+  for (const an of anchors as { loc: ChordLoc; dir: Direction }[]) {
+    let to: ChordLoc | null;
+    if (byMeasure) {
+      const mi = an.loc.mi + delta;
+      const m = an.loc.part.measures[mi];
+      if (!m) return { error: tr("me.noNeighbour") };
+      const want = onsets(an.loc.measure).get(an.loc.chord) ?? 0;
+      let best: ChordLoc | null = null;
+      let bd = Infinity;
+      const os = onsets(m);
+      m.elements.forEach((e, i) => {
+        if (e.kind !== "chord" || e.grace || e.voice !== an.loc.chord.voice) return;
+        const d = Math.abs((os.get(e) ?? 0) - want);
+        if (d < bd) (bd = d), (best = { ...an.loc, mi, measure: m, chord: e, index: i });
+      });
+      to = best;
+    } else to = stepInVoice(an.loc, delta, (c) => !!c.grace);
+    if (!to) return { error: tr("me.noNeighbour") };
+    targets.push(to);
+  }
+  // 挪完起点不能越过终点
+  if (pair && !before(targets[0]!, targets[1]!) && targets[0]!.chord !== targets[1]!.chord) return { error: tr("me.markCollapse") };
+  (anchors as { loc: ChordLoc; dir: Direction }[]).forEach((an, k) => placeDirection(an.loc.measure, an.dir, targets[k]!));
+  return { select: [targets[0]!.chord], moved: { markOn: targets[0]!.chord, kind: "dir", dirType: anchors[0]!.dir.type } };
+}
+
+/** 和弦名挪一个音（同声线，休止也能挂）；那个音已有和弦名就拒绝。 */
+export function moveHarmony(doc: ScoreDoc, id: ElementId, delta: number): ModelEdit & { moved?: MovedMark } {
+  const l = locate(doc, id);
+  if (!l?.chord.harmony) return { error: tr("me.noMark") };
+  const to = stepInVoice(l, delta, (c) => !!c.grace);
+  if (!to) return { error: tr("me.noNeighbour") };
+  if (to.chord.harmony) return { error: tr("me.harmonyTaken") };
+  to.chord.harmony = l.chord.harmony;
+  delete l.chord.harmony;
+  delete to.chord.harmony.onset;
+  delete to.chord.harmony.offset;
+  return { select: [to.chord], moved: { markOn: to.chord, kind: "harmony" } };
+}
+
+/**
+ * 歌词挪格（识别漏认 / 多认一个音，后面的字整串错开）：`delta` +1 = 在这个字前空出一格，这个字连同后面紧接着的字各往后挪一个音，
+ * 挪到本段第一个空着的音为止（那一格吸收掉）；−1 = 前一个音空着时，这个字连同后面紧接着的字各往前挪一格。
+ * 能配字的音 = 同声线、不是倚音；休止只在本来挂着字时算（同 `Chord.lyricAnchor` 的缺省）。
+ * `count`：只挪从这个字起的几个字（选中了几个字时）；往后挪时紧挨着的下一格不空，照样顺次推到第一个空格为止。
+ */
+export function shiftLyrics(doc: ScoreDoc, id: ElementId, verse: number, delta: number, count?: number): ModelEdit & { moved?: MovedMark } {
+  const l = locate(doc, id);
+  if (!l) return { error: tr("me.noNote") };
+  const seq: Chord[] = [];
+  for (const m of l.part.measures) {
+    for (const e of m.elements) {
+      if (e.kind !== "chord" || e.voice !== l.chord.voice || e.grace) continue;
+      const anchor = e.lyricAnchor ?? (!e.rest || !!e.lyrics?.length);
+      if (anchor) seq.push(e);
+    }
+  }
+  const k = seq.indexOf(l.chord);
+  const has = (c: Chord | undefined): boolean => !!c?.lyrics?.some((x) => x.number === verse);
+  if (k < 0 || !has(l.chord)) return { error: tr("me.noLyric") };
+  const take = (c: Chord): LyricOf => {
+    const ly = c.lyrics!.find((x) => x.number === verse)!;
+    c.lyrics = c.lyrics!.filter((x) => x !== ly);
+    if (!c.lyrics.length) delete c.lyrics;
+    return ly;
+  };
+  const put = (c: Chord, ly: LyricOf): void => {
+    c.lyrics = [...(c.lyrics ?? []), ly].sort((a, b) => a.number - b.number);
+  };
+  // 从这个字起紧接着的一串（给了 `count` 就只取这几个；往后挪时再顺次推到空格）
+  let j = k;
+  const lim = count && count > 0 ? k + count - 1 : Infinity;
+  while (j + 1 < seq.length && has(seq[j + 1]) && (j < lim || delta > 0)) j++;
+  if (delta > 0) {
+    if (j + 1 >= seq.length) return { error: tr("me.lyricNoRoom") };
+    for (let i = j; i >= k; i--) put(seq[i + 1]!, take(seq[i]!));
+    return { select: [seq[k + 1]!], moved: { lyricOf: seq[k + 1]!, verse } };
+  }
+  if (k === 0 || has(seq[k - 1])) return { error: tr("me.lyricNoRoom") };
+  for (let i = k; i <= j; i++) put(seq[i - 1]!, take(seq[i]!));
+  return { select: [seq[k - 1]!], moved: { lyricOf: seq[k - 1]!, verse } };
+}
+
+/** 倚音 ↔ 正音：倚音改成正音按它印的时值占拍；正音改成倚音不占拍（照印的时值，八分的带斜线）。 */
+export function toggleGrace(doc: ScoreDoc, ids: readonly ElementId[], hooks: EditHooks = {}): ModelEdit {
+  const locs = chordsOf(doc, ids).filter((l) => !l.chord.rest);
+  if (locs.length === 0) return { error: tr("ve.selectNote") };
+  const on = locs.every((l) => l.chord.grace);
+  for (const l of locs) {
+    const ch = l.chord;
+    const { dpq } = measureCtx(l.song, l.part, l.mi);
+    if (on) {
+      delete ch.grace;
+      const base = TYPES.find(([t]) => t === (ch.duration.type ?? "eighth"))?.[1] ?? 0.5;
+      const div = fitDivisions(l.part, base * dpq * dotFactor(ch.duration.dots));
+      ch.duration = { ...ch.duration, divisions: div };
+    } else {
+      ch.grace = ch.duration.type === "eighth" ? { slash: true } : {};
+      if (!ch.duration.type) ch.duration = { ...ch.duration, type: "eighth" };
+    }
+    rebeam(l.measure, ch.voice, measureCtx(l.song, l.part, l.mi).time, measureCtx(l.song, l.part, l.mi).dpq);
+    delete l.measure.duration;
+  }
+  for (const s of new Set(locs.map((l) => l.song))) hooks.forgetLayout?.(s);
+  return { select: locs.map((l) => l.chord) };
+}
+
+/**
+ * 符杠组：选中音所在的那一组连杠的音（同小节同声线、`beams` 连着的一串）。原文没写 `<beam>`（手抄的 GT、部分识别稿）时
+ * 按 `rebeam` 同一口径（同一拍里连着的八分及更短、休止断开）划。不在杠下的只有它自己。
+ */
+export function beamGroupOf(doc: ScoreDoc, id: ElementId): Chord[] {
+  const l = locate(doc, id);
+  if (!l) return [];
+  const run = l.measure.elements.filter((e): e is Chord => e.kind === "chord" && e.voice === l.chord.voice && !e.grace);
+  const k = run.indexOf(l.chord);
+  if (run.some((c) => c.beams?.length)) {
+    if (!l.chord.beams?.length) return [l.chord];
+    let a = k;
+    while (a > 0 && run[a]!.beams![0] !== "begin" && run[a - 1]!.beams?.length) a--;
+    let b = k;
+    while (b + 1 < run.length && run[b]!.beams![0] !== "end" && run[b + 1]!.beams?.length) b++;
+    return run.slice(a, b + 1);
+  }
+  const { time, dpq } = measureCtx(l.song, l.part, l.mi);
+  const group = time && time.beatType === 8 && time.beats % 3 === 0 ? dpq * 1.5 : dpq;
+  const os = onsets(l.measure);
+  const flagged = (c: Chord): boolean => !c.rest && !c.duration.timeMod && (c.duration.divisions < dpq);
+  if (!flagged(l.chord)) return [l.chord];
+  const beat = (c: Chord): number => Math.floor((os.get(c) ?? 0) / group);
+  let a = k;
+  while (a > 0 && flagged(run[a - 1]!) && beat(run[a - 1]!) === beat(l.chord)) a--;
+  let b = k;
+  while (b + 1 < run.length && flagged(run[b + 1]!) && beat(run[b + 1]!) === beat(l.chord)) b++;
+  return run.slice(a, b + 1);
+}
+
+/** 渐强 / 渐弱：选中的头尾两个音之间加一条（两条 `<direction>`：起点挂头一个音前、终点挂尾一个音后）。已有同起点的就去掉。 */
+export function toggleWedge(doc: ScoreDoc, firstId: ElementId, lastId: ElementId, kind: "crescendo" | "diminuendo"): ModelEdit {
+  const a = locate(doc, firstId);
+  const b = locate(doc, lastId);
+  if (!a || !b) return { error: tr("me.noNote") };
+  if (a.pi !== b.pi || !before(a, b)) return { error: tr("ve.slurTwo") };
+  const isStart = (d: Direction): boolean => d.type === "wedge" && d.spanType !== "stop" && (d.afterElements ?? 0) === a.index;
+  const cur = a.measure.directions?.find(isStart);
+  if (cur) {
+    a.measure.directions = a.measure.directions!.filter((d) => d !== cur);
+    // 配对的终点：同声部往后第一条 wedge stop
+    for (let mi = a.mi; mi < a.part.measures.length; mi++) {
+      const m = a.part.measures[mi]!;
+      const stop = m.directions?.find((d) => d.type === "wedge" && d.spanType === "stop" && (mi > a.mi || (d.afterElements ?? 0) >= a.index));
+      if (stop) {
+        m.directions = m.directions!.filter((d) => d !== stop);
+        if (!m.directions.length) delete m.directions;
+        break;
+      }
+    }
+    if (!a.measure.directions?.length) delete a.measure.directions;
+    if (cur.wedgeType === kind) return { select: [a.chord, b.chord] };
+  }
+  (a.measure.directions ??= []).push({ type: "wedge", spanType: "start", wedgeType: kind, afterElements: a.index, placement: "below", voice: a.chord.voice, staff: a.chord.staff });
+  const stop: Direction = { type: "wedge", spanType: "stop", afterElements: b.index + 1, placement: "below", voice: b.chord.voice, staff: b.chord.staff };
+  const endAt = (onsets(b.measure).get(b.chord) ?? 0) + b.chord.duration.divisions;
+  if (endAt !== defaultOnsetBefore(b.measure, b.index + 1)) stop.onset = endAt;
+  (b.measure.directions ??= []).push(stop);
+  return { select: [a.chord, b.chord] };
+}
+
+/** 渐强渐弱、踏板、八度线的起点 / 终点各是一条 `<direction>`：给一条，找配对的另一条（同声部、同类、按先后最近的那条）。 */
+export function dirPartner(doc: ScoreDoc, r: DirRef): DirRef | null {
+  const part = doc.songs[r.si]?.parts[r.pi];
+  const d = part?.measures[r.mi]?.directions?.[r.index];
+  if (!part || !d || !d.spanType || d.spanType === "continue") return null;
+  const fwd = d.spanType === "start";
+  const pos = (mi: number, x: Direction): number => mi * 1e6 + (x.afterElements ?? 0);
+  const at = pos(r.mi, d);
+  let best: DirRef | null = null;
+  let bd = Infinity;
+  part.measures.forEach((m, mi) => (m.directions ?? []).forEach((x, index) => {
+    if (x === d || x.type !== d.type || x.spanType !== (fwd ? "stop" : "start")) return;
+    const dist = fwd ? pos(mi, x) - at : at - pos(mi, x);
+    if (dist >= 0 && dist < bd) (bd = dist), (best = { si: r.si, pi: r.pi, mi, index });
+  }));
+  return best;
+}
+
+/** 删一条 `<direction>`（渐强渐弱这类成对的连配对那条一起删）。 */
+export function deleteDirection(doc: ScoreDoc, r: DirRef): ModelEdit {
+  const an = dirAnchor(doc, r);
+  if (!an) return { error: tr("me.noMark") };
+  const pair = dirPartner(doc, r);
+  const gone = [an.dir, ...(pair ? [doc.songs[pair.si]!.parts[pair.pi]!.measures[pair.mi]!.directions![pair.index]!] : [])];
+  for (const m of an.loc.part.measures) {
+    if (!m.directions?.some((d) => gone.includes(d))) continue;
+    m.directions = m.directions.filter((d) => !gone.includes(d));
+    if (!m.directions.length) delete m.directions;
+  }
+  return { select: [an.loc.chord] };
+}
+
+/** 同一声部同一声线里前 / 后一个音（可跨小节，倚音不算；`skipRests` 时休止也跳过）。文本格式挪记号用它找邻居。 */
+export function neighbourChord(doc: ScoreDoc, id: ElementId, delta: number, skipRests = false): Chord | null {
+  const l = locate(doc, id);
+  return l ? stepInVoice(l, delta, (c) => !!c.grace || (skipRests && !!c.rest))?.chord ?? null : null;
 }

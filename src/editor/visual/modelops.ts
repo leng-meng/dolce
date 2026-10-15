@@ -12,8 +12,9 @@ import {
   isEditError, type JumpKind, locate, mergeMeasures, midiOf, type ChordPos, type EditHooks, type InsertAnchor, type ModelEdit, posOf,
   removeChordNote, scaleDuration, setBarKind, setBreakBefore, setDegree, setKeyAt, setTempoAt, setTimeAt, shiftOctave, splitMeasure,
   pasteClip, type ClipItem, setDirectionText, toggleTuplet, setHarmony, setLyric, shiftSemitones, transposeScore, stepDegree, stepSemitone, setStep, degreeOfStep, anchorFifths, toggleAccidental, toggleDeco, toggleDot, toggleEnding, toggleJump, toggleSlur, toggleTie,
+  type DecoKind, deleteDirection, dirPartner, moveDirection, moveHarmony, moveMarkEnd, type MovedMark, rereadKeyAt, setClefAt, shiftLyrics, toggleGrace, toggleWedge,
 } from "../../model/edit";
-import { parseKeyInput, parseTempoInput, parseTimeInput } from "./measureinput";
+import { parseClefInput, parseKeyInput, parseTempoInput, parseTimeInput } from "./measureinput";
 import { dropEmbeddedLayout, forgetNoteLayout } from "../../model/xmlsurface";
 import type { SyncEntry, SyncIndex } from "../sync";
 import type { NoteDuration } from "./dialect";
@@ -50,6 +51,12 @@ export interface ModelActionCtx {
 
 const HOOKS: EditHooks = { forgetStem: forgetNoteLayout, forgetLayout: dropEmbeddedLayout };
 
+/** 记号动作 → `toggleDeco` 的记号名 */
+const DECO_OF: Record<string, DecoKind> = {
+  "deco.staccato": "staccato", "deco.tenuto": "tenuto", "deco.marcato": "strong-accent", "deco.staccatissimo": "staccatissimo",
+  "deco.fermataInv": "fermata-inverted", "deco.trill": "trill-mark", "deco.mordent": "mordent", "deco.turn": "turn",
+};
+
 /** 两份原文前后相同的部分去掉，剩下中间不同的那一段。 */
 function diffRegion(a: string, b: string): { from: number; to: number; insert: string } {
   let p = 0;
@@ -59,13 +66,18 @@ function diffRegion(a: string, b: string): { from: number; to: number; insert: s
   return { from: p, to: a.length - q, insert: b.slice(p, b.length - q) };
 }
 
-type Target = { select: ChordPos[] } | { caretAfter: ChordPos } | { caretBefore: ChordPos } | null;
+type Target =
+  | { select: ChordPos[] } | { caretAfter: ChordPos } | { caretBefore: ChordPos }
+  /** 挪过的记号 / 歌词字：按挂的和弦位置 + 种类认回那一条 */
+  | { mark: { at: ChordPos; markKind: NonNullable<SyncEntry["markKind"]>; name?: string } }
+  | { lyric: { at: ChordPos; verse: number } }
+  | null;
 
 /**
  * 改一次模型并落地。`fn` 在新读出的模型上就地改，返回要选中的（和弦对象）；这里先把它们换成位置，
  * 再写出、放进代码区、重排，最后在重排后的索引里按位置认回来落选区。`sound` 时响一下选中的第一个音。
  */
-function commit(ctx: ModelActionCtx, fn: (doc: ScoreDoc) => ModelEdit, sound = false): boolean {
+function commit(ctx: ModelActionCtx, fn: (doc: ScoreDoc) => ModelEdit & { moved?: MovedMark }, sound = false): boolean {
   const doc = ctx.freshModel();
   if (!doc) {
     ctx.setStatus(tr("ve.xmlUnreadable"));
@@ -77,7 +89,13 @@ function commit(ctx: ModelActionCtx, fn: (doc: ScoreDoc) => ModelEdit, sound = f
     return true;
   }
   const pos = (c: Chord): ChordPos | null => posOf(doc, c);
-  const target: Target = "select" in out
+  const mv = out.moved;
+  const mvAt = mv ? pos("lyricOf" in mv ? mv.lyricOf : mv.markOn) : null;
+  const target: Target = mv && mvAt
+    ? ("lyricOf" in mv ? { lyric: { at: mvAt, verse: mv.verse } }
+      : mv.kind === "dir" ? { mark: { at: mvAt, markKind: DIR_KIND(mv.dirType), ...(DIR_KIND(mv.dirType) === "dir" ? { name: mv.dirType } : {}) } }
+        : { mark: { at: mvAt, markKind: mv.kind } })
+    : "select" in out
     ? { select: out.select.map(pos).filter((p): p is ChordPos => p !== null) }
     : "caretAfter" in out
       ? (pos(out.caretAfter) ? { caretAfter: pos(out.caretAfter)! } : null)
@@ -100,9 +118,22 @@ function commit(ctx: ModelActionCtx, fn: (doc: ScoreDoc) => ModelEdit, sound = f
   return true;
 }
 
+/** `<direction>` 的类型 → 索引条目的 `markKind`（同 `sync.ts::buildXml`） */
+const DIR_KIND = (type: string): NonNullable<SyncEntry["markKind"]> =>
+  type === "dynamics" ? "dynamic" : type === "words" || type === "rehearsal" ? "annotation" : "dir";
+
 function reselect(ctx: ModelActionCtx, t: Target): void {
   const doc = ctx.syncDoc();
   if (!doc || !t) return;
+  if ("mark" in t || "lyric" in t) {
+    const ch = chordAtPos(doc, "mark" in t ? t.mark.at : t.lyric.at);
+    if (!ch) return;
+    const e = ctx.sync.ordered().find((x) => "mark" in t
+      ? x.kind === "mark" && x.id === ch.id && x.markKind === t.mark.markKind && (t.mark.name === undefined || x.name === t.mark.name)
+      : x.kind === "lyric" && x.id === ch.id && x.verseNo === t.lyric.verse);
+    if (e) ctx.select(e.from, e.to);
+    return;
+  }
   const spanOf = (p: ChordPos): { from: number; to: number } | null => {
     const ch = chordAtPos(doc, p);
     return ch ? ctx.sync.spanOfNote(ch.id) : null;
@@ -245,6 +276,72 @@ function removeText(ctx: ModelActionCtx, e: SyncEntry): boolean {
   ctx.reloadNow();
   const at = changes[0]!.from;
   ctx.select(at, at);
+  return true;
+}
+
+/** 删一条记号（选区恰好是它）：弧、延音线、`<direction>`（渐强渐弱连配对）、和弦名、音符上的奏法装饰。 */
+function removeMark(ctx: ModelActionCtx, e: SyncEntry): boolean {
+  if (e.markKind === "slur" && e.end !== undefined) return commit(ctx, (doc) => toggleSlur(doc, e.id, e.end!));
+  if (e.markKind === "tied") return commit(ctx, (doc) => toggleTie(doc, e.id));
+  if (e.dir) {
+    const r = { si: 0, ...e.dir };
+    return commit(ctx, (doc) => deleteDirection(doc, r));
+  }
+  if (e.markKind === "harmony") return commit(ctx, (doc) => setHarmony(doc, e.id, ""));
+  if (e.markKind === "deco" && e.name) return commit(ctx, (doc) => toggleDeco(doc, [e.id], e.name as DecoKind));
+  ctx.setStatus(tr("ve.cantDeleteXml"));
+  return true;
+}
+
+/** 选区恰好是的那一条记号 / 歌词字（单击、Tab 选中的） */
+function exactEntry(ctx: ModelActionCtx): SyncEntry | null {
+  const sel = ctx.view.state.selection.main;
+  if (sel.empty) return null;
+  return ctx.sync.range(sel.from, sel.to).find((e) => (e.kind === "mark" || e.kind === "lyric") && e.from === sel.from && e.to === sel.to) ?? null;
+}
+
+/**
+ * 挪选中的记号 / 歌词字（识谱软件「拖到最近的音上吸附」的键盘版）：`delta` ±1；`byMeasure` 按小节；`endOnly` 只挪连线的终点。
+ * 弧挪端点；`<direction>`（力度、文字、速度、渐强渐弱）挪到相邻的音，渐强渐弱整条挪时起止一起；和弦名挪到相邻的音；
+ * 歌词字连同后面紧接的字整串挪一格（选了几个字就只挪这几个）。
+ */
+function moveSelected(ctx: ModelActionCtx, delta: number, byMeasure: boolean, endOnly: boolean): boolean {
+  const e = exactEntry(ctx);
+  const lyrics = ctx.view.state.selection.main.empty ? [] : ctx.sync.range(ctx.view.state.selection.main.from, ctx.view.state.selection.main.to).filter((x) => x.kind === "lyric");
+  const ly = e?.kind === "lyric" ? e : lyrics[0];
+  if (ly && ly.verseNo !== undefined) {
+    if (byMeasure || endOnly) return status(ctx, tr("ve.moveLyricOneNote"));
+    const count = lyrics.filter((x) => x.verseNo === ly.verseNo).length || 1;
+    return commit(ctx, (doc) => shiftLyrics(doc, ly.id, ly.verseNo!, delta, count > 1 ? count : undefined));
+  }
+  if (!e || e.kind !== "mark") return status(ctx, tr("ve.selectToMoveMark"));
+  if (e.markKind === "slur" && e.end !== undefined) {
+    if (byMeasure) return status(ctx, tr("ve.moveLineByNote"));
+    return commit(ctx, (doc) => moveMarkEnd(doc, "slur", e.id, e.end!, endOnly ? "end" : "both", delta));
+  }
+  if (e.markKind === "tied") return status(ctx, tr("me.tieNoMove"));
+  if (e.dir) {
+    const r = { si: 0, ...e.dir };
+    return commit(ctx, (doc) => {
+      const pair = dirPartner(doc, r);
+      if (endOnly) {
+        if (!pair) return { error: tr("ve.moveEndOnlyLine") };
+        // 只挪终点：选中的是起点就挪配对的那条
+        const d = doc.songs[0]?.parts[r.pi]?.measures[r.mi]?.directions?.[r.index];
+        return moveDirection(doc, d?.spanType === "stop" ? r : pair, delta, byMeasure);
+      }
+      return moveDirection(doc, r, delta, byMeasure, pair ?? undefined);
+    });
+  }
+  if (e.markKind === "harmony") {
+    if (byMeasure || endOnly) return status(ctx, tr("ve.moveLyricOneNote"));
+    return commit(ctx, (doc) => moveHarmony(doc, e.id, delta));
+  }
+  return status(ctx, tr("ve.selectToMoveMark"));
+}
+
+function status(ctx: ModelActionCtx, text: string): true {
+  ctx.setStatus(text);
   return true;
 }
 
@@ -418,6 +515,53 @@ export function runModelAction(ctx: ModelActionCtx, a: VisualAction, key: string
       return commit(ctx, (doc) => toggleSlur(doc, l[0]!, l[l.length - 1]!));
     }
     case "tuplet.toggle": return need((doc, l) => toggleTuplet(doc, l, HOOKS));
+    case "move.prev": return moveSelected(ctx, -1, false, false);
+    case "move.next": return moveSelected(ctx, 1, false, false);
+    case "move.measPrev": return moveSelected(ctx, -1, true, false);
+    case "move.measNext": return moveSelected(ctx, 1, true, false);
+    case "span.endPrev": return moveSelected(ctx, -1, false, true);
+    case "span.endNext": return moveSelected(ctx, 1, false, true);
+    case "deco.staccato": case "deco.tenuto": case "deco.marcato": case "deco.staccatissimo": case "deco.fermataInv":
+    case "deco.trill": case "deco.mordent": case "deco.turn":
+      return need((doc, l) => toggleDeco(doc, l, DECO_OF[a.id]!));
+    case "wedge.cresc":
+    case "wedge.dim": {
+      const l = ids();
+      if (l.length < 2) return status(ctx, tr("ve.wedgeTwo"));
+      return commit(ctx, (doc) => toggleWedge(doc, l[0]!, l[l.length - 1]!, a.id === "wedge.cresc" ? "crescendo" : "diminuendo"));
+    }
+    case "grace.toggle": return need((doc, l) => toggleGrace(doc, l, HOOKS));
+    case "meas.keyReread":
+      void ctx.prompt(tr("ve.hint.keyReread"), "").then((v) => {
+        if (v === null) return;
+        commit(ctx, (doc) => {
+          const r = selectedMeasures(ctx, doc);
+          if (!r) return { error: tr("ve.selectInMeasure") };
+          const f = parseKeyInput(v);
+          return f === null ? { error: tr("ve.badKey", { v }) } : rereadKeyAt(doc, r.si, r.from, f, HOOKS);
+        });
+      });
+      return true;
+    case "meas.clef":
+    case "meas.clefReread": {
+      const reread = a.id === "meas.clefReread";
+      void ctx.prompt(tr(reread ? "ve.hint.clefReread" : "ve.hint.clef"), "").then((v) => {
+        if (v === null) return;
+        commit(ctx, (doc) => {
+          const clef = parseClefInput(v);
+          if (!clef) return { error: tr("ve.badClef", { v }) };
+          // 哪一谱表：选中（插入模式：光标前）的那个音所在的
+          const id = anchorNote(ctx);
+          const l = id !== null ? locate(doc, id) : null;
+          if (!l) return { error: tr("ve.selectInMeasure") };
+          const sel = ctx.view.state.selection.main;
+          const before = sel.empty ? entryBeforeCaret(ctx) : null;
+          const mi = before && (before.kind === "barline" || before.kind === "break") ? l.mi + 1 : l.mi;
+          return setClefAt(doc, l.si, l.pi, mi, l.chord.staff, clef, reread, HOOKS);
+        });
+      });
+      return true;
+    }
     case "tie.toggle": return need((doc, l) => toggleTie(doc, l[0]!));
     case "deco.fermata": return need((doc, l) => toggleDeco(doc, l, "fermata"));
     case "deco.accent": return need((doc, l) => toggleDeco(doc, l, "accent"));
@@ -447,6 +591,9 @@ export function runModelAction(ctx: ModelActionCtx, a: VisualAction, key: string
       // 选中的是一段文字（歌词、标题）：直接改原文里那几个字
       const text = edit ? ctx.sync.range(sel.from, sel.to).find((e) => (e.kind === "lyric" || e.kind === "header") && e.from === sel.from && e.to === sel.to) : undefined;
       if (text) return removeText(ctx, text);
+      // 选中的是一条记号（Tab 轮到的、点中的）：只删它——记号的区间在 `<note>` 里面，按选区碰到的条目算会把音符一起删掉
+      const mark = edit ? ctx.sync.range(sel.from, sel.to).find((e) => e.kind === "mark" && e.from === sel.from && e.to === sel.to) : undefined;
+      if (mark) return removeMark(ctx, mark);
       if (edit) return removeEntries(ctx, ctx.selectedEntries());
       const t = a.id === "del.forward" ? entryAfterCaret(ctx) : entryBeforeCaret(ctx);
       return removeEntries(ctx, t ? [t] : []);

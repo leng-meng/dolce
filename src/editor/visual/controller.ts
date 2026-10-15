@@ -24,7 +24,8 @@ import {
 } from "./ops";
 import { keyHit, VISUAL_ACTIONS, type VisualAction, type VisualMode } from "./keys";
 import { type Clip, clipFor, itemsToText, setClip } from "./clipboard";
-import { clipOfChords, directionTextOf, locate, measureCtx } from "../../model/edit";
+import { beamGroupOf, clipOfChords, directionTextOf, locate, measureCtx } from "../../model/edit";
+import { moveAttachedText, moveSlurText, shiftLyricText } from "./moves";
 import { harmonyText } from "../../model/jianpu";
 import { showTransposeDialog, transposeText } from "./transpose";
 import { lyricTextOf, setLyricText } from "./lyrics";
@@ -91,6 +92,8 @@ export interface VisualHost {
   syncFresh(): boolean;
   setStatus(text: string): void;
   saveSettings(): void;
+  /** 识别核对时的可疑项导航（F8 与拍数不对的小节一起走）：做了返回 true；没有可疑项返回 false，控制器只走拍数。`beats` 是拍数问题的个数 */
+  nextDoubt?(dir: 1 | -1, beats: number): boolean;
 }
 
 const XML_ENT: Record<string, string> = { "&amp;": "&", "&lt;": "<", "&gt;": ">", "&quot;": '"', "&apos;": "'" };
@@ -109,6 +112,10 @@ function textsOf(el: Element): SVGTextElement[] {
 
 /** 方向键能停的条目：音符、增时线、小节线、原文里有符号的换行 */
 const NAVIGABLE = new Set<SyncEntry["kind"]>(["note", "sustain", "barline", "break"]);
+
+/** 只有 `.musicxml`（改模型那一路）做得了的：简谱各格式没有谱号、渐强渐弱与这几种奏法装饰的写法 */
+const XML_ONLY = new Set(["meas.clef", "meas.clefReread", "wedge.cresc", "wedge.dim", "grace.toggle",
+  "deco.staccato", "deco.tenuto", "deco.marcato", "deco.staccatissimo", "deco.fermataInv", "deco.trill", "deco.mordent", "deco.turn"]);
 
 export class VisualEditController {
   /** 谱面上显示换行/换页符号。持久化。 */
@@ -281,11 +288,14 @@ export class VisualEditController {
     return out.sort((a, b) => a.at - b.at);
   }
 
-  /** 计数标签：选中下一处拍数不对的小节的第一个音；空小节把插入光标放进两条小节线中间。 */
-  private nextBeatIssue(): void {
+  /** 计数标签（F8 / Shift+F8 同此）：选中下一处 / 上一处拍数不对的小节的第一个音；空小节把插入光标放进两条小节线中间。 */
+  private nextBeatIssue(dir: 1 | -1 = 1): void {
     const marks = this.beatMarks();
-    if (marks.length === 0) return;
-    this.beatCursor = (this.beatCursor + 1) % marks.length;
+    if (marks.length === 0) {
+      this.host.setStatus(tr("issue.none"));
+      return;
+    }
+    this.beatCursor = ((this.beatCursor < 0 && dir < 0 ? 0 : this.beatCursor) + dir + marks.length) % marks.length;
     const m = marks[this.beatCursor]!;
     if ("empty" in m) {
       this.select(m.empty.from + 1, m.empty.from + 1);
@@ -786,7 +796,7 @@ export class VisualEditController {
   /** 当前格式能不能做这个动作（菜单不列、面板灰掉）。 */
   available(a: VisualAction): boolean {
     const model = this.host.modelEditing();
-    if (a.id === "chord.add" || a.id === "voice.set") return model;
+    if (a.id === "chord.add" || a.id === "voice.set" || XML_ONLY.has(a.id)) return model;
     if (a.group === "meas") return model || !!this.host.editDialect()?.measure;
     return true;
   }
@@ -1282,6 +1292,8 @@ export class VisualEditController {
       target = "break";
     } else if (entry && isText(entry)) {
       this.handleClick(ev, entry);
+      // 歌词字：菜单上有挪格（识别字整串错开时用）
+      if (entry.kind === "lyric") target = "mark";
     } else if (entry) {
       // 点在已选中的范围里就不动选区（右键一段选区整体操作）
       const inside = entry.from < sel.to && entry.to > sel.from && !sel.empty;
@@ -1297,6 +1309,12 @@ export class VisualEditController {
       target = this.mode === "insert" ? "caret" : "note";
     }
     showMenu(ev.clientX, ev.clientY, target, this.runner);
+  }
+
+  /** 按动作 id 执行（没有键位的动作，脚本与外部入口用）。 */
+  runById(id: string, key = ""): boolean {
+    const a = VISUAL_ACTIONS.find((x) => x.id === id);
+    return a ? this.run(a, key) : false;
   }
 
   /** 执行一个动作（键盘、菜单、面板共用）。做了返回 true。`key` 是按下的键（唱名动作要知道是几）。 */
@@ -1382,6 +1400,27 @@ export class VisualEditController {
       case "dyn.entry": return this.startAttached("dynamic");
       case "nav.home": return this.rowEdge(-1);
       case "nav.end": return this.rowEdge(1);
+      case "move.prev": return this.moveText(-1, false, false);
+      case "move.next": return this.moveText(1, false, false);
+      case "move.measPrev": case "move.measNext":
+        this.host.setStatus(tr("ve.moveLyricOneNote"));
+        return true;
+      case "span.endPrev": return this.moveText(-1, false, true);
+      case "span.endNext": return this.moveText(1, false, true);
+      case "sel.beamGroup": return this.selectBeamGroup();
+      case "issue.next": return this.nextIssue(1);
+      case "issue.prev": return this.nextIssue(-1);
+      case "meas.keyReread":
+        // 文本格式的音按调号读（简谱数字、ABC 音名），只改调号字段本来就是重读
+        void this.modelCtx.prompt(tr("ve.hint.keyReread"), "").then((v) => {
+          if (v !== null) this.measureText("meas.key", v);
+        });
+        return true;
+      case "meas.clef": case "meas.clefReread": case "wedge.cresc": case "wedge.dim": case "grace.toggle":
+      case "deco.staccato": case "deco.tenuto": case "deco.marcato": case "deco.staccatissimo": case "deco.fermataInv":
+      case "deco.trill": case "deco.mordent": case "deco.turn":
+        this.host.setStatus(tr("ve.onlyXml"));
+        return true;
       case "mark.next": return this.cycleMark(1);
       case "mark.prev": return this.cycleMark(-1);
       case "view.formatMarks": this.toggleFormatMarks(); return true;
@@ -2206,6 +2245,54 @@ export class VisualEditController {
       return this.apply(deleteBreak(c, brk));
     }
     return this.apply(deleteEntries(c, targets));
+  }
+
+  /**
+   * 挪选中的记号 / 歌词字（文本那一路，`moves.ts`）：歌词字整串挪一格、力度注记和弦名搬到相邻的音、圆滑线挪终点或整条。
+   * 模型那一路（`.musicxml`）在 `modelops.ts::moveSelected`，不走这里。
+   */
+  private moveText(delta: number, byMeasure: boolean, endOnly: boolean): boolean {
+    const c = this.editCtx();
+    if (!c) return true;
+    const sel = this.host.view.state.selection.main;
+    if (sel.empty) {
+      this.host.setStatus(tr("ve.selectToMoveMark"));
+      return true;
+    }
+    const exact = this.host.sync.ordered().find((e) => e.from === sel.from && e.to === sel.to && (e.kind === "mark" || e.kind === "lyric"));
+    const lyrics = this.host.sync.range(sel.from, sel.to).filter((e) => e.kind === "lyric");
+    const ly = exact?.kind === "lyric" ? exact : lyrics[0];
+    if (ly && !byMeasure && !endOnly) {
+      const count = lyrics.filter((e) => e.verseNo === ly.verseNo).length;
+      return this.apply(shiftLyricText(c, ly, delta, count > 1 ? count : undefined));
+    }
+    if (exact?.kind === "mark" && exact.markKind === "slur" && !byMeasure) return this.apply(moveSlurText(c, exact, endOnly ? "end" : "both", delta));
+    if (exact?.kind === "mark" && exact.markKind !== "slur" && !endOnly && !byMeasure) return this.apply(moveAttachedText(c, exact, delta));
+    this.host.setStatus(tr(ly || exact ? "ve.moveLyricOneNote" : "ve.selectToMoveMark"));
+    return true;
+  }
+
+  /** 选中这个音所在那一组连杠的音（接着 `_` / `=` 整组减半 / 加倍 = 补 / 删一层符杠）。 */
+  private selectBeamGroup(): boolean {
+    const doc = this.host.syncDoc();
+    const note = this.selectedEntries().find((e) => e.kind === "note");
+    if (!doc || !note) {
+      this.host.setStatus(tr("ve.selectNote"));
+      return true;
+    }
+    const group = beamGroupOf(doc, note.id);
+    const spans = group.map((ch) => this.host.sync.spanOfNote(ch.id)).filter((x): x is { from: number; to: number } => !!x);
+    if (!spans.length) return true;
+    this.select(Math.min(...spans.map((x) => x.from)), Math.max(...spans.map((x) => x.to)));
+    this.host.setStatus(tr("ve.beamGroupSelected", { n: group.length }));
+    return true;
+  }
+
+  /** F8 / Shift+F8：下一处 / 上一处问题。识别核对时可疑项与拍数不对的小节一起走（`VisualHost.nextDoubt`），否则只走拍数。 */
+  private nextIssue(dir: 1 | -1): boolean {
+    if (this.host.nextDoubt?.(dir, this.beatMarks().length)) return true;
+    this.nextBeatIssue(dir);
+    return true;
   }
 
   /** Tab：在选中音符挂的记号之间轮换（选中的已经是记号时从它往下接着轮）。 */
