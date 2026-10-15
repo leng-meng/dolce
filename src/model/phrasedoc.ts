@@ -108,12 +108,12 @@ export function phrasePartOfDoc(song: Song, partIndex = 0, distinctLyrics = fals
   let at = new Fraction(0);
   let time = { beats: 4, beatType: 4 };
   const voice = mainVoiceOf(part);
-  for (const m of part.measures) {
+  part.measures.forEach((m, mi) => {
     if (m.attrs?.time) time = { beats: m.attrs.time.beats, beatType: m.attrs.time.beatType };
-    const out = measureOf(m, at, div, slurStarts, slurEnds, idOf, time, voice);
+    const out = measureOf(m, part.measures[mi - 1] ?? null, at, div, slurStarts, slurEnds, idOf, time, voice);
     measures.push(out);
     at = at.plus(measureEnd(m, div));
-  }
+  });
   if (distinctLyrics) for (const m of measures) for (const ch of m.entries) for (const n of ch.notes) n.lyrics = distinctNumbers(n.lyrics);
   findRefrain(measures);
   return { part: { measures }, idOf };
@@ -157,7 +157,7 @@ function measureEnd(m: Measure, div: number): Fraction {
 }
 
 function measureOf(
-  m: Measure, position: Fraction, div: number,
+  m: Measure, prev: Measure | null, position: Fraction, div: number,
   slurStarts: ReadonlySet<ElementId>, slurEnds: ReadonlyMap<ElementId, number>,
   idOf: Map<PhraseChord, ElementId>,
   time: { beats: number; beatType: number },
@@ -194,7 +194,7 @@ function measureOf(
       } else out.endingRight = b.ending.type as StartStopDiscontinue;
     }
   }
-  out.sectionMark = sectionMarkOf(m);
+  out.sectionMark = sectionMarkOf(m, prev);
 
   const at = onsets(m);
   for (const el of m.elements) {

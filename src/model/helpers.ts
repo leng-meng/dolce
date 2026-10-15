@@ -6,6 +6,7 @@
 
 import type {
   Chord,
+  Direction,
   Element,
   ElementId,
   Lyric,
@@ -149,15 +150,29 @@ export function sectionWordOf(text: string | undefined): string | null {
  * 123/ABC（`"^Chorus"`）与文本谱的段落注记在和弦（或增时线）的 `sectionWord` 上。
  * 标记具体挂在哪个音上不作数（常挂在下一段的弱起、甚至上一句收尾那个音上）：消费者只把它当大致位置，
  * 真正的段界由断句按乐句定（`phrase.ts::aroundSectionPickup`）、展开档就近对到行首。
+ *
+ * 给了 `prev`（上一小节）时按小节分清：**写在小节所有音之后**的 `<direction>`（`afterElements` 到了小节末）
+ * 标的是下一小节——433《福杯满溢》的「（副歌）」写在主歌末小节「福 无 边。」之后，算在那一小节上，
+ * 段界就切在「福」前、一整小节的收尾被甩到副歌行首。不给 `prev` 照旧本小节的都算。
  */
-export function sectionMarkOf(m: Measure): string | null {
-  for (const d of m.directions ?? []) {
-    const t = (d.text ?? "").trim();
-    if (!t) continue;
-    if (d.type === "rehearsal") return t;
-    const w = d.type === "words" ? sectionWordOf(t) : null;
-    if (w !== null) return w;
+export function sectionMarkOf(m: Measure, prev?: Measure | null): string | null {
+  const atEnd = (x: Measure, d: Direction): boolean => d.afterElements !== undefined && x.elements.length > 0 && d.afterElements >= x.elements.length;
+  const fromDirections = (x: Measure, keep: (d: Direction) => boolean): string | null => {
+    for (const d of x.directions ?? []) {
+      const t = (d.text ?? "").trim();
+      if (!t || !keep(d)) continue;
+      if (d.type === "rehearsal") return t;
+      const w = d.type === "words" ? sectionWordOf(t) : null;
+      if (w !== null) return w;
+    }
+    return null;
+  };
+  if (prev !== undefined) {
+    const carried = prev ? fromDirections(prev, (d) => atEnd(prev, d)) : null;
+    if (carried !== null) return carried;
   }
+  const own = fromDirections(m, (d) => prev === undefined || !atEnd(m, d));
+  if (own !== null) return own;
   for (const el of m.elements) {
     if (el.kind !== "chord") continue;
     for (const host of [el, ...(el.sustains ?? [])]) {

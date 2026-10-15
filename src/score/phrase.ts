@@ -1118,17 +1118,32 @@ export function computePhraseBreaks(part: PhrasePart, opts: PhraseOptions = {}):
         && Math.abs(headDurAfter(at) - pickupStd) < 0.01) return at;
     return idx;
   };
-  const aroundSectionPickup = (at0: number): number => {
+  // 这个音收了句：句末分记在它身上，或顺延到了紧跟的休止上（`carriedFrom`：446《迦勒看见主》「虑？」后面那个四分休止）
+  const endsSentenceAt = (i: number): boolean =>
+    punctAfter[i] === 6 || (carriedAway.has(i) && carriedFrom[i + 1] === i && punctAfter[i + 1] === 6);
+  // 段界落在句末字上时，同一小节里紧跟的四分及以上休止是这一句的收气（同 `retreatPastPickupRest` 的口径），
+  // 一并留在上一段：446 的四分休止收在小节线上，不带过去段界就落在小节中间，而副歌歌词那条（`refrainIdx`）
+  // 切在休止之后，成书不许行内断，两刀之间就剩一小节自成一行
+  const pastBreathRest = (idx: number): number => {
+    if (flat[idx].chord.rest || !endsSentenceAt(idx)) return idx;
+    let end = idx;
+    while (end + 1 < K && flat[end + 1].mi === flat[idx].mi && flat[end + 1].chord.rest && flat[end + 1].chord.beams === 0 && depthAfter[end + 1] === 0) end++;
+    return end;
+  };
+  const aroundSectionPickup = (at0: number): number => pastBreathRest(sectionPickupAt(at0));
+  const sectionPickupAt = (at0: number): number => {
     const at = retreatPastPickupRest(at0);
     // 段落标题通常标在新小节上方，但上一句的收尾偶尔占了新小节开头 1~2 个短音（「脚步」的
     // `| 路。 求给我…`）。这种情况应在句号后切段，而不是把「路。」放到副歌新页行首。
+    // 收尾那个音**长短都认**：MusicXML 的「（副歌）」常标在主歌末小节中间、副歌弱起之前，那一小节开头是
+    // 上一句的长音收尾（135《求主进入我心》`方。` 3 拍、491《愿耶和华赐福给你》`安。` 4 拍、446 `虑？` 3 拍）；
+    // 只认短音时段界切在长音之前，收尾字被甩到副歌行首。长音只拦在它后面（长音之后不再往后找）
     let leadingChords = 0;
     for (let idx = at + 1; idx < K && idx <= at + 3; idx++) {
       const c = flat[idx].chord;
-      if (c.beats > 1) break;
       if (!c.rest) leadingChords++;
-      if (punctAfter[idx] === 6 && leadingChords > 0 && leadingChords <= 2) return idx;
-      if (leadingChords > 2) break;
+      if (endsSentenceAt(idx) && leadingChords > 0 && leadingChords <= 2) return idx;
+      if (c.beats > 1 || leadingChords > 2) break;
     }
     // 反过来，新段的弱起可能长达 3 个短音（「立定心志」的 `…路亚！ 我立定|心志，一生赞美你…`：
     // 副歌唱词从「心志」起标，但乐句实际从「我立定」起唱）。弱起放宽到 3 个音，段界就落在
