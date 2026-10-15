@@ -147,6 +147,15 @@ use std::sync::Mutex;
 
 static REC_SESS: Mutex<Option<ort::session::Session>> = Mutex::new(None);
 static DET_SESS: Mutex<Option<ort::session::Session>> = Mutex::new(None);
+static ORT_ENV: std::sync::OnceLock<ort::environment::Environment> = std::sync::OnceLock::new();
+
+fn ort_env() -> Result<&'static ort::environment::Environment, String> {
+    if let Some(env) = ORT_ENV.get() {
+        return Ok(env);
+    }
+    let env = ort::init().build().map_err(|e| e.to_string())?;
+    Ok(ORT_ENV.get_or_init(|| env))
+}
 
 fn ocr_model_path(app: &tauri::AppHandle, file: &str) -> Result<std::path::PathBuf, String> {
     let dir = app.path().resource_dir().map_err(|e| e.to_string())?;
@@ -160,7 +169,7 @@ fn ensure_ocr_session(
 ) -> Result<(), String> {
     if slot.is_none() {
         let path = ocr_model_path(app, file)?;
-        let sess = ort::session::Session::builder()
+        let sess = ort::session::Session::builder(ort_env()?)
             .map_err(|e| e.to_string())?
             .with_intra_threads(4)
             .map_err(|e| e.to_string())?
