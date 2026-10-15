@@ -79,6 +79,8 @@ export interface SyncEntry {
   page?: boolean;
   /** `.musicxml` 的 `<direction>`（力度、文字、渐强渐弱…）：第几声部第几小节 `directions` 里第几条（模型那一路按它改） */
   dir?: { pi: number; mi: number; index: number };
+  /** `<direction>` 挂在小节里最后一个音**之后**（`id` 借那最后一个音）：拖动换算格数时要差一格 */
+  dirEnd?: boolean;
   /** `header`：调号、拍号、两样写在一处（`header.ts::HeaderRole`）；文字字段缺省 */
   headerRole?: "key" | "time" | "keytime";
 }
@@ -248,11 +250,12 @@ export class SyncIndex {
           (m.directions ?? []).forEach((d, index) => {
             const sp = spanOf(surfaceOf(d), "direction");
             const k = Math.max(0, d.afterElements ?? 0);
-            const host = m.elements.slice(k).find((e) => e.kind === "chord" && (d.voice === undefined || e.voice === d.voice)) ??
+            const after = m.elements.slice(k).find((e) => e.kind === "chord" && (d.voice === undefined || e.voice === d.voice));
+            const host = after ?? [...m.elements].reverse().find((e) => e.kind === "chord" && (d.voice === undefined || e.voice === d.voice)) ??
               [...m.elements].reverse().find((e) => e.kind === "chord");
             if (!sp || !host) return;
             const markKind = d.type === "dynamics" ? "dynamic" : d.type === "words" || d.type === "rehearsal" ? "annotation" : "dir";
-            out.push({ kind: "mark", ...sp, id: host.id, verse: null, markKind, name: markKind === "dir" ? d.type : d.text ?? d.type, dir: { pi, mi, index } });
+            out.push({ kind: "mark", ...sp, id: host.id, verse: null, markKind, name: markKind === "dir" ? d.type : d.text ?? d.type, dir: { pi, mi, index }, ...(after ? {} : { dirEnd: true }) });
           });
           // 小节边界就是这一小节的 `</measure>`
           const box = spanOf(surfaceOf(m), "measure");

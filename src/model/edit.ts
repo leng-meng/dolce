@@ -1573,7 +1573,8 @@ export function setClefAt(doc: ScoreDoc, si: number, pi: number, mi: number, sta
       const m = part.measures[i]!;
       if (i > mi && m.attrs?.clefs?.some((c) => staffOf(c) === staff)) break;
       // 小节中间换了这一谱表的谱号：那之后的音不归这一段
-      const cut = (m.laterAttrs ?? []).filter((la) => la.attrs.clefs?.some((c) => staffOf(c) === staff)).map((la) => la.onset ?? Infinity);
+      // 小节中间那条的位置：读入时多半没记 `onset`（缺省 = 它前面那个元素的终点，同写出端的游标）
+      const cut = (m.laterAttrs ?? []).filter((la) => la.attrs.clefs?.some((c) => staffOf(c) === staff)).map((la) => la.onset ?? defaultOnsetBefore(m, la.afterElements));
       const stop = cut.length ? Math.min(...cut) : Infinity;
       const keep = (_: Chord, at: number): boolean => at < stop;
       const at = onsets(m);
@@ -1702,7 +1703,8 @@ export interface DirRef {
 }
 
 /** 这条记号挂在哪个音前（`afterElements` 指的那个和弦；挂在小节末的取最后一个和弦）。 */
-function dirAnchor(doc: ScoreDoc, r: DirRef): { loc: ChordLoc; dir: Direction } | null {
+/** `atEnd`：挂在小节里最后一个（同声线）和弦**之后**（小节末的力度、渐强渐弱的终点），`loc` 借那最后一个和弦。 */
+function dirAnchor(doc: ScoreDoc, r: DirRef): { loc: ChordLoc; dir: Direction; atEnd: boolean } | null {
   const song = doc.songs[r.si];
   const part = song?.parts[r.pi];
   const m = part?.measures[r.mi];
@@ -1712,14 +1714,21 @@ function dirAnchor(doc: ScoreDoc, r: DirRef): { loc: ChordLoc; dir: Direction } 
   // 往后找第一个和弦（同声线优先）
   for (let i = Math.max(0, k); i < m.elements.length; i++) {
     const e = m.elements[i]!;
-    if (e.kind === "chord" && (dir.voice === undefined || e.voice === dir.voice)) return { loc: { si: r.si, pi: r.pi, mi: r.mi, song, part, measure: m, chord: e, index: i }, dir };
+    if (e.kind === "chord" && (dir.voice === undefined || e.voice === dir.voice)) return { loc: { si: r.si, pi: r.pi, mi: r.mi, song, part, measure: m, chord: e, index: i }, dir, atEnd: (dir.afterElements ?? 0) > i };
   }
   for (let i = m.elements.length - 1; i >= 0; i--) {
     const e = m.elements[i]!;
-    if (e.kind === "chord") return { loc: { si: r.si, pi: r.pi, mi: r.mi, song, part, measure: m, chord: e, index: i }, dir };
+    if (e.kind === "chord" && (dir.voice === undefined || e.voice === dir.voice)) return { loc: { si: r.si, pi: r.pi, mi: r.mi, song, part, measure: m, chord: e, index: i }, dir, atEnd: true };
+  }
+  for (let i = m.elements.length - 1; i >= 0; i--) {
+    const e = m.elements[i]!;
+    if (e.kind === "chord") return { loc: { si: r.si, pi: r.pi, mi: r.mi, song, part, measure: m, chord: e, index: i }, dir, atEnd: true };
   }
   return null;
 }
+
+/** 挂点在声部里的先后：挂在第 `index` 个元素前为 `index`，挂在它之后（小节末）再加半格。 */
+const dirPos = (loc: ChordLoc, atEnd: boolean): number => loc.mi * 1e6 + loc.index + (atEnd ? 0.5 : 0);
 
 /** 把一条 `<direction>` 挂到 `to` 那个和弦前（可换小节）。 */
 function placeDirection(from: Measure, dir: Direction, to: ChordLoc): void {
@@ -1743,12 +1752,12 @@ export type MovedMark =
  * 力度、表情文字、速度、渐强渐弱的一端（都是 `<direction>`）挪一个音：`delta` +1 往后、−1 往前，`byMeasure` 时挪到前 / 后一小节的同一拍
  * （那一小节里起点最近的音）。渐强渐弱的起点与终点各是一条，`pair` 给了就两条一起挪（整条挪）。
  */
-export function moveDirection(doc: ScoreDoc, r: DirRef, delta: number, byMeasure = false, pair?: DirRef): ModelEdit & { moved?: MovedMark } {
+export function moveDirection(doc: ScoreDoc, r: DirRef, delta: number, byMeasure = false, pair?: DirRef, guard?: DirRef): ModelEdit & { moved?: MovedMark } {
   const refs = [r, ...(pair ? [pair] : [])];
   const anchors = refs.map((x) => dirAnchor(doc, x));
   if (anchors.some((x) => !x)) return { error: tr("me.noMark") };
   const targets: ChordLoc[] = [];
-  for (const an of anchors as { loc: ChordLoc; dir: Direction }[]) {
+  for (const an of anchors as NonNullable<ReturnType<typeof dirAnchor>>[]) {
     let to: ChordLoc | null;
     if (byMeasure) {
       const mi = an.loc.mi + delta;
@@ -1764,13 +1773,26 @@ export function moveDirection(doc: ScoreDoc, r: DirRef, delta: number, byMeasure
         if (d < bd) (bd = d), (best = { ...an.loc, mi, measure: m, chord: e, index: i });
       });
       to = best;
-    } else to = stepInVoice(an.loc, delta, (c) => !!c.grace);
+    } else {
+      // 挂在最后一个音之后的（小节末）：往后挪是挂到后面第 delta 个音前，往前挪一格是挂到最后那个音前
+      const steps = an.atEnd && delta <= 0 ? delta + 1 : delta;
+      to = steps === 0 ? an.loc : stepInVoice(an.loc, steps, (c) => !!c.grace);
+    }
     if (!to) return { error: tr("me.noNeighbour") };
     targets.push(to);
   }
-  // 挪完起点不能越过终点
+  // 挪完起点不能越过终点：整条挪时两端比；只挪一端时与另一端（`guard`）比
   if (pair && !before(targets[0]!, targets[1]!) && targets[0]!.chord !== targets[1]!.chord) return { error: tr("me.markCollapse") };
-  (anchors as { loc: ChordLoc; dir: Direction }[]).forEach((an, k) => placeDirection(an.loc.measure, an.dir, targets[k]!));
+  if (guard) {
+    const other = dirAnchor(doc, guard);
+    const isStart = anchors[0]!.dir.spanType === "start";
+    if (other) {
+      const mine = dirPos(targets[0]!, false);
+      const theirs = dirPos(other.loc, other.atEnd);
+      if (isStart ? mine >= theirs : mine <= theirs) return { error: tr("me.markCollapse") };
+    }
+  }
+  (anchors as NonNullable<ReturnType<typeof dirAnchor>>[]).forEach((an, k) => placeDirection(an.loc.measure, an.dir, targets[k]!));
   return { select: [targets[0]!.chord], moved: { markOn: targets[0]!.chord, kind: "dir", dirType: anchors[0]!.dir.type } };
 }
 
@@ -1933,17 +1955,44 @@ export function dirPartner(doc: ScoreDoc, r: DirRef): DirRef | null {
   const part = doc.songs[r.si]?.parts[r.pi];
   const d = part?.measures[r.mi]?.directions?.[r.index];
   if (!part || !d || !d.spanType || d.spanType === "continue") return null;
-  const fwd = d.spanType === "start";
-  const pos = (mi: number, x: Direction): number => mi * 1e6 + (x.afterElements ?? 0);
-  const at = pos(r.mi, d);
-  let best: DirRef | null = null;
-  let bd = Infinity;
+  // 同谱表、同声线（都写了才比）、同类；按先后排好，从它往后（终点往前）数，套着的同类一对对跳过
+  const same = (x: Direction): boolean => x.type === d.type && (x.staff ?? 1) === (d.staff ?? 1) &&
+    (x.voice === undefined || d.voice === undefined || x.voice === d.voice) && (x.spanType === "start" || x.spanType === "stop");
+  const list: { ref: DirRef; dir: Direction; pos: number }[] = [];
   part.measures.forEach((m, mi) => (m.directions ?? []).forEach((x, index) => {
-    if (x === d || x.type !== d.type || x.spanType !== (fwd ? "stop" : "start")) return;
-    const dist = fwd ? pos(mi, x) - at : at - pos(mi, x);
-    if (dist >= 0 && dist < bd) (bd = dist), (best = { si: r.si, pi: r.pi, mi, index });
+    if (same(x)) list.push({ ref: { si: r.si, pi: r.pi, mi, index }, dir: x, pos: mi * 1e6 + (x.afterElements ?? 0) * 2 + (x.spanType === "stop" ? 0 : 1) });
   }));
-  return best;
+  list.sort((a, b) => a.pos - b.pos);
+  const k = list.findIndex((x) => x.dir === d);
+  const fwd = d.spanType === "start";
+  let depth = 0;
+  for (let i = k + (fwd ? 1 : -1); i >= 0 && i < list.length; i += fwd ? 1 : -1) {
+    const x = list[i]!.dir;
+    if (x.spanType === d.spanType) depth++;
+    else if (depth === 0) return list[i]!.ref;
+    else depth--;
+  }
+  return null;
+}
+
+/** 删音符上的一个记号（`<notations>` 里按名字：奏法、装饰、延长号都行，不限 `DecoKind` 那几种）。 */
+export function removeNotation(doc: ScoreDoc, id: ElementId, name: string): ModelEdit {
+  const l = locate(doc, id);
+  if (!l) return { error: tr("me.noNote") };
+  const n = { ...(l.chord.notations ?? {}) };
+  if (name === "fermata" || name === "fermata-inverted") {
+    delete n.fermata;
+    delete n.fermataInverted;
+  } else {
+    for (const field of ["articulations", "ornaments", "technical"] as const) {
+      const list = (n[field] ?? []).filter((a) => a !== name);
+      if (list.length) n[field] = list;
+      else delete n[field];
+    }
+  }
+  if (Object.keys(n).length) l.chord.notations = n;
+  else delete l.chord.notations;
+  return { select: [l.chord] };
 }
 
 /** 删一条 `<direction>`（渐强渐弱这类成对的连配对那条一起删）。 */

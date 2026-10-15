@@ -1015,11 +1015,13 @@ export class VisualEditController {
       this.swallowClick = true;
       setTimeout(() => (this.swallowClick = false), 0);
       if (!d.target || ev.type === "pointercancel") return;
-      const delta = this.voiceSteps(d.anchor, d.target.id, d.entry);
+      let delta = this.voiceSteps(d.anchor, d.target.id, d.entry);
       if (delta === null) {
         this.host.setStatus(tr("ve.dragSameVoice"));
         return;
       }
+      // 挂在小节末（最后一个音之后）的：拖到第 n 个音前，往前（含那最后一个音）要多算一格，与键盘的 Alt+← 口径对上
+      if (d.entry.dirEnd && delta <= 0) delta -= 1;
       if (delta === 0) return;
       this.host.scorePane.focus({ preventScroll: true });
       if (this.host.modelEditing()) moveSelected(this.modelCtx, delta, false, d.which);
@@ -2471,9 +2473,19 @@ export class VisualEditController {
    * 并成一张按原文位置排的表，从当前选区往后 / 往前找，到头绕回。
    */
   private nextIssue(dir: 1 | -1): boolean {
+    // 按跳过去之后选区落在哪儿比（空小节光标落在小节线后一格、音符只罩音头），否则往回找会一直找到同一处
+    const land = (m: ReturnType<VisualEditController["beatMarks"]>[number]): number => {
+      if ("empty" in m) return m.empty.from + 1;
+      const first = this.host.sync.ordered().find((e) => e.kind === "note" && m.issue.ids.includes(e.id));
+      return first ? this.noteSel(first).from : m.at;
+    };
     const stops: { at: number; go(): void }[] = [
-      ...this.beatMarks().map((m) => ({ at: m.at, go: () => this.goBeat(m) })),
-      ...(this.host.doubtStops?.() ?? []),
+      ...this.beatMarks().map((m) => ({ at: land(m), go: () => this.goBeat(m) })),
+      // 可疑项给的是 token 起点：点中后选区只罩音头，同样换成落点
+      ...(this.host.doubtStops?.() ?? []).map((x) => {
+        const e = this.host.sync.at(x.at);
+        return { ...x, at: e?.kind === "note" ? this.noteSel(e).from : x.at };
+      }),
     ].sort((a, b) => a.at - b.at);
     if (!stops.length) {
       this.host.setStatus(tr("issue.none"));

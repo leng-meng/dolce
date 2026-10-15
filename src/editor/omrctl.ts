@@ -1401,7 +1401,7 @@ export class OmrController implements FormatSource {
     return true;
   }
 
-  /** 识别（或上次重建）落地之后的手改：按识别 id 记下改过的和弦（音高、休止、时值、歌词）与删掉的；`lost` 是回放不了的（新插的音、小节数变了）。 */
+  /** 识别（或上次重建）落地之后的手改：按识别 id 记下改过的和弦（音高、休止、时值、连音、倚音、歌词）与删掉的；`lost` 是回放不了的处数（新插的音、记下的回放不出现在的谱）。 */
   private async captureStaffEdits(): Promise<StaffEdits | null> {
     if (this.staffEmitted === null || this.host.getText() === this.staffEmitted) return null;
     const { surfaceOf } = await import("../model/xmlsurface");
@@ -1411,11 +1411,9 @@ export class OmrController implements FormatSource {
     if (!base || !doc) return { chords: new Map(), deleted: new Set(), lost: 1 };
     const out: StaffEdits = { chords: new Map(), deleted: new Set(), lost: 0 };
     const seen = new Set<string>();
-    let measures = 0;
     // 没有识别 id 的音：重建自己补的占位休止也没有，比识别落地时多出来的才是手插的
     let noId = 0;
     for (const part of doc.songs[0]?.parts ?? []) {
-      measures = Math.max(measures, part.measures.length);
       for (const m of part.measures) for (const el of m.elements) {
         if (el.kind !== "chord") continue;
         const id = surfaceOf(el)?.getAttribute("id");
@@ -1427,25 +1425,28 @@ export class OmrController implements FormatSource {
         if (base.get(id) === chordSig(el)) continue;
         out.chords.set(id, {
           rest: !!el.rest, pitches: el.notes.map((n) => n.pitch).filter((p): p is NonNullable<typeof p> => !!p),
-          type: el.duration.type, dots: el.duration.dots, lyrics: el.lyrics?.map((l) => ({ ...l })) ?? [],
+          type: el.duration.type, dots: el.duration.dots, ...(el.duration.timeMod ? { timeMod: { ...el.duration.timeMod } } : {}),
+          grace: !!el.grace, lyrics: el.lyrics?.map((l) => ({ ...l })) ?? [],
         });
       }
     }
     for (const id of base.keys()) if (!seen.has(id)) out.deleted.add(id);
     out.lost += Math.max(0, noId - (this.staffBase?.noId ?? 0));
-    const baseMeasures = this.staffBase ? (loadScoreDoc(this.staffBase.text).songs[0]?.parts[0]?.measures.length ?? measures) : measures;
-    if (baseMeasures !== measures) out.lost++;
+    // 记下的只有各音自己的改动；连线、力度文字、和弦名、奏法、调号谱号、小节线、小节增删都不在里面。
+    // 把记下的回放到识别落地时那份上，与现在的谱按语义比：对不上就是有回放不了的改动，重建前要问
+    const replayedBase = await this.replayStaffEdits(this.staffEmitted, out);
+    if (semanticSig(replayedBase.doc) !== semanticSig(doc)) out.lost++;
     return out;
   }
 
   /** 把记下的手改按识别 id 放回重建出来的谱上；对不上的（那一行谱忽略掉了）算没回放上。 */
-  private async replayStaffEdits(xml: string, edits: StaffEdits): Promise<{ xml: string; replayed: number; missed: number }> {
+  private async replayStaffEdits(xml: string, edits: StaffEdits): Promise<{ xml: string; doc: ScoreDoc; replayed: number; missed: number }> {
     const { surfaceOf, dropEmbeddedLayout } = await import("../model/xmlsurface");
     const { loadScoreDoc } = await import("../model/fromxml");
     const { scoreDocToMusicXml } = await import("../model/toxml");
     const doc = loadScoreDoc(xml);
     const song = doc.songs[0];
-    if (!song) return { xml, replayed: 0, missed: edits.chords.size + edits.deleted.size };
+    if (!song) return { xml, doc, replayed: 0, missed: edits.chords.size + edits.deleted.size };
     const QUARTERS: Record<string, number> = { whole: 4, half: 2, quarter: 1, eighth: 0.5, "16th": 0.25, "32nd": 0.125, "64th": 0.0625 };
     let replayed = 0;
     const found = new Set<string>();
@@ -1471,12 +1472,22 @@ export class OmrController implements FormatSource {
             el.notes = snap.pitches.map((p, k) => ({ ...(el.notes[k] ?? {}), pitch: { ...p } }));
             delete el.rest;
           }
-          if (snap.type && (snap.type !== el.duration.type || snap.dots !== el.duration.dots) && QUARTERS[snap.type]) {
+          const tm = snap.timeMod;
+          const tmSame = (tm?.actual ?? 1) === (el.duration.timeMod?.actual ?? 1) && (tm?.normal ?? 1) === (el.duration.timeMod?.normal ?? 1);
+          if (snap.type && (snap.type !== el.duration.type || snap.dots !== el.duration.dots || !tmSame) && QUARTERS[snap.type]) {
             const { dpq } = measureCtx(song, part, mi);
-            const div = QUARTERS[snap.type]! * dpq * (2 - Math.pow(0.5, snap.dots));
-            if (Number.isInteger(div)) el.duration = { ...el.duration, divisions: div, type: snap.type, dots: snap.dots };
+            const div = (QUARTERS[snap.type]! * dpq * (2 - Math.pow(0.5, snap.dots)) * (tm?.normal ?? 1)) / (tm?.actual ?? 1);
+            if (Number.isInteger(div)) {
+              el.duration = { ...el.duration, divisions: div, type: snap.type, dots: snap.dots };
+              if (tm) el.duration.timeMod = { ...tm };
+              else delete el.duration.timeMod;
+            }
           }
+          if (snap.grace && !el.grace) el.grace = snap.type === "eighth" ? { slash: true } : {};
+          if (!snap.grace) delete el.grace;
+          // 歌词照记下的整份放回（空 = 删掉了）
           if (snap.lyrics.length) el.lyrics = snap.lyrics.map((l) => ({ ...l }));
+          else delete el.lyrics;
           respellMeasure(m, measureCtx(song, part, mi).key);
           replayed++;
         }
@@ -1486,7 +1497,7 @@ export class OmrController implements FormatSource {
     replayed += gone.length;
     dropEmbeddedLayout(song);
     const missed = [...edits.chords.keys(), ...edits.deleted].filter((id) => !found.has(id)).length;
-    return { xml: scoreDocToMusicXml(doc), replayed, missed };
+    return { xml: scoreDocToMusicXml(doc), doc, replayed, missed };
   }
 
   /** 位图五线谱识别（或上次重建）刚落地时的原文：与当前原文不同即手改过 */
@@ -1885,9 +1896,37 @@ export class OmrController implements FormatSource {
 
 /** 重建前记下的手改（按识别 id）：`chords` 改过的和弦、`deleted` 删掉的、`lost` 回放不了的处数 */
 interface StaffEdits {
-  chords: Map<string, { rest: boolean; pitches: { step: "A" | "B" | "C" | "D" | "E" | "F" | "G"; alter: number; octave: number }[]; type?: Chord["duration"]["type"]; dots: number; lyrics: NonNullable<Chord["lyrics"]> }>;
+  chords: Map<string, {
+    rest: boolean; pitches: { step: "A" | "B" | "C" | "D" | "E" | "F" | "G"; alter: number; octave: number }[];
+    type?: Chord["duration"]["type"]; dots: number; timeMod?: Chord["duration"]["timeMod"]; grace: boolean; lyrics: NonNullable<Chord["lyrics"]>;
+  }>;
   deleted: Set<string>;
   lost: number;
+}
+
+/**
+ * 整份谱的语义签名（不看版面坐标、符干、临时记号印不印）：各声部各小节的调号拍号谱号、小节线、记号文字、每个和弦（`chordSig` + 声线谱表、
+ * 奏法装饰、和弦名、延音线），以及跨音记号（按「第几声部第几小节第几个元素」认端点）。重建前判手改能不能全回放用。
+ */
+function semanticSig(doc: ScoreDoc): string {
+  const song = doc.songs[0];
+  if (!song) return "";
+  const where = new Map<ElementId, string>();
+  const parts = song.parts.map((p, pi) => p.measures.map((m, mi) => {
+    m.elements.forEach((e, i) => where.set(e.id, `${pi}.${mi}.${i}`));
+    const a = m.attrs;
+    return {
+      attrs: a ? [a.key?.fifths, a.time && `${a.time.beats}/${a.time.beatType}`, (a.clefs ?? []).map((c) => `${c.sign}${c.line ?? ""}${c.octaveChange ?? ""}@${c.staff ?? 1}`).join(",")] : null,
+      later: (m.laterAttrs ?? []).map((la) => [la.afterElements, la.attrs.key?.fifths, (la.attrs.clefs ?? []).map((c) => `${c.sign}${c.line ?? ""}`).join(",")]),
+      bars: (m.barlines ?? []).map((b) => [b.location, b.style ?? "", b.repeat ?? "", b.ending ? `${b.ending.numbers.join(",")}${b.ending.type}` : ""]).sort(),
+      dirs: (m.directions ?? []).map((d) => [d.type, d.text ?? "", d.spanType ?? "", d.wedgeType ?? "", d.afterElements ?? 0, d.staff ?? 1, d.tempo?.perMinute ?? ""].join("|")).sort(),
+      els: m.elements.map((e) => e.kind !== "chord" ? e.kind
+        : [chordSig(e), e.voice, e.staff, JSON.stringify(e.notations ?? {}), e.harmony?.text ?? (e.harmony ? `${e.harmony.root.step}${e.harmony.root.alter}${e.harmony.kind}` : ""),
+          e.notes.map((n) => `${n.tie?.start ? "s" : ""}${n.tie?.stop ? "e" : ""}`).join(",")].join("|")),
+    };
+  }));
+  const marks = song.marks.map((mk) => `${mk.type}:${where.get(mk.start)}-${where.get(mk.end)}`).sort();
+  return JSON.stringify({ parts, marks });
 }
 
 /** 一个和弦在对照视图里算不算「改过」的签名：音高（各音）、休止、时值、附点、连音、倚音、各段歌词。 */

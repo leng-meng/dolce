@@ -12,7 +12,7 @@ import {
   isEditError, type JumpKind, locate, mergeMeasures, midiOf, type ChordPos, type EditHooks, type InsertAnchor, type ModelEdit, posOf,
   removeChordNote, scaleDuration, setBarKind, setBreakBefore, setDegree, setKeyAt, setTempoAt, setTimeAt, shiftOctave, splitMeasure,
   pasteClip, type ClipItem, setDirectionText, toggleTuplet, setHarmony, setLyric, shiftSemitones, transposeScore, stepDegree, stepSemitone, setStep, degreeOfStep, anchorFifths, toggleAccidental, toggleDeco, toggleDot, toggleEnding, toggleJump, toggleSlur, toggleTie,
-  type DecoKind, deleteDirection, insertPitch, newDurationOf, dirPartner, moveDirection, moveHarmony, moveMarkEnd, type MovedMark, rereadKeyAt, setClefAt, shiftLyrics, toggleGrace, toggleWedge,
+  type DecoKind, deleteDirection, removeNotation, insertPitch, newDurationOf, dirPartner, moveDirection, moveHarmony, moveMarkEnd, type MovedMark, rereadKeyAt, setClefAt, shiftLyrics, toggleGrace, toggleWedge,
 } from "../../model/edit";
 import { parseClefInput, parseKeyInput, parseTempoInput, parseTimeInput } from "./measureinput";
 import { dropEmbeddedLayout, forgetNoteLayout } from "../../model/xmlsurface";
@@ -307,7 +307,8 @@ function removeMark(ctx: ModelActionCtx, e: SyncEntry): boolean {
     return commit(ctx, (doc) => deleteDirection(doc, r));
   }
   if (e.markKind === "harmony") return commit(ctx, (doc) => setHarmony(doc, e.id, ""));
-  if (e.markKind === "deco" && e.name) return commit(ctx, (doc) => toggleDeco(doc, [e.id], e.name as DecoKind));
+  // 按名字删（顿音、颤音之外的 caesura、stress… 也删得掉；不走 `toggleDeco`，那边不认的名字会当装饰加上去）
+  if (e.markKind === "deco" && e.name) return commit(ctx, (doc) => removeNotation(doc, e.id, e.name!));
   ctx.setStatus(tr("ve.cantDeleteXml"));
   return true;
 }
@@ -349,7 +350,9 @@ export function moveSelected(ctx: ModelActionCtx, delta: number, byMeasure: bool
         // 只挪一端：选中的是哪一端无所谓，按 `which` 取起点或终点那条
         const d = doc.songs[0]?.parts[r.pi]?.measures[r.mi]?.directions?.[r.index];
         const isStop = d?.spanType === "stop";
-        return moveDirection(doc, (which === "end") === isStop ? r : pair, delta, byMeasure);
+        // 挪的那一端不能越过另一端
+        const [mine, other] = (which === "end") === isStop ? [r, pair] : [pair, r];
+        return moveDirection(doc, mine, delta, byMeasure, undefined, other);
       }
       return moveDirection(doc, r, delta, byMeasure, pair ?? undefined);
     });
