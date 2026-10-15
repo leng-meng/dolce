@@ -82,7 +82,7 @@ export interface JianpuLayout {
    *  五线谱自动铺排拿它当优选断点（`App.jianpuLineStarts`） */
   readonly lineStarts: ElementId[];
   /** `measure` 时：第一首各音（键为元素 id）的自然横向区间与版心宽 */
-  readonly spans?: { width: number; spans: Map<string | number, { x0: number; x1: number }> };
+  readonly spans?: { width: number; spans: Map<string | number, { x0: number; x1: number; x1b?: number }> };
 }
 
 /** 排一份文档并生成全部页面（原 `PuPainter.load`）。 */

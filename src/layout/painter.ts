@@ -112,7 +112,7 @@ export class PaintResources {
  *  `slide`：按展开档的画法量（数字共基线、增时线「-」字）。不改 `doc`。 */
 export function measureDocument(
   doc: ScoreDoc, sheet: StyleSheet, width: number, slide = false, song = 0,
-): { width: number; spans: Map<string | number, { x0: number; x1: number }> } {
+): { width: number; spans: Map<string | number, { x0: number; x1: number; x1b?: number }> } {
   const one = doc.songs[song];
   if (!one) return { width: 0, spans: new Map() };
   // 只量断句的那条旋律：带歌词的声部（同断句输入的 `forExpanded`），没有就第一个。

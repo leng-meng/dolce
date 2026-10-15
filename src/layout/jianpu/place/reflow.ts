@@ -142,18 +142,29 @@ export function foldLineStarts(
   return folded ? out : null;
 }
 
+/** 一个音的自然横向区间（见 `naturalSpans`） */
+export interface NaturalSpan {
+  x0: number;
+  x1: number;
+  /** 后面紧跟小节线时，含这条线的右缘（判放不放得下用） */
+  x1b?: number;
+}
+
 /**
  * 整首的**自然**横向区间（紧排 + 歌词避让，不分行、不两端对齐）：成书断句判「一行放不放得下」的尺子
  * （同旧简谱引擎 `Line.naturalSpans`）。键是元素 id；增时线算进它前面那个音（一个音的区间罩住它的增时线与歌词）。
- * 不含音后面的小节线（同旧简谱引擎；含进来断句会变，见 dev 待办）。调用方先清掉换行，整首就是一组；源里有多组时各组各量（组内坐标）。
+ * `x1` 不含音后面的小节线（同旧简谱引擎；行长匀度、行宽比这些尺子按它调的）。
+ * `x1b`：音后面紧跟小节线时量到那条线的右缘——引擎折行（`fillLines`）量到行末小节线为止，
+ * 判「这行放不放得下」要用它，否则贴边的行差一条线宽就被引擎在断点之外再折一刀（393《非我惟主》1 页→2 页）。
+ * 调用方先清掉换行，整首就是一组；源里有多组时各组各量（组内坐标）。
  */
 export function naturalSpans(
   song: PuSong,
   idOf: ReadonlyMap<MusicElement, string | number>,
   m: JianpuGrid,
   ink: InkMeasurer,
-): Map<string | number, { x0: number; x1: number }> {
-  const out = new Map<string | number, { x0: number; x1: number }>();
+): Map<string | number, NaturalSpan> {
+  const out = new Map<string | number, NaturalSpan>();
   // 好几行（文本谱的歌词挂在每行源头，并不成一行）：后一行接在前一行末尾之后，整首一条坐标
   let base = 0;
   for (const page of song.pages) {
@@ -167,6 +178,11 @@ export function naturalSpans(
       const nat = naturalColumns([laid], m, ink);
       let owner: string | number | null = null;
       for (const it of laid.items) {
+        if (it.element.kind === "barline") {
+          const sp = owner === null ? undefined : out.get(owner);
+          if (sp) sp.x1b = Math.max(sp.x1b ?? sp.x1, base + (nat.rightOf.get(it) ?? 0));
+          continue;
+        }
         if (it.element.kind === "note") owner = idOf.get(it.element) ?? null;
         else if (it.element.kind !== "sustain") continue;
         if (owner === null) continue;
@@ -174,7 +190,7 @@ export function naturalSpans(
         const x1 = base + (nat.rightOf.get(it) ?? 0);
         right = Math.max(right, x1);
         const prev = out.get(owner);
-        out.set(owner, prev ? { x0: Math.min(prev.x0, x0), x1: Math.max(prev.x1, x1) } : { x0, x1 });
+        out.set(owner, prev ? { ...prev, x0: Math.min(prev.x0, x0), x1: Math.max(prev.x1, x1) } : { x0, x1 });
       }
       base = right;
     }

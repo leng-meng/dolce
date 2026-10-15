@@ -29,10 +29,10 @@ export interface ApplyBreakResult {
 
 /** 简谱引擎量出来的自然跨度（键是元素 id，`layoutBookDoc` 的 `measure`）换成按断句输入的和弦。 */
 export function fitForIds(
-  fit: { width: number; spans: ReadonlyMap<string | number, { x0: number; x1: number }> },
+  fit: { width: number; spans: ReadonlyMap<string | number, { x0: number; x1: number; x1b?: number }> },
   idOf: ReadonlyMap<PhraseChord, ElementId>,
 ): FitMetric {
-  const spans = new Map<PhraseChord, { x0: number; x1: number }>();
+  const spans = new Map<PhraseChord, { x0: number; x1: number; x1b?: number }>();
   for (const [c, id] of idOf) {
     const sp = fit.spans.get(id);
     if (sp) spans.set(c, sp);
@@ -251,7 +251,7 @@ function pickCuts(part: PhrasePart, book: FlatBook, line: LineInfo, k: number, b
     // 那条 +14 分的「中。」），全书 D7 立刻 0 → 18~38 处，不划算——**别再试**。
     // 那类曲子真正缺的是版心（见「补刀补不了的」一节）。
     if (hard && minCells > 0 && c < minCells) return Infinity;
-    const over = c - cells;
+    const over = f.fitOf(a + 1, b) - cells;
     if (cells > 0 && over > 0) {
       if (hard) return Infinity;
       v += 100 + over ** 2 * 8;
@@ -347,7 +347,7 @@ export function applyCapacityCuts(part: PhrasePart, breaks: PhraseBreaks, cells:
    * 而 justify 一挤就下去了。
    */
   const kOf = (l: LineInfo): number => {
-    const w = f.ofLine(l);
+    const w = f.fitLine(l);
     return Math.max(w >= f.capacity * (1 + CUT_TOL) ? Math.max(2, Math.ceil(w / f.capacity)) : 1,
       hardMeas > 0 ? Math.ceil(l.bars / hardMeas) : 1);
   };
@@ -489,16 +489,25 @@ class Fit {
   ofLine(l: LineInfo): number {
     return this.spanOf(l.from, l.to);
   }
-  /** 全曲拍平序列里 `[from, to]`（含端点）这一段有多宽。 */
-  spanOf(from: number, to: number): number {
+  /** 全曲拍平序列里 `[from, to]`（含端点）这一段有多宽。`withBar`：量到行末小节线（`FitMetric.spans` 的 `x1b`），
+   *  与 `capacity` 比「放不放得下」的地方用它（`fitOf` / `fitLine`）；行宽比、过短判据量到音为止。 */
+  spanOf(from: number, to: number, withBar = false): number {
     const b = this.book;
     if (from > to) return 0;
     if (this.metric) {
       const a = this.metric.spans.get(b.chords[from]);
       const z = this.metric.spans.get(b.chords[to]);
-      if (a && z) return z.x1 - a.x0;
+      if (a && z) return (withBar ? z.x1b ?? z.x1 : z.x1) - a.x0;
     }
     return b.cellUpto[to + 1] - b.cellUpto[from];
+  }
+  /** 同 `spanOf`，量到行末小节线：与 `capacity` 比用 */
+  fitOf(from: number, to: number): number {
+    return this.spanOf(from, to, true);
+  }
+  /** 同 `ofLine`，量到行末小节线：与 `capacity` 比用 */
+  fitLine(l: LineInfo): number {
+    return this.fitOf(l.from, l.to);
   }
 }
 
@@ -714,7 +723,7 @@ export function tidyLineHeads(part: PhrasePart, breaks: PhraseBreaks,
     // 并过去之后那一行有多宽：**真实坐标**（行首残小节的最后一个和弦到 prev 的行首）
     let headEnd = cur.from;
     while (headEnd < cur.to && !f.book.isLast[headEnd]) headEnd++;
-    if (f.on && f.spanOf(prev.from, headEnd) >= f.capacity) continue;
+    if (f.on && f.fitOf(prev.from, headEnd) >= f.capacity) continue;
     if (prev.mi !== null) breaks.measureBreaks.delete(prev.mi);
     if (prev.chord) breaks.midBreaks.delete(prev.chord);
     breaks.measureBreaks.add(cur.fromMi + 1);
@@ -754,7 +763,7 @@ export function tidyLineTails(part: PhrasePart, breaks: PhraseBreaks,
     while (barStart > cur.from && !f.book.isLast[barStart - 1]) barStart--;
     if (barStart <= cur.from) continue;
     // 推过去之后下一行有多宽：**真实坐标**（残小节的头一个和弦到 next 的行末）
-    if (f.on && f.spanOf(barStart, next.to) >= f.capacity) continue;
+    if (f.on && f.fitOf(barStart, next.to) >= f.capacity) continue;
     // **上一句的收气休止也照推**（用户口径 2026-08-28：「139 的休止改在行首」）。
     // 原来这里照 D5 挡了一道——`|5-多 5-深？|0 3主 1恩 3有|` 的那个 `0` 是上一句唱完的
     // 那口气，留在行末才对（139《主爱有多少》原书四行行末就都是 `|0`）。用户后来定了新口径：
@@ -826,7 +835,7 @@ export function mergePairsUniform(part: PhrasePart, breaks: PhraseBreaks, useMid
 function linesAreOk(lines: LineInfo[], f: Fit): boolean {
   for (let i = 0; i < lines.length; i++) {
     // 「放不放得下」按**真实坐标**判——排版器折不折行看的就是这个（用户口径）
-    if (f.on && f.ofLine(lines[i]) >= f.capacity) return false;
+    if (f.on && f.fitLine(lines[i]) >= f.capacity) return false;
     // 中间行只剩一小节（且不足四拍/八拍）= 碎行。末行本来就可以短。
     if (i < lines.length - 1 && !lines[i].section) {
       const l = lines[i];
@@ -917,7 +926,7 @@ export function mergeSliverLines(part: PhrasePart, breaks: PhraseBreaks, useMidB
     if (prev.section) continue;
     if (cur.bars > 1 || cur.beats >= (cur.head.full ? 4 : 8)) continue;
     if (prev.mi !== null && breaks.forced.has(prev.mi)) continue;
-    if (f.on && f.spanOf(prev.from, cur.to) >= f.capacity) continue;   // 并过去放不下就维持原判
+    if (f.on && f.fitOf(prev.from, cur.to) >= f.capacity) continue;   // 并过去放不下就维持原判
     if (prev.mi !== null) breaks.measureBreaks.delete(prev.mi);
     else if (prev.chord) breaks.midBreaks.delete(prev.chord);
     else continue;

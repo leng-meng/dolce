@@ -21,8 +21,9 @@ import { Fraction } from "../common/fraction";
 export interface FitMetric {
   /** 版心宽度。 */
   width: number;
-  /** 每个和弦的自然横向区间。 */
-  spans: Map<PhraseChord, { x0: number; x1: number }>;
+  /** 每个和弦的自然横向区间。`x1b`：后面紧跟小节线时含这条线的右缘——引擎折行量到行末小节线，
+   *  **只在与版心宽比「放不放得下」时用它**（`fitSpan`），行长匀度、行宽比、过短判据照旧量到音为止（`x1`）。 */
+  spans: Map<PhraseChord, { x0: number; x1: number; x1b?: number }>;
 }
 
 /**
@@ -1544,7 +1545,7 @@ export function computePhraseBreaks(part: PhrasePart, opts: PhraseOptions = {}):
       if (!FIT) return true;
       const p0 = FIT.spans.get(flat[idxAt[a] + 1]?.chord);
       const p1 = FIT.spans.get(flat[idxAt[b]]?.chord);
-      return !(p0 && p1) || p1.x1 - p0.x0 < FIT.width;
+      return !(p0 && p1) || (p1.x1b ?? p1.x1) - p0.x0 < FIT.width;
     };
 
     const quality = (nb: number[]): number => {
@@ -1713,7 +1714,10 @@ export function computePhraseBreaks(part: PhrasePart, opts: PhraseOptions = {}):
        */
       const evenOf = (k: number): number => {
         const r = rows[k];
-        if (!r || !r.fits) return 1;
+        // 下一行放不放得下都照常按长短打折：原来放不下就返回 1，放不下的行反倒拿满额奖励，
+        // 留着它的方案在选优里占便宜（229《复兴的火》因此交出带超宽行的那套、整首掉进补刀档 16/16/9/12…，D8）。
+        // 也不归零：试过，125《主名至宝》的 24/36（36 拍那行放不下、补刀切成 24/18/18）就输给了 24/24/12
+        if (!r) return 1;
         let best = 0;
         let found = false;
         for (let j = 0; j < rows.length; j++) {
@@ -1816,7 +1820,7 @@ export function computePhraseBreaks(part: PhrasePart, opts: PhraseOptions = {}):
     const overRatio = (nb: number[]): number => {
       if (!(paperCap > 0)) return 1;
       let mx = 0;
-      for (let a = 0; a < M; ) { const b = nb[a]; if (b <= a) break; mx = Math.max(mx, lineSpan(a, b)); a = b; }
+      for (let a = 0; a < M; ) { const b = nb[a]; if (b <= a) break; mx = Math.max(mx, fitSpan(a, b)); a = b; }
       return mx / paperCap;
     };
     /** 一行有多宽 / 版心有多宽：有真实坐标就用真实坐标，没有就退回格数（见 PhraseOptions.fit）。 */
@@ -1826,6 +1830,13 @@ export function computePhraseBreaks(part: PhrasePart, opts: PhraseOptions = {}):
       const p0 = FIT.spans.get(flat[idxAt[a] + 1]?.chord);
       const p1 = FIT.spans.get(flat[idxAt[b]]?.chord);
       return p0 && p1 ? p1.x1 - p0.x0 : cellsIntBetween(a, b);
+    };
+    /** 同 `lineSpan`，但量到行末小节线（见 `FitMetric.spans`）：与版心宽比「放不放得下」用这把 */
+    const fitSpan = (a: number, b: number): number => {
+      if (!FIT) return cellsIntBetween(a, b);
+      const p0 = FIT.spans.get(flat[idxAt[a] + 1]?.chord);
+      const p1 = FIT.spans.get(flat[idxAt[b]]?.chord);
+      return p0 && p1 ? (p1.x1b ?? p1.x1) - p0.x0 : cellsIntBetween(a, b);
     };
     /** 每一行（末行除外）都不短于**版心三分之一**。见 `tryWant` 里那段注释。
      *  比 `fitsPaper` 的四成松一档：144《求圣灵吹我》一句一行的八行正落在 40% 上
@@ -1841,9 +1852,9 @@ export function computePhraseBreaks(part: PhrasePart, opts: PhraseOptions = {}):
     const fitsPaper = (nb: number[]): boolean => {
       if (!(paperCap > 0)) return true;
       const floor = paperCap * 0.4;
-      const segsOf: number[] = [];
-      for (let a = 0; a < M; ) { const b = nb[a]; if (b <= a) break; segsOf.push(lineSpan(a, b)); a = b; }
-      return segsOf.every((c, i) => c < paperCap && (i === segsOf.length - 1 || c >= floor));
+      const segs: Array<[number, number]> = [];
+      for (let a = 0; a < M; ) { const b = nb[a]; if (b <= a) break; segs.push([a, b]); a = b; }
+      return segs.every(([a, b], i) => fitSpan(a, b) < paperCap && (i === segs.length - 1 || lineSpan(a, b) >= floor));
     };
     let best = { score: INF, nb: nextB };
     /** 每行都放得下的方案，连同它的行数（见 FIT_SLACK）。 */
@@ -1895,7 +1906,7 @@ export function computePhraseBreaks(part: PhrasePart, opts: PhraseOptions = {}):
       const need = base.map((_, i) => {
         const lo = cuts[i];
         const hi = cuts[i + 1] ?? M;
-        return Math.max(1, Math.ceil(lineSpan(lo, hi) / paperCap));
+        return Math.max(1, Math.ceil(fitSpan(lo, hi) / paperCap));
       });
       for (let d = 0; d <= 2; d++) tryWant(need.map((v, i) => Math.max(base[i], v) + d));
     }
@@ -2092,7 +2103,10 @@ export function computePhraseBreaks(part: PhrasePart, opts: PhraseOptions = {}):
       // @ts-ignore 调试钩子：这一套爬山赚了多少分、挪到哪儿了（页面里先 `window.__hillDebug = []`）
       if (typeof window !== "undefined" && Array.isArray((window as any).__hillDebug))
         (window as any).__hillDebug.push({ q0: +q0.toFixed(2), q1: +curQ.toFixed(2), moved, bs: bs.slice() });
-      if (!moved || q0 - curQ < HILL_MIN_GAIN) return null;
+      // **出发那套有放不下的行就不卡这道门槛**：那一行终归要被补刀切开，`quality` 给它的分不作数，
+      // 没有「调好的谱」可护——169《全新的你》DP 交出的那套有一行 26 拍连行尾小节线超出版心 0.3%，
+      // 爬到行行放得下的 20/22 拍那套只赚 9.2 分，被门槛挡回去，整首掉进均匀补刀档（D8）
+      if (!moved || (q0 - curQ < HILL_MIN_GAIN && overflows(nb0) === 0)) return null;
       const out = nbOf(bs);
       // 两道**绝对**门槛，都照着 line-check 的判据写：段内行长比 ≥ 0.5（D8）、
       // 每行都放得下。**不能写成「别比出发的那套差」**——爬山是从好几套方案各爬一遍，

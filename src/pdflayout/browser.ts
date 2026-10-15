@@ -324,7 +324,7 @@ export function bookStyleOf(style: BookStyle): JianpuStyle {
 }
 
 /** 真实坐标量一遍（同 `measureChordSpans`）：清掉原谱的换行、整首不折，量每个音（键为元素 id）的自然横向区间与版心宽。 */
-export function measureBookSpans(doc: ScoreDoc, style: BookStyle): { width: number; spans: Map<string | number, { x0: number; x1: number }> } {
+export function measureBookSpans(doc: ScoreDoc, style: BookStyle): { width: number; spans: Map<string | number, { x0: number; x1: number; x1b?: number }> } {
   for (const song of doc.songs) clearSongBreaks(song);
   return layoutBookDoc(doc, style, style.page.h, true).spans ?? { width: 0, spans: new Map() };
 }
