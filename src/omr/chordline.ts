@@ -33,6 +33,19 @@ export function chordCandidates(
  *  与 sectionMark 的落位**刻意不同**：段落多从整小节起、要回退到本小节首音（弱起进段的回退到休止为止）；和弦不回退——
  *  它可落在小节内任意一拍。和弦也**不一定对着音符**：印在两音符之间时按 x 线性插值出
  *  `chordOffset`（本音符时值内的比例，0..1），由 todoc.ts 决定挂音符还是挂增时线。 */
+/** 和弦左缘 `x` 落在本音的第几条增时线上方 → 本音时值内的比例；对不上增时线返回 undefined。 */
+function dashBeat(n: JpNum, x: number): number | undefined {
+  const rs = n.augmentRects;
+  if (!rs || !rs.length || rs.length !== n.augment || n.div || n.dot || x <= n.bbox.x + n.bbox.w) return undefined;
+  for (let k = rs.length - 1; k >= 0; k--) {
+    const r = rs[k]!;
+    // 左缘到横块右四分之一以内才算；再往右是下一个音的和弦往左探出来（277《从前所珍爱》`6- C 5_` 的 C 左缘在横块 95% 处，
+    // 《真爱》两处挂增时线的在 59% 与 −40%）
+    if (x >= r.x - r.w * 0.5 && x <= r.x + r.w * 0.75) return (1 + k) / (1 + n.augment);
+  }
+  return undefined;
+}
+
 export function placeChords(
   row: StaffRow, cands: ChordCand[], regions: TextRegion[],
 ): void {
@@ -47,7 +60,12 @@ export function placeChords(
     let i = 0;
     while (i + 1 < lefts.length && lefts[i + 1] <= x) i++;
     let frac = 0;
-    if (i + 1 < lefts.length && x > lefts[i]) {
+    // 印在增时线上方的（青年诗歌 2《真爱》`2 - - 7 5` 第三拍的 D）：按增时线的源图位置定拍，不在两音符之间插值——
+    // 后面跟的是减时音时，插值把它推过「贴右邻」的门槛挂到下一个音上。横块与增时线数对得上、本音是四分音才用
+    // （一条线一拍，第 k 条在 (1+k)/(1+augment) 处）。
+    const dash = dashBeat(nums[i], x);
+    if (dash !== undefined) frac = dash;
+    else if (i + 1 < lefts.length && x > lefts[i]) {
       const gap = lefts[i + 1] - lefts[i];
       if (gap > 1) {
         const t = (x - lefts[i]) / gap;
