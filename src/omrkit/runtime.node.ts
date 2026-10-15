@@ -24,7 +24,7 @@ const DET_FILE = "ch_PP-OCRv4_det_infer.onnx";
 const DICT_FILE = "ppocrv6_dict.txt";
 
 /** 模型目录。**按产物位置解析，不看 cwd**——打包分发后第三方在任意目录跑都得找得到。
- *  顺序：env `OMR_MODELS` → 产物旁的 `models/`（打包形态）→ 仓库的 `public/redist/ocr`（开发）。 */
+ *  顺序：env `OMR_MODELS` → 产物旁的 `models/`（打包形态）→ 仓库的 `public/redist/ocr`（开发，产物在 `out/cli/`）。 */
 let _modelDir: string | null = null;
 function modelDir(): string {
   if (_modelDir) return _modelDir;
@@ -32,7 +32,8 @@ function modelDir(): string {
   const cands = [
     process.env.OMR_MODELS,
     join(here, "models"),
-    join(here, "..", "public", "redist", "ocr"),
+    // 开发：构建产物在 out/cli/ 下，仓库根在上两级
+    join(here, "..", "..", "public", "redist", "ocr"),
   ].filter((d): d is string => !!d);
   const hit = cands.find((d) => existsSync(join(d, DICT_FILE)));
   if (!hit) throw new Error(`找不到 OCR 模型（试过：${cands.join(" / ")}）。设 env OMR_MODELS 指向含 ${DICT_FILE} 的目录。`);
