@@ -6,7 +6,8 @@
 
 import type { Accidental, Key, Measure, Pitch, Song } from "../model/doc";
 import { AccidentalCarry, assignDegrees, continuesMeasure } from "../model/jianpu";
-import { MusicCommon, keyAlter } from "../score/jppitch";
+import { keyAlter } from "../score/jppitch";
+import { keyFifths } from "../model/keyshift";
 
 const STEPS = "CDEFGAB";
 
@@ -16,15 +17,6 @@ const ALTER_OF: Readonly<Record<Accidental, number>> = {
 const ACC_OF: Readonly<Record<number, Accidental>> = {
   [-2]: "double-flat", [-1]: "flat", 0: "natural", 1: "sharp", 2: "double-sharp",
 };
-
-/** 调号的升降号数。123 认不出 `fifths` 而只留了拼写的（`xmlproject.ts::projectPart` 同一口径）按拼写补。 */
-function fifthsOf(key: Key): number {
-  if (key.fifths === 0 && key.spelling && key.spelling !== "none") {
-    const f = MusicCommon.keyNameToFifth(key.spelling);
-    if (f >= -7 && f <= 7) return f;
-  }
-  return key.fifths;
-}
 
 /** 一小节里 ABC 记号的延续状态：同音名同八度 → 实际升降。 */
 class AbcCarry {
@@ -66,7 +58,7 @@ function eachMeasure(song: Song, fn: (m: Measure, key: Key, fresh: boolean) => v
 export function resolveAbcPitches(song: Song): void {
   let carry = new AbcCarry(0);
   eachMeasure(song, (m, key, fresh) => {
-    if (fresh) carry = new AbcCarry(fifthsOf(key));
+    if (fresh) carry = new AbcCarry(keyFifths(key));
     for (const el of m.elements) {
       if (el.kind !== "chord") continue;
       for (const n of el.notes) if (n.pitch) n.pitch = { ...n.pitch, alter: carry.sounding(n.pitch, n.accidental) };
@@ -89,7 +81,7 @@ export function withAbcPitches(src: Song): Song {
   let jp = new AccidentalCarry();
   let abc = new AbcCarry(0);
   eachMeasure(song, (m, key, fresh) => {
-    const k: Key = { ...key, fifths: fifthsOf(key) };
+    const k: Key = { ...key, fifths: keyFifths(key) };
     if (fresh) {
       jp = new AccidentalCarry();
       abc = new AbcCarry(k.fifths);

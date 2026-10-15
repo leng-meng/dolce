@@ -7,13 +7,27 @@ import type { Key, Song } from "./doc";
 /** 各级（1..7）相对主音的五度数 */
 const DEGREE_FIFTHS = [0, 2, 4, -1, 1, 3, 5];
 
-/** 首调号的 fifths。文本谱读进来的只记拼写（`fifths` 留 0），按拼写补算 */
+/** `N=X`（主音唱名 N 是音名 X）的调号：X 大调退回唱名 N 的五度数。`6=E` 同 `1=G`（1 个升号），
+ *  `2=D` 同 `1=C`。拼写认不出返回 `undefined`；越过 ±7 的按同音换回 ±7 以内。 */
+export function fifthsOfSpelling(spelling: string, tonicDegree?: string): number | undefined {
+  const base = MusicCommon.keyNameToFifth(spelling);
+  if (base < -7 || base > 7) return undefined;
+  const n = Number(tonicDegree ?? "1");
+  let f = base - (n >= 1 && n <= 7 ? DEGREE_FIFTHS[n - 1]! : 0);
+  while (f > 7) f -= 12;
+  while (f < -7) f += 12;
+  return f;
+}
+
+/** 调号的 fifths。只记了拼写的（文本谱读进来 `fifths` 留 0；123 认不出的拼写）按拼写与主音唱名补算 */
+export function keyFifths(k: Key): number {
+  if (k.fifths !== 0 || !k.spelling || k.spelling === "none") return k.fifths;
+  return fifthsOfSpelling(k.spelling, k.tonicDegree) ?? 0;
+}
+
+/** 首调号的 fifths */
 export function songFifths(song: Song): number {
-  const k = song.key;
-  if (!k) return 0;
-  if (k.fifths !== 0 || !k.spelling) return k.fifths;
-  const f = MusicCommon.keyNameToFifth(k.spelling);
-  return f >= -7 && f <= 7 ? f : 0;
+  return song.key ? keyFifths(song.key) : 0;
 }
 
 /** `k:#4` → 新调号。超出 ±7 的（`1=B` 里 `k:#5`）按同音换成 ±7 以内的拼写 */

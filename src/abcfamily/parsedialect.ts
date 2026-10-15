@@ -178,6 +178,11 @@ const MODE_SHIFT: Readonly<Record<string, number>> = {
   mix: -1, dor: -2, phr: -4, lyd: 1, loc: -5,
 };
 
+const MODE_NAME: Readonly<Record<string, string>> = {
+  maj: "major", ion: "ionian", min: "minor", aeo: "aeolian", m: "minor",
+  mix: "mixolydian", dor: "dorian", phr: "phrygian", lyd: "lydian", loc: "locrian",
+};
+
 export function parseKeyAbc(value: string): { key: Key; error?: string } {
   const raw = value.trim();
   if (raw === "" || /^none$/i.test(raw)) return { key: { fifths: 0 } };
@@ -194,7 +199,8 @@ export function parseKeyAbc(value: string): { key: Key; error?: string } {
     return { key: { fifths: base, spelling: tonic } };
   }
   const key: Key = { fifths: base + shift, spelling: tonic };
-  if (modeWord !== "") key.mode = modeWord === "m" ? "minor" : modeWord;
+  // 存 MusicXML `<mode>` 的全名（`toxml` 原样写出），写回 ABC 时再取前三字母
+  if (modeWord !== "") key.mode = MODE_NAME[modeWord];
   return { key };
 }
 

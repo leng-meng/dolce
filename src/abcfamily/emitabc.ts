@@ -187,14 +187,20 @@ export class EmitterAbc extends AbcFamilyEmitter {
     return ch.grace?.slash ? "/" : "";
   }
 
-  /** 音名调号。带 mode 的（`Em`）照 ABC 写法还原。 */
+  /** 音名调号。带 mode 的（`Em`）照 ABC 写法还原；123 的 `6=E` 没写 mode，按主音唱名补（`Em`）。 */
   protected keyValue(k: Key): string {
     if (k.spelling === "none") return "none";
     // 123 那侧的拼写是前置形（`bB`/`#F`），ABC 是后置形（`Bb`/`F#`）
     const sp = keySpelling(k, "mode").replace(/^([#b])([A-G])$/, "$2$1");
-    const mode = k.mode && k.mode !== "major" && k.mode !== "ionian" ? k.mode.slice(0, 3) : "";
+    const mode = k.mode && k.mode !== "major" && k.mode !== "ionian" ? k.mode.slice(0, 3)
+      : !k.mode && k.spelling ? (MODE_OF_DEGREE[k.tonicDegree ?? "1"] ?? "") : "";
     return sp + (mode === "min" ? "m" : mode);
   }
 }
+
+/** 主音唱名 → ABC 调式（`6=E` → `Em`） */
+const MODE_OF_DEGREE: Readonly<Record<string, string>> = {
+  "2": "dor", "3": "phr", "4": "lyd", "5": "mix", "6": "min", "7": "loc",
+};
 
 export const EMITTER_ABC = new EmitterAbc();

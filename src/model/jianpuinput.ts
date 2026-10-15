@@ -11,6 +11,7 @@ import { Fraction } from "../common/fraction";
 import { BARLINE_MARKS, DYNAMICS, TERMS } from "../pu/glyph";
 import { BarStyle, StartStopDiscontinue } from "../score/enums";
 import { MusicCommon } from "../score/jppitch";
+import { fifthsOfSpelling } from "./keyshift";
 import { PlayData } from "../score/playorder";
 import type {
   JBreak, JChord, JCredit, JKey, JLyric, JMeasure, JNote, JScore, JTime,
@@ -163,7 +164,7 @@ function songInput(song: PuSong, idOf: (el: NoteElement) => ElementId | null, fo
 
   const meter = meta.meters[0];
   const time: JTime = meter ? { beats: meter.numerator, beatType: meter.denominator } : { beats: 4, beatType: 4 };
-  const key: JKey = { fifths: MusicCommon.keyNameToFifth(meta.mode ?? "C") };
+  const key: JKey = { fifths: fifthsOfSpelling(meta.mode ?? "C", meta.tonic) ?? MusicCommon.keyNameToFifth(meta.mode ?? "C") };
   const playData = new PlayData();
   for (const tempo of meta.tempos) {
     if (typeof tempo === "number" && tempo >= 20 && tempo <= 400) {

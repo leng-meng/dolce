@@ -8,6 +8,7 @@
 
 import type { Clef, Diagnostic, Key, PlayPass, SourceSpan, Time } from "../model/doc";
 import { clefFromName } from "../model/jianpu";
+import { fifthsOfSpelling } from "../model/keyshift";
 import { t as tr } from "../i18n";
 
 /** ASCII 规范形的字段名。 */
@@ -160,7 +161,7 @@ export function normalizeSpelling(s: string): string {
 
 /**
  * 解析 `K:` 的值。三种写法：
- *   `K:1=F`     简谱首调形（主音唱名 = 音名）
+ *   `K:1=F`     简谱首调形（主音唱名 = 音名；`K:6=E` 调号同 `1=G`）
  *   `K:F`       ABC 标准形
  *   `K:Em`      ABC 带 mode——**这正好表达「调号同 G 大调、主音是 6」**，
  *               不必自造语法（规范 §3）
@@ -204,9 +205,10 @@ export function parseKey(value: string): { key: Key; error?: string } {
   else if (modeRaw) {
     modeKey = Object.keys(MODE_OFFSET).find((k) => k.length > 1 && k.startsWith(modeRaw.slice(0, 3))) ?? "";
   }
-  const offset = modeKey ? (MODE_OFFSET[modeKey] ?? 0) : 0;
+  // 写了 mode 按 mode 退；没写而有 `N=X`，按主音唱名退（`6=E` 同 `1=G`）
+  const fifths = modeKey ? base + (MODE_OFFSET[modeKey] ?? 0) : (fifthsOfSpelling(spelling, tonicDegree) ?? base);
 
-  const key: Key = { fifths: base + offset, spelling };
+  const key: Key = { fifths, spelling };
   if (modeKey) key.mode = modeKey === "m" ? "minor" : modeKey;
   // 主音唱名：源里写了就用源里的；没写而有 mode，按 mode 推（小调 = 6）
   const degree = tonicDegree ?? (modeKey ? MODE_TONIC_DEGREE[modeKey] : undefined);

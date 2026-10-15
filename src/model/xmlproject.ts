@@ -23,14 +23,13 @@ import type {
 import { SIMPLE_DIVISIONS } from "./doc";
 import { Fraction, lcm } from "../common/fraction";
 import { AccidentalCarry, quarterTempos } from "./jianpu";
-import { MusicCommon } from "../score/jppitch";
 import { typeOfDuration } from "../score/xmlutil";
 import { DYNAMICS, TERMS } from "../pu/glyph";
 import { alignPartsBySystem } from "./alignparts";
 import { applyPageMetaToDefaults } from "./pagemeta";
 import { decoKey } from "./deconames";
 import { applyBreaks } from "./breaks";
-import { songFifths } from "./keyshift";
+import { keyFifths, songFifths } from "./keyshift";
 import { distinctNumbers } from "./phrasedoc";
 
 
@@ -733,10 +732,7 @@ function projectPart(
     // 没写减时线条数的（ABC：音长在 `L:` 里）按音符类型给层数
     for (const el of m.elements) levels.set(el, el.beams?.length ?? (el.kind === "chord" && !el.grace ? GRACE_BEAM_LEVELS[el.duration.type ?? ""] ?? 0 : 0));
     if (m.attrs?.key) {
-      if (m.attrs.key.fifths === 0 && m.attrs.key.spelling) {
-        const f = MusicCommon.keyNameToFifth(m.attrs.key.spelling);
-        if (f >= -7 && f <= 7) m.attrs.key.fifths = f;
-      }
+      m.attrs.key.fifths = keyFifths(m.attrs.key);
       fifths = m.attrs.key.fifths;
     }
     /** 小节内延续的临时记号（简谱语义层，与 `assignDegrees` 同一份规则）；拆开的后半接着前半 */

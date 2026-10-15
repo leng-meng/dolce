@@ -21,6 +21,7 @@ import {
 } from "../score/playorder";
 import { linesOfVoice, voiceNumbers, type MusicElement, type PuSong } from "../pu/ast";
 import { Key, MusicCommon } from "../score/jppitch";
+import { fifthsOfSpelling } from "./keyshift";
 import type { PlaySource } from "../score/timeline";
 import type { JpwChordIn, JpwMeasureIn, JpwScoreIn } from "./tojpw";
 import { buildMeasures, type JumpOut, type MeasureOut } from "../pu/phrasesong";
@@ -157,7 +158,7 @@ function songMeasures(doc: ScoreDoc, songIdx: number, options: PlaySongOptions, 
   const key = new Key();
   // 调名缺省时取模型的 fifths：`.jpwabc` 来源只记 fifths、不记调名拼写（`.Title` 的调号）
   const fifths = doc.songs[songIdx]!.key?.fifths;
-  key.fifths = meta.mode === undefined && fifths !== undefined ? fifths : MusicCommon.keyNameToFifth(meta.mode ?? "C");
+  key.fifths = meta.mode === undefined && fifths !== undefined ? fifths : (fifthsOfSpelling(meta.mode ?? "C", meta.tonic) ?? MusicCommon.keyNameToFifth(meta.mode ?? "C"));
   const parts: MeasureOut[][] = [];
   const names: (string | undefined)[] = [];
   const docRank: number[] = [];
