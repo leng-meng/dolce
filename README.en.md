@@ -70,7 +70,12 @@ The interface is available in **English and Chinese**: it follows your browser l
   images are never uploaded.
 - **Edit while reviewing.** Notes can be edited directly on the source-image overlay; changed, deleted and inserted
   notes are marked in place. Notes and syllables the recognizer is unsure about are **highlighted in yellow**, and
-  you can step through them one by one.
+  you can step through them one by one (`F8` also visits measures with wrong beats, each red box showing the difference).
+- **Fixing recognition, the score-scanner way.** Move dynamics, text, lyric syllables and slur ends with `Alt+←/→`
+  or by **dragging them onto another note** (a whole run of offset lyrics is one step); re-read pitches in place after
+  correcting a misread **clef or key**; `Shift+G` selects a beamed group to add or remove a beam level; `Alt`+click the
+  source image to **add a missed note or barline**; right-click a staff in the staff overlay to **merge or split systems**,
+  with your edits put back note by note after the rebuild.
 - **Side by side.** Back in the typeset view, an optional "source snippet" window shows the original line of the
   selected note, or a **side-by-side** panel shows the whole source page with selection linked both ways; the source
   pane can be hidden so the image and the score split the screen.
