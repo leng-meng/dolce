@@ -335,6 +335,36 @@ function parseTime(lines: HLine[], fifthsLine?: HLine): { beats: number; beatTyp
 /** 把"同一字列里上下紧贴的碎块"竖向合并成整字高复合块。用于页眉粗体标题：复杂字(督/赢)的上下
  *  偏旁会断成多个半截连通块。条件：x 向高度重叠(同列) + 竖向近乎相接(非整行行距)。返回新连通块集
  *  (未被并的原样保留；被并的取并集包围盒，cx/cy 取包围盒中心——仅用于分层/裁剪定位，足够)。 */
+/**
+ * det 把同一行字切成几个框的并回一行（《脚步》副标题「泥土音乐《脚步》」+「(2007)」：只看前半段，中心偏离标题、居中那道门过不去）。
+ * 同一排（行心差不过字高三成）、字高相近（比不过 1.25）、中间空当不过 1.5 个字高的相邻片段才并（det 框带留白，两框横向叠进一个字高以内也算挨着）；
+ * 只给副标题挑候选用，调号、速度那些解析仍按 det 原框。并出来的行里有汉字时半角括号折成全角（中文排版的写法）。
+ */
+function joinRowPieces(ls: readonly HLine[]): HLine[] {
+  const sorted = [...ls].sort((a, b) => a.bbox.x - b.bbox.x);
+  const used = new Set<HLine>();
+  const out: HLine[] = [];
+  for (const a of sorted) {
+    if (used.has(a)) continue;
+    used.add(a);
+    let cur = a;
+    for (const b of sorted) {
+      if (used.has(b)) continue;
+      const h = Math.max(cur.charH, b.charH);
+      const gap = b.bbox.x - (cur.bbox.x + cur.bbox.w);
+      if (Math.abs(b.cy - cur.cy) > h * 0.3 || h > Math.min(cur.charH, b.charH) * 1.25 || gap < -h || b.bbox.x + b.bbox.w <= cur.bbox.x + cur.bbox.w || gap > h * 1.5) continue;
+      used.add(b);
+      const bbox = unionRect(cur.bbox, b.bbox);
+      let text = cur.text.trim() + b.text.trim();
+      if (hanziCount(text)) text = text.replace(/\(/g, "（").replace(/\)/g, "）");
+      const chars = cur.chars && b.chars ? [...cur.chars, ...b.chars] : undefined;
+      cur = { text, charH: h, cx: bbox.x + bbox.w / 2, cy: bbox.y + bbox.h / 2, n: cur.n + b.n, bbox, chars };
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
 function mergeStackedColumns(comps: Component[], numH: number): Component[] {
   const boxes = comps.map((c) => ({ ...c.bbox }));
   const alive = boxes.map(() => true);
@@ -998,8 +1028,7 @@ export async function recognizeHeader(
       const chordRe = /^[A-G][#b♯♭]?(?:m|maj|min|dim|aug|sus|add)?\d*(?:\s*\/\s*[A-G][#b♯♭]?)?$/;
       // 副标题**贴着标题**印（多在其下，也有印在标题上方的）；和弦则贴着谱行。离谁近就归谁。
       const gapTitle = (l: HLine) => (l.cy < tl.cy ? tl.bbox.y - l.cy : l.cy - (tl.bbox.y + tl.bbox.h));
-      const cand = rest
-        .filter((l) => l !== tl && l !== meta.fifthsLine && l !== meta.tempoLine)
+      const cand = joinRowPieces(rest.filter((l) => l !== tl && l !== meta.fifthsLine && l !== meta.tempoLine))
         // 纯拉丁文的行放宽到 1.3 倍：det 框要把上伸/下伸部都包进去（`Pray` 的 P 顶到大写线、y 垂到
         // 基线下），同样字号的框比汉字高一截。1677《祷告》的「Pray」框 73px、标题「1677 祷 告」才 67px，
         // 1.05 一卡副标题就没了。

@@ -30,7 +30,7 @@ export function chordCandidates(
 
 /** 把一批带源图 x 的和弦落到某谱行的音符上（含拍内偏移）。
  *
- *  与 sectionMark 的落位**刻意不同**：段落总从整小节起、要回退到本小节首音；和弦不回退——
+ *  与 sectionMark 的落位**刻意不同**：段落多从整小节起、要回退到本小节首音（弱起进段的回退到休止为止）；和弦不回退——
  *  它可落在小节内任意一拍。和弦也**不一定对着音符**：印在两音符之间时按 x 线性插值出
  *  `chordOffset`（本音符时值内的比例，0..1），由 todoc.ts 决定挂音符还是挂增时线。 */
 export function placeChords(

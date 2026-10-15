@@ -999,14 +999,15 @@ export async function recognizeLyrics(
   }
 
   // 段落标记落位：方框印在**下一谱行**音符的上方 → 归到该行、该标记 x 所在**小节的第一个音符**
-  // （谱面上段落总从整小节起；标记框略偏左于段首音符，故先按 x 找起点音符再回退到本小节首音）。
+  // （谱面上段落多从整小节起；标记框略偏左于段首音符，故先按 x 找起点音符再回退到本小节首音）。
+  // 回退**遇到休止就停**：弱起进段的（《脚步》「5 0 5, 5 2」上方的【Chorus】）段落从休止后那个音起，不是小节首音。
   for (const mk of marks) {
     const row = staff[mk.rowIdx + 1];
     if (!row?.nums.length) continue;
     let bi = row.nums.findIndex((nn) => rcx(nn.bbox) >= mk.x - numH * 0.5);
     if (bi < 0) bi = 0;
     const barX = row.barlineXs.filter((x) => x < rcx(row.nums[bi].bbox)).pop() ?? -Infinity;
-    while (bi > 0 && rcx(row.nums[bi - 1].bbox) > barX) bi--;
+    while (bi > 0 && rcx(row.nums[bi - 1].bbox) > barX && row.nums[bi - 1].digit !== 0) bi--;
     row.nums[bi].sectionMark = mk.word;
   }
 
