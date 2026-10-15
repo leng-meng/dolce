@@ -418,8 +418,11 @@ export class VisualEditController {
     const sel = this.host.view.state.selection.main;
     if (this.pickedBreak && (!sel.empty || sel.head !== this.pickedBreak.sel)) this.pickedBreak = null;
     if (this.showFormatMarks) this.drawBreaks(sel.from, sel.to);
-    if (sel.empty) this.drawInsertCaret(sel.head);
-    else if (document.activeElement === this.host.scorePane) this.drawEditBlock(sel.from, sel.to);
+    // 光标与方块都只在谱面有焦点时画（没点过谱面不亮光标）；双击改字时焦点在代码区，字里的光标照画
+    const focused = document.activeElement === this.host.scorePane;
+    if (sel.empty) {
+      if (focused || this.textEditing) this.drawInsertCaret(sel.head);
+    } else if (focused) this.drawEditBlock(sel.from, sel.to);
   }
 
   /** 一个条目在谱面上的 `<g>`。小节线与增时线有自己的（它们在模型里不按自己的 id 定位，
@@ -452,10 +455,27 @@ export class VisualEditController {
     return this.host.surfaceKind() === "staff" ? inkBoxInPage(el) : musicBox(el);
   }
 
-  /** 光标竖线要罩的那一带：五线谱取谱表带（横向仍按元素框），简谱就是元素框本身。 */
+  /** 光标竖线要罩的那一带：五线谱 / 识别核对取谱表带（横向仍按元素框），简谱取本行音符数字的字框（`digitBand`）。 */
   private caretBox(entry: SyncEntry, hit: { svg: SVGSVGElement; box: Box }): Box {
-    const band = this.host.caretBand(entry);
+    const band = this.host.caretBand(entry) ?? (this.host.surfaceKind() === "jianpu" ? this.digitBand(entry, hit) : null);
     return band && band.svg === hit.svg ? { x: hit.box.x, y: band.y, w: hit.box.w, h: band.h } : hit.box;
+  }
+
+  /** 简谱：离这个条目最近、同一行的音符的数字字框（音符 `<g>` 的第一个子元素）。同字号的数字字框等高、同基线，
+   *  光标在一行音符里走就不再随和弦、八度点、小节线的框忽高忽低。 */
+  private digitBand(entry: SyncEntry, hit: { svg: SVGSVGElement; box: Box }): { svg: SVGSVGElement; y: number; h: number } | null {
+    const nav = this.navigable();
+    const k = nav.indexOf(entry);
+    if (k < 0) return null;
+    for (let d = 0; d < 8; d++) {
+      for (const e of d === 0 ? [nav[k]] : [nav[k - d], nav[k + d]]) {
+        if (e?.kind !== "note") continue;
+        const digit = this.host.entryEl(e)?.firstElementChild;
+        const b = digit instanceof SVGGraphicsElement ? boxInPage(digit) : null;
+        if (b && b.svg === hit.svg && b.box.h > 0 && sameRow(b.box, hit.box)) return { svg: b.svg, y: b.box.y, h: b.box.h };
+      }
+    }
+    return null;
   }
 
   /** 拍数不对的小节：它的音符按行各圈一个淡红底；空小节圈前后两个音之间的空当。 */
@@ -531,8 +551,16 @@ export class VisualEditController {
         break;
       }
     }
-    const pb = prev && prev.kind !== "break" ? this.boxOf(prev) : null;
+    let pb = prev && prev.kind !== "break" ? this.boxOf(prev) : null;
     const nb = next && next.kind !== "break" ? this.boxOf(next) : null;
+    // 前一项在谱面上没有框（识别核对里的小节线），后一项也没有：退到再往前最近一个有框的，别让光标消失
+    if (prev && !pb && !nb && prev.kind !== "break") {
+      for (let k = nav.indexOf(prev) - 1; k >= 0 && !pb; k--) {
+        if (nav[k]!.kind === "break") break;
+        pb = this.boxOf(nav[k]!);
+        if (pb) prev = nav[k]!;
+      }
+    }
     const brokeBetween = prev?.kind === "break";
     const gap = (b: Box): number => Math.min(b.h, b.w * 2) * 0.12;
     const staff = this.host.surfaceKind() !== "jianpu";
