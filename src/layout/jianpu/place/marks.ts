@@ -29,10 +29,7 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid,
   for (const mark of voice.marks) {
     const openLeft = mark.continuationFromPrevious === true;
     const openRight = mark.continuationToNext === true;
-    // 跨行的弧线/多连音**只画后半条**：印刷原版里行末那截敞口的弧不画，下一行才从行首
-    // 起弧画到 `)`（《太阳出来喜洋洋》第 1→2 行的 `(6, - | 6,) (-` 就是这样）。
-    // 跳房子相反，行末那截要接着画（房号不重复），所以只挡弧线。
-    if (openRight && (mark.type === "slur" || mark.type === "tuplet")) continue;
+    // 跨行的弧线/多连音**两截都画**：起头那行从起点画到行末那个音右侧半格，收尾那行从行首那个音左侧半格画到终点
     const a = openLeft ? first : at(mark.start, "start");
     const b = openRight ? last : at(mark.end, "end");
     const level = Math.max(1, mark.level);
@@ -93,7 +90,10 @@ export function placeMarks(voice: ScoreLine, items: PlacedItem[], m: JianpuGrid,
       }
       // 简谱弧（engrave/arc.ts，三条简谱路同一条；多连音的两段弧也是弧）：只看起止两个音——两摞的墨迹顶
       // （终点算上临时记号）取高者，再往上一道叠层的空；源码里的 `+` 抬高级别照旧按 level 上移
-      placed.y = jpArcY(stackTop(a.element, m, false), stackTop(b.element, m), m.ink.stack.gap)
+      // 跨行那一截只认真有的那一端（敞口那头借来的行首/行末音不算）
+      const topA = stackTop(a.element, m, false);
+      const topB = stackTop(b.element, m);
+      placed.y = jpArcY(openLeft ? topB : topA, openRight ? topA : topB, m.ink.stack.gap)
         - (level - 1) * m.note.levelStep;
     }
     // 只有**两端都**落在并排块的下行里，这个记号才跟着下移；跨过并排块的（比如

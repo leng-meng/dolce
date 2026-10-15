@@ -3429,10 +3429,12 @@ function jpArcEnd(eng: MixedOptions, ch: ChordLayout, isEnd: boolean): { x: numb
 }
 
 /** 简谱层 slur/tied 锚点（SpanObj::slurTiedPosForJp）：简谱弧只看起止两个音，往上一道叠层的空（engrave/arc.ts::jpArcY）。
- *  `chl` 缺省 = 跨系统续过来的后半条（左端由调用方给）。 */
-export function slurTiedPosForJp(eng: MixedOptions, chl: ChordLayout | null, chr: ChordLayout): [Pt2, Pt2] {
-  const r = jpArcEnd(eng, chr, true);
-  const l = chl ? jpArcEnd(eng, chl, false) : r;
+ *  `chl` 缺省 = 跨系统续过来的后半条、`chr` 缺省 = 接到下一系统的前半条（敞口那端的 x 由调用方给）。 */
+export function slurTiedPosForJp(eng: MixedOptions, chl: ChordLayout | null, chr: ChordLayout | null): [Pt2, Pt2] {
+  const l0 = chl ? jpArcEnd(eng, chl, false) : null;
+  const r0 = chr ? jpArcEnd(eng, chr, true) : null;
+  const l = l0 ?? r0!;
+  const r = r0 ?? l0!;
   const y = jpArcY(l.top, r.top, mainRow(eng).st.gap);
   return [{ x: l.x, y }, { x: r.x, y }];
 }
@@ -3479,10 +3481,9 @@ export function tiedEnds(
 
   if (nota === Notation.JianPu || nota === Notation.Mixed) {
     above = true;
-    // 简谱弧跨系统**只画后半条**（同另两条简谱路）：起头那一系统不画
-    if (hasNext) return null;
+    // 简谱弧跨系统两截都画（同另两条简谱路），敞口那端在下面补
     if (chr.voice > 1 && hasPrev) return null;
-    const [pl, pr] = slurTiedPosForJp(eng, hasPrev ? null : chl, chr);
+    const [pl, pr] = slurTiedPosForJp(eng, hasPrev ? null : chl, hasNext ? null : chr);
     plx = pl.x; ply = pl.y;
     prx = pr.x; pry = pr.y;
   } else {
@@ -3561,16 +3562,16 @@ export function slurEnds(
 
   if (nota === Notation.JianPu) {
     above = true; // 简谱层 slur 一律朝上（render.cpp::drawSlur）
-    // 简谱弧跨系统**只画后半条**：起头那一系统不画，收尾那一系统从系统开头起弧（`hasPrev` 的左端在下面补）
-    if (!chr) return null;
+    // 简谱弧跨系统两截都画：起头那一系统画到系统末、收尾那一系统从系统开头起弧（敞口那端在下面补）
     const [pl, pr] = slurTiedPosForJp(eng, chl, chr);
     plx = pl.x; ply = pl.y;
     prx = pr.x; pry = pr.y;
     // **弧套弧**：套在它里面的延音线与更短的 slur 当障碍，按实际弧线判碰（engrave/arc.ts::arcClearShift），
     // 碰了才整条抬、高出一道叠层的空（260《感恩的泪》`2⌒2 3 2` 两条弧同一个起点）
     const x0 = hasPrev ? sys.measures[0].dataPos : plx;
+    const x1 = hasNext ? sys.measures[sys.measures.length - 1]!.xpos() + sys.measures[sys.measures.length - 1]!.dataEnd : prx;
     const inner: ArcObstacle[] = [];
-    const part = chr.measure.part;
+    const part = refCh.measure.part;
     const within = (a: Fraction, b: Fraction): boolean => !fLt(a, slur.startTick) && !fGt(b, slur.endTick);
     // 只认简谱层上真画出来的延音线（同谱表、旋律音，与 `render.ts` 画简谱层延音线同一条件）：
     // 别的谱表、别的声部的延音线不在这一层，当障碍会把弧无故抬高
@@ -3585,7 +3586,7 @@ export function slurEnds(
       const oe = slurEnds(sys, eng, o, Notation.JianPu);
       if (oe) inner.push({ x: (oe.plx + oe.prx) / 2, y: arcExtent(oe)[0] });
     }
-    const shift = arcClearShift(x0, ply, prx, pry, arcRise(prx - x0, mixedSlurStyle(true)), true, inner, mainRow(eng).st.gap);
+    const shift = arcClearShift(x0, ply, x1, pry, arcRise(x1 - x0, mixedSlurStyle(true)), true, inner, mainRow(eng).st.gap);
     ply += shift;
     pry += shift;
   } else {
