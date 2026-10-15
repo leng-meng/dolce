@@ -77,25 +77,60 @@ export function close(bin: Binary, r: number): void {
 /**
  * **开运算**（先腐蚀后膨胀），椭圆结构元，半轴 `rx`×`ry`（像素）：抹掉装不下这个椭圆的笔画——
  * 比椭圆细的谱线、符干、细弧都去掉，实心符头、符杠这类够粗的块原样留下。返回新图，不改原图。
- * 椭圆按行拆成横段，每段「全是墨 / 有墨」用积分图一次查出。
+ * 椭圆按行拆成横段：腐蚀时每段「全是墨」查本行向右的连续墨长，膨胀时把腐蚀结果的横段按各行段宽整段铺开
+ *（只碰有墨的地方，不逐点扫整页）。
  */
 export function ellipseOpen(bin: Binary, rx: number, ry: number): Binary {
   const { w, h, data } = bin;
-  const rows: [number, number][] = [];
-  for (let dy = -ry; dy <= ry; dy++) rows.push([dy, Math.floor(rx * Math.sqrt(Math.max(0, 1 - (dy * dy) / ((ry + 0.5) * (ry + 0.5)))))]);
-  /** 第 y 行 [x0, x1]（闭区间，裁到图内）的墨点数。 */
-  const run = (ii: Integral, y: number, x0: number, x1: number): number => ii.rect(Math.max(0, x0), y, Math.min(w, x1 + 1), y + 1);
-  const src = new Integral(bin);
+  const n = 2 * ry + 1;
+  const dys = new Int32Array(n);
+  const ks = new Int32Array(n);
+  for (let i = 0; i < n; i++) {
+    const dy = i - ry;
+    dys[i] = dy;
+    ks[i] = Math.floor(rx * Math.sqrt(Math.max(0, 1 - (dy * dy) / ((ry + 0.5) * (ry + 0.5)))));
+  }
+  // 最宽的段（中行）先查，最容易判死
+  const order = Array.from(dys.keys()).sort((a, b) => ks[b] - ks[a]);
+  // 每点向右的连续墨长（封顶 2rx+1，够判任何一段就行）
+  const cap = 2 * rx + 1;
+  const runR = new Uint16Array(w * h);
+  for (let y = 0; y < h; y++) {
+    const o = y * w;
+    let r = 0;
+    for (let x = w - 1; x >= 0; x--) {
+      r = data[o + x] ? Math.min(cap, r + 1) : 0;
+      runR[o + x] = r;
+    }
+  }
   const er = new Uint8Array(w * h);
   for (let y = ry; y < h - ry; y++)
     for (let x = rx; x < w - rx; x++) {
       if (!data[y * w + x]) continue;
-      if (rows.every(([dy, k]) => run(src, y + dy, x - k, x + k) === 2 * k + 1)) er[y * w + x] = 1;
+      let ok = true;
+      for (const i of order) {
+        const k = ks[i];
+        if (runR[(y + dys[i]) * w + x - k] < 2 * k + 1) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) er[y * w + x] = 1;
     }
-  const eroded = new Integral({ w, h, data: er });
   const out = new Uint8Array(w * h);
-  for (let y = 0; y < h; y++)
-    for (let x = 0; x < w; x++)
-      if (rows.some(([dy, k]) => y - dy >= 0 && y - dy < h && run(eroded, y - dy, x - k, x + k) > 0)) out[y * w + x] = 1;
+  for (let y = ry; y < h - ry; y++) {
+    const o = y * w;
+    for (let x = rx; x < w - rx; x++) {
+      if (!er[o + x]) continue;
+      let b = x;
+      while (b + 1 < w && er[o + b + 1]) b++;
+      for (let i = 0; i < n; i++) {
+        const t = y + dys[i];
+        if (t < 0 || t >= h) continue;
+        out.fill(1, t * w + Math.max(0, x - ks[i]), t * w + Math.min(w - 1, b + ks[i]) + 1);
+      }
+      x = b;
+    }
+  }
   return { w, h, data: out };
 }
