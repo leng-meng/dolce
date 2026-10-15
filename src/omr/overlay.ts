@@ -434,9 +434,9 @@ function buildHitLayer(score: RecognizedScore, stats: Stats, inserted: Reproject
     }
   });
 
-  // 和弦名：按原识别对回的「第几个框的第几个和弦」认（`chordSlots`）
+  // 和弦名：按原识别对回的「第几个框的哪个落点」认（`chordSlots`）
   chordSlots(score).forEach((at, k) => {
-    if (at) hit(score.chordRegions![k]!.bbox, { "data-kind": "chord", "data-i": String(at.i), "data-slot": String(at.slot), class: "omr-hit" });
+    if (at) hit(score.chordRegions![k]!.bbox, { "data-kind": "chord", "data-i": String(at.i), "data-slot": at.place, class: "omr-hit" });
   });
 
   // 新插的音（核对时插的，框是插值出来的）：按元素 id 认

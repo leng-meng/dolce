@@ -151,35 +151,60 @@ const JUMP_ORNAMENT: Record<string, string> = {
 
 const chordSymbol = (text: string): Harmony => ({ root: { step: "C", alter: 0 }, kind: "", text });
 
+/** 一个和弦名落在哪：音符本身 `h`、第 k 条增时线 `s<k>`、写不出的后续和弦第 k 个 `l<k>`（`Chord.laterHarmonies`）。 */
+export type ChordPlace = "h" | `s${number}` | `l${number}`;
+
 /**
  * 和弦落点。识别给的是「本音符时值内的比例」：主和弦 `chordOffset`、长音上逐拍换的 `extraChords`。
  * 简谱侧只有两个位置可挂：音符本身、它的某条增时线（`Sustain.harmony`）。
  * - 正落在第 k 条增时线那一拍上 → 挂那条增时线；
  * - 落不到整拍上的：音符本身还空着就挂音符（位置提前了，但和弦还在谱上），否则留在 `laterHarmonies`（123 写不出）。
  * 长音里的后续和弦印在增时线上方，必落在**整拍**上：先量化到拍，免得插值出的 1.89 拍哪条增时线都挂不上。
+ *
+ * 返回与 `[chord, ...extraChords]` 同序的落点。识别核对按它把源图和弦框认回模型（`reproject.ts::chordSlots`）：
+ * 按「这个音的第几个和弦」数的话，删掉前面一个，后面的就错位一格。
  */
-function placeChords(n: JpNum, ch: Chord, fullDivisions: number): void {
-  if (!n.chord) return;
-  const sustains = ch.sustains ?? [];
-  const body = (ch.duration.divisions - sustains.length * Q) / Q; // 本体时值（拍）
-  const all = [
-    { text: n.chord, offset: Math.round((n.chordOffset ?? 0) * fullDivisions) },
-    ...(n.extraChords ?? []).map((c) => ({
-      text: c.tok,
-      offset: Math.max(0, Math.min(Math.round(c.offset * fullDivisions / Q) * Q, fullDivisions - 1)),
-    })),
+export function chordPlacesOf(n: JpNum): ChordPlace[] {
+  if (!n.chord) return [];
+  const sustainCount = n.digit === 0 ? 0 : n.augment;
+  const dur = duration123(n.div, n.dot > 0 ? 1 : 0, sustainCount);
+  const t = n.tuplet;
+  const fullDivisions = t ? Math.round(dur.divisions * t.normal / t.actual) : dur.divisions;
+  const body = (dur.divisions - sustainCount * Q) / Q; // 本体时值（拍）
+  const offsets = [
+    Math.round((n.chordOffset ?? 0) * fullDivisions),
+    ...(n.extraChords ?? []).map((c) => Math.max(0, Math.min(Math.round(c.offset * fullDivisions / Q) * Q, fullDivisions - 1))),
   ];
-  const later: typeof all = [];
-  for (const h of all) {
-    if (h.offset <= 0 && !ch.harmony) { ch.harmony = chordSymbol(h.text); continue; }
-    const at = h.offset / Q;
+  const out: ChordPlace[] = [];
+  let head = false;
+  const taken = new Set<number>();
+  const later: number[] = [];
+  offsets.forEach((offset, idx) => {
+    if (offset <= 0 && !head) {
+      head = true;
+      out[idx] = "h";
+      return;
+    }
+    const at = offset / Q;
     const k = Math.round(at - body);
-    const su = sustains[k];
-    if (Math.abs(at - body - k) < 1e-6 && su && !su.harmony) su.harmony = chordSymbol(h.text);
-    else later.push(h);
-  }
-  if (!ch.harmony && later.length) ch.harmony = chordSymbol(later.shift()!.text);
-  if (later.length) ch.laterHarmonies = later.map((h) => chordSymbol(h.text));
+    if (Math.abs(at - body - k) < 1e-6 && k >= 0 && k < sustainCount && !taken.has(k)) {
+      taken.add(k);
+      out[idx] = `s${k}`;
+    } else later.push(idx);
+  });
+  if (!head && later.length) out[later.shift()!] = "h";
+  later.forEach((idx, k) => (out[idx] = `l${k}`));
+  return out;
+}
+
+function placeChords(n: JpNum, ch: Chord): void {
+  const texts = n.chord ? [n.chord, ...(n.extraChords ?? []).map((c) => c.tok)] : [];
+  chordPlacesOf(n).forEach((place, idx) => {
+    const h = chordSymbol(texts[idx]!);
+    if (place === "h") ch.harmony = h;
+    else if (place[0] === "s") ch.sustains![Number(place.slice(1))]!.harmony = h;
+    else (ch.laterHarmonies ??= []).push(h);
+  });
 }
 
 /** @param numOf 可选：记下每个和弦来自哪个识别符号（小节时值自检要按源图坐标标出问题小节，`omr/beats.ts`） */
@@ -350,7 +375,7 @@ function measuresOfRows(rows: readonly StaffRow[], score: RecognizedScore, ids: 
         }
       }
 
-      placeChords(n, ch, t ? Math.round(ch.duration.divisions * t.normal / t.actual) : ch.duration.divisions);
+      placeChords(n, ch);
 
       const notations: NonNullable<Chord["notations"]> = {};
       if (n.fermata) notations.fermata = true;

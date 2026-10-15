@@ -24,7 +24,7 @@ import type { StaffBarMark, StaffMark } from "../rasteromr/overlay";
 import type { PlayPoint } from "./player";
 import type { DocFormatId } from "./formats";
 import { confirmDiscardEdits, type FormatOption, type FormatSource, type FormatSwitch } from "./formatswitch";
-import { reprojectRecognized, type Reprojected } from "../omr/reproject";
+import { harmonyPlacesOf, reprojectRecognized, type Reprojected } from "../omr/reproject";
 import { doubtItems } from "../omr/overlay";
 import { baseImage } from "../omrkit/svgkit";
 import type { ProjectKind, ProjectSnapshot } from "./omrproject";
@@ -1519,7 +1519,7 @@ export class OmrController implements FormatSource {
     return ins ? [...els, ins] : els;
   }
 
-  /** `verse`：歌词是第几段；和弦名是这个音的第几个和弦（`reproject.ts::harmoniesOf` 的序）。 */
+  /** `verse`：歌词是第几段；和弦名是这个音的第几个和弦（`reproject.ts::harmonyPlacesOf` 的序），按它的落点对回源图的框。 */
   hitFor(kind: "note" | "lyric" | "chord", id: ElementId, verse = 0): SVGGraphicsElement | null {
     const pane = document.getElementById("score-pane");
     if (this.staffResult) {
@@ -1528,12 +1528,15 @@ export class OmrController implements FormatSource {
       return omrId ? pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-omr="${omrId}"]`) ?? null
         : pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-id="${id}"]`) ?? null;
     }
-    const i = this.idMapOf(this.host.currentScoreDoc())?.toI.get(id);
+    const doc = this.host.currentScoreDoc();
+    const i = this.idMapOf(doc)?.toI.get(id);
     if (kind === "lyric") {
       return i === undefined ? null : pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="lyric"][data-i="${i}"][data-verse="${verse}"]`) ?? null;
     }
     if (kind === "chord") {
-      return i === undefined ? null : pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="chord"][data-i="${i}"][data-slot="${verse}"]`) ?? null;
+      const ch = doc ? locate(doc, id)?.chord : undefined;
+      const place = ch ? harmonyPlacesOf(ch)[verse]?.place : undefined;
+      return i === undefined || place === undefined ? null : pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="chord"][data-i="${i}"][data-slot="${place}"]`) ?? null;
     }
     if (i !== undefined) return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-i="${i}"]`) ?? null;
     return pane?.querySelector<SVGRectElement>(`.omr-hits rect[data-kind="note"][data-id="${id}"]`) ?? null;
