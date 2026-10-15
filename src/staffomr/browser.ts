@@ -113,5 +113,9 @@ export async function vectorOverlayResult(src: Uint8Array | StaffPdfDoc, res: St
       const r = d.rebuild(slots);
       return { xml: r.xml, score: r.score as unknown as NonNullable<StaffReviewResult["score"]> };
     },
+    restructure: (op) => {
+      const r = d.restructure?.(op);
+      return r ? { xml: r.xml, score: r.score as unknown as NonNullable<StaffReviewResult["score"]> } : null;
+    },
   };
 }

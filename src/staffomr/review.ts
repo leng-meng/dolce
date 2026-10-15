@@ -2,7 +2,7 @@
 // 位图路（`rasteromr/song.ts`）每页带识别出的位图；矢量路（`browser.ts::vectorOverlayResult`）把页面渲成位图拼进来。
 import type { Binary } from "../omrkit/types";
 import type { SPage } from "./model";
-import type { StaffScore } from "./score";
+import type { StaffScore, SystemOp } from "./score";
 
 /** 一页的核对数据：底图（位图像素）、页面结构（谱线坐标乘 `scale` 才是像素）。 */
 export interface StaffReviewPage {
@@ -42,4 +42,6 @@ export interface StaffReviewResult<P extends StaffReviewPage = StaffReviewPage> 
   assignment(): number[][];
   /** 按新的指派（`slots[系统][谱行]`，-1 忽略）重建 MusicXML，不重跑识别 */
   rebuild(slots: number[][]): { xml: string; score: StaffScore };
+  /** 改系统切分（合并 / 拆开，`score.ts::restructureSystems`）后按自动指派重建，不重跑识别；做不了返回 null */
+  restructure?(op: SystemOp): { xml: string; score: StaffScore } | null;
 }

@@ -895,6 +895,12 @@ export const en: Record<MsgKey, string> = {
   "omr.restLabel": "rest",
   "omr.rebuildFailed": "Rebuild failed: {error}",
   "omr.rebuilt": "Rebuilt with the new staff assignment (not re-recognized)",
+  "omr.row.merge": "Merge with next system",
+  "omr.row.split": "Split into a new system from this staff",
+  "omr.row.ignore": "Not a staff (ignore this row)",
+  "omr.row.assign": "Assign this staff to a part…",
+  "omr.rebuiltReplayed": "Rebuilt without re-recognizing; replayed {n} manual edits, {lost} could not be replayed",
+  "omr.restructureNo": "Can't do that here (merging needs two adjacent systems on one page; splitting needs a row in the middle of a system)",
   // 谱面编辑提示、选中读数、移调对话框、模型编辑报错
   "ve.chordNotePicked": "Selected chord note {n} from the bottom; Delete removes only it",
   "ve.chordOnlyXml": "A jianpu part prints a single melody: put chord notes in another part (V: in 123); this works only for MusicXML",

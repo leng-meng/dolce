@@ -9,7 +9,8 @@
 // （`formatswitch.ts`），这里作为它的一种来源（`FormatSource`）。
 import { recognizedBeatIssues, type RecognizedBeatIssue } from "../omr/beats";
 import { beatTag } from "../model/beatcheck";
-import { locate } from "../model/edit";
+import { deleteChords, locate, measureCtx, respellMeasure } from "../model/edit";
+import type { SystemOp } from "../staffomr/score";
 import { EditorSelection } from "@codemirror/state";
 import { EditorView } from "@codemirror/view";
 import {
@@ -1063,23 +1064,25 @@ export class OmrController implements FormatSource {
   private staffNoteOfOmr = new Map<string, { chord: ElementId; k: number }>();
 
   /** 识别（或上次重建）刚落地时各音的样子（识别 id → 音高 + 时值的签名）：对照视图按它判「改过」。按原文缓存 */
-  private staffBase: { text: string; sig: Map<string, string> } | null = null;
+  private staffBase: { text: string; sig: Map<string, string>; noId: number } | null = null;
 
   private staffBaseSig(loadDoc: (xml: string) => ScoreDoc, surfaceOf: (o: object) => Element | undefined): Map<string, string> | null {
     const text = this.staffEmitted;
     if (text === null) return null;
     if (this.staffBase?.text !== text) {
       const sig = new Map<string, string>();
+      let noId = 0;
       try {
         for (const part of loadDoc(text).songs[0]?.parts ?? []) for (const m of part.measures) for (const el of m.elements) {
           if (el.kind !== "chord") continue;
           const id = surfaceOf(el)?.getAttribute("id");
           if (id) sig.set(id, chordSig(el));
+          else if (!el.grace) noId++;
         }
       } catch {
         return null;
       }
-      this.staffBase = { text, sig };
+      this.staffBase = { text, sig, noId };
     }
     return this.staffBase.sig;
   }
@@ -1246,6 +1249,80 @@ export class OmrController implements FormatSource {
     svg.addEventListener("dblclick", (e) => {
       if (this.host.visualEnabled()) this.host.visualDblClick(e);
     });
+    // 右键谱行的空白处：改系统切分 / 忽略这一行 / 改归属（识谱软件在谱表上右键改结构的那一套）；点在命中框上照常弹编辑菜单
+    svg.addEventListener("contextmenu", (e) => {
+      if (e.target instanceof Element && e.target.closest(".omr-hits rect")) return;
+      const at = this.staffRowAt(svg, e.clientX, e.clientY);
+      if (!at) return;
+      e.preventDefault();
+      e.stopPropagation();
+      this.showRowMenu(e.clientX, e.clientY, at);
+    });
+  }
+
+  /** 点的位置落在哪个系统（全曲序）的第几行谱；系统总数一并给（菜单判能不能并下一个）。 */
+  private staffRowAt(svg: SVGSVGElement, cx: number, cy: number): { si: number; ri: number; rows: number; nextSamePage: boolean } | null {
+    const res = this.staffResult;
+    const m = svg.getScreenCTM();
+    if (!res?.score || !m) return null;
+    const page = Number(svg.dataset.page ?? -1);
+    const pg = res.pages[page];
+    if (!pg) return null;
+    const k = pg.scale ?? 1;
+    const y = new DOMPoint(cx, cy).matrixTransform(m.inverse()).y / k;
+    const st = pg.result.page.staves.find((s) => s.lineYs.length >= 5 && y > s.lineYs[0]! - (s.lineYs[4]! - s.lineYs[0]!) / 2 && y < s.lineYs[4]! + (s.lineYs[4]! - s.lineYs[0]!) / 2);
+    if (!st) return null;
+    const systems = res.score.systems;
+    const si = systems.findIndex((e) => e.page === pg.result.page && e.sys.staves.includes(st));
+    if (si < 0) return null;
+    return { si, ri: systems[si]!.sys.staves.indexOf(st), rows: systems[si]!.sys.staves.length, nextSamePage: systems[si + 1]?.page === pg.result.page };
+  }
+
+  private showRowMenu(x: number, y: number, at: { si: number; ri: number; rows: number; nextSamePage: boolean }): void {
+    document.querySelector(".omr-row-menu")?.remove();
+    const menu = document.createElement("div");
+    menu.className = "visual-menu omr-row-menu";
+    menu.setAttribute("role", "menu");
+    const close = (): void => {
+      menu.remove();
+      document.removeEventListener("mousedown", away, true);
+      document.removeEventListener("keydown", away, true);
+    };
+    const away = (e: Event): void => {
+      if (e instanceof KeyboardEvent && e.key !== "Escape") return;
+      if (e.target instanceof Node && menu.contains(e.target)) return;
+      close();
+    };
+    const item = (label: string, enabled: boolean, run: () => void): void => {
+      const b = document.createElement("button");
+      b.type = "button";
+      b.className = "visual-menu-item";
+      b.textContent = label;
+      b.disabled = !enabled;
+      b.setAttribute("role", "menuitem");
+      b.addEventListener("mousedown", (e) => e.preventDefault());
+      b.addEventListener("click", () => {
+        close();
+        run();
+      });
+      menu.appendChild(b);
+    };
+    item(t("omr.row.merge"), at.nextSamePage, () => void this.restructureStaff({ merge: at.si }));
+    item(t("omr.row.split"), at.ri > 0, () => void this.restructureStaff({ split: { system: at.si, row: at.ri } }));
+    item(t("omr.row.ignore"), true, () => {
+      const res = this.staffResult;
+      if (!res) return;
+      const slots = res.assignment().map((r) => [...r]);
+      if (slots[at.si]) slots[at.si]![at.ri] = -1;
+      void this.rebuildStaff(slots);
+    });
+    item(t("omr.row.assign"), true, () => document.getElementById("btn-parts")?.click());
+    document.body.appendChild(menu);
+    const r = menu.getBoundingClientRect();
+    menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - r.width - 8))}px`;
+    menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - r.height - 8))}px`;
+    document.addEventListener("mousedown", away, true);
+    document.addEventListener("keydown", away, true);
   }
 
   /** 五线谱对照：和弦所在那行谱表的竖向范围（插入光标照它画）。 */
@@ -1277,22 +1354,139 @@ export class OmrController implements FormatSource {
     return { systems: res.score.systems.map((e) => ({ page: pageOf.get(e.page) ?? 0 })), slots: res.assignment() };
   }
 
-  /** 按新的「谱表 ↔ 声部」指派重建 MusicXML，不重跑识别；手改过先问一声（重建会丢掉改动）。 */
+  /**
+   * 按新的「谱表 ↔ 声部」指派重建 MusicXML，不重跑识别。手改过的按识别 id 回放到重建后的谱上（`captureStaffEdits`）；
+   * 有回放不了的（新插的音、小节结构改动）先问一声。
+   */
   async rebuildStaff(slots: number[][]): Promise<boolean> {
     const res = this.staffResult;
     if (!res) return false;
-    if (this.staffEmitted !== null && this.host.getText() !== this.staffEmitted && !(await confirmDiscardEdits())) return false;
+    return this.rebuildStaffWith(() => res.rebuild(slots));
+  }
+
+  /** 改系统切分（识谱软件「与下一系统合并 / 从这一行拆开」）后重建，不重跑识别；手改照上回放。 */
+  async restructureStaff(op: SystemOp): Promise<boolean> {
+    const res = this.staffResult;
+    if (!res?.restructure) return false;
+    return this.rebuildStaffWith(() => {
+      const r = res.restructure!(op);
+      if (!r) throw new Error(t("omr.restructureNo"));
+      return r;
+    });
+  }
+
+  private async rebuildStaffWith(make: () => { xml: string; score: NonNullable<import("../staffomr/review").StaffReviewResult["score"]> }): Promise<boolean> {
+    const edits = await this.captureStaffEdits();
+    if (edits && edits.lost > 0 && !(await confirmDiscardEdits())) return false;
+    const inRecognize = this.host.mode === "recognize";
     let xml: string;
     try {
-      xml = res.rebuild(slots).xml;
+      const r = make();
+      xml = r.xml;
+      // 系统、谱行的结构跟着换（关联表、右键谱行按它认系统）
+      if (this.staffResult) this.staffResult.score = r.score;
     } catch (e) {
       this.host.setStatus(t("omr.rebuildFailed", { error: e instanceof Error ? e.message : String(e) }));
       return false;
     }
+    const base = xml;
+    const replay = edits && edits.chords.size + edits.deleted.size ? await this.replayStaffEdits(xml, edits) : null;
+    if (replay) xml = replay.xml;
     this.host.adoptStaffXml(xml);
-    this.staffEmitted = this.host.getText();
-    this.host.setStatus(t("omr.rebuilt"));
+    // 「改过」照重建出来的样子比（回放上去的手改照样标改过）
+    this.staffEmitted = base;
+    this.staffBase = null;
+    if (inRecognize && (this.host.mode as string) !== "recognize") await this.toggle();
+    this.host.setStatus(replay ? t("omr.rebuiltReplayed", { n: replay.replayed, lost: replay.missed + (edits?.lost ?? 0) }) : t("omr.rebuilt"));
     return true;
+  }
+
+  /** 识别（或上次重建）落地之后的手改：按识别 id 记下改过的和弦（音高、休止、时值、歌词）与删掉的；`lost` 是回放不了的（新插的音、小节数变了）。 */
+  private async captureStaffEdits(): Promise<StaffEdits | null> {
+    if (this.staffEmitted === null || this.host.getText() === this.staffEmitted) return null;
+    const { surfaceOf } = await import("../model/xmlsurface");
+    const { loadScoreDoc } = await import("../model/fromxml");
+    const base = this.staffBaseSig(loadScoreDoc, surfaceOf);
+    const doc = this.host.currentScoreDoc();
+    if (!base || !doc) return { chords: new Map(), deleted: new Set(), lost: 1 };
+    const out: StaffEdits = { chords: new Map(), deleted: new Set(), lost: 0 };
+    const seen = new Set<string>();
+    let measures = 0;
+    // 没有识别 id 的音：重建自己补的占位休止也没有，比识别落地时多出来的才是手插的
+    let noId = 0;
+    for (const part of doc.songs[0]?.parts ?? []) {
+      measures = Math.max(measures, part.measures.length);
+      for (const m of part.measures) for (const el of m.elements) {
+        if (el.kind !== "chord") continue;
+        const id = surfaceOf(el)?.getAttribute("id");
+        if (!id || !base.has(id)) {
+          if (!el.grace) noId++;
+          continue;
+        }
+        seen.add(id);
+        if (base.get(id) === chordSig(el)) continue;
+        out.chords.set(id, {
+          rest: !!el.rest, pitches: el.notes.map((n) => n.pitch).filter((p): p is NonNullable<typeof p> => !!p),
+          type: el.duration.type, dots: el.duration.dots, lyrics: el.lyrics?.map((l) => ({ ...l })) ?? [],
+        });
+      }
+    }
+    for (const id of base.keys()) if (!seen.has(id)) out.deleted.add(id);
+    out.lost += Math.max(0, noId - (this.staffBase?.noId ?? 0));
+    const baseMeasures = this.staffBase ? (loadScoreDoc(this.staffBase.text).songs[0]?.parts[0]?.measures.length ?? measures) : measures;
+    if (baseMeasures !== measures) out.lost++;
+    return out;
+  }
+
+  /** 把记下的手改按识别 id 放回重建出来的谱上；对不上的（那一行谱忽略掉了）算没回放上。 */
+  private async replayStaffEdits(xml: string, edits: StaffEdits): Promise<{ xml: string; replayed: number; missed: number }> {
+    const { surfaceOf, dropEmbeddedLayout } = await import("../model/xmlsurface");
+    const { loadScoreDoc } = await import("../model/fromxml");
+    const { scoreDocToMusicXml } = await import("../model/toxml");
+    const doc = loadScoreDoc(xml);
+    const song = doc.songs[0];
+    if (!song) return { xml, replayed: 0, missed: edits.chords.size + edits.deleted.size };
+    const QUARTERS: Record<string, number> = { whole: 4, half: 2, quarter: 1, eighth: 0.5, "16th": 0.25, "32nd": 0.125, "64th": 0.0625 };
+    let replayed = 0;
+    const found = new Set<string>();
+    const gone: ElementId[] = [];
+    for (const part of song.parts) {
+      for (const [mi, m] of part.measures.entries()) {
+        for (const el of m.elements) {
+          if (el.kind !== "chord") continue;
+          const id = surfaceOf(el)?.getAttribute("id");
+          if (!id) continue;
+          if (edits.deleted.has(id)) {
+            gone.push(el.id);
+            found.add(id);
+            continue;
+          }
+          const snap = edits.chords.get(id);
+          if (!snap) continue;
+          found.add(id);
+          if (snap.rest) {
+            el.notes = [];
+            el.rest = {};
+          } else if (snap.pitches.length) {
+            el.notes = snap.pitches.map((p, k) => ({ ...(el.notes[k] ?? {}), pitch: { ...p } }));
+            delete el.rest;
+          }
+          if (snap.type && (snap.type !== el.duration.type || snap.dots !== el.duration.dots) && QUARTERS[snap.type]) {
+            const { dpq } = measureCtx(song, part, mi);
+            const div = QUARTERS[snap.type]! * dpq * (2 - Math.pow(0.5, snap.dots));
+            if (Number.isInteger(div)) el.duration = { ...el.duration, divisions: div, type: snap.type, dots: snap.dots };
+          }
+          if (snap.lyrics.length) el.lyrics = snap.lyrics.map((l) => ({ ...l }));
+          respellMeasure(m, measureCtx(song, part, mi).key);
+          replayed++;
+        }
+      }
+    }
+    if (gone.length) deleteChords(doc, gone);
+    replayed += gone.length;
+    dropEmbeddedLayout(song);
+    const missed = [...edits.chords.keys(), ...edits.deleted].filter((id) => !found.has(id)).length;
+    return { xml: scoreDocToMusicXml(doc), replayed, missed };
   }
 
   /** 位图五线谱识别（或上次重建）刚落地时的原文：与当前原文不同即手改过 */
@@ -1689,11 +1883,19 @@ export class OmrController implements FormatSource {
   }
 }
 
-/** 一个和弦在对照视图里算不算「改过」的签名：音高（各音）、休止、时值、附点、连音、倚音。 */
+/** 重建前记下的手改（按识别 id）：`chords` 改过的和弦、`deleted` 删掉的、`lost` 回放不了的处数 */
+interface StaffEdits {
+  chords: Map<string, { rest: boolean; pitches: { step: "A" | "B" | "C" | "D" | "E" | "F" | "G"; alter: number; octave: number }[]; type?: Chord["duration"]["type"]; dots: number; lyrics: NonNullable<Chord["lyrics"]> }>;
+  deleted: Set<string>;
+  lost: number;
+}
+
+/** 一个和弦在对照视图里算不算「改过」的签名：音高（各音）、休止、时值、附点、连音、倚音、各段歌词。 */
 function chordSig(c: Chord): string {
   const ps = c.rest ? "r" : c.notes.map((n) => (n.pitch ? `${n.pitch.step}${n.pitch.alter}${n.pitch.octave}` : "?")).join(",");
   const tm = c.duration.timeMod ? `${c.duration.timeMod.actual}:${c.duration.timeMod.normal}` : "";
-  return `${ps}/${c.duration.type ?? ""}${c.duration.dots}/${tm}/${c.grace ? "g" : ""}`;
+  const ly = (c.lyrics ?? []).map((l) => `${l.number}:${l.text}`).join(",");
+  return `${ps}/${c.duration.type ?? ""}${c.duration.dots}/${tm}/${c.grace ? "g" : ""}/${ly}`;
 }
 
 const flatOrderCache = new WeakMap<RecognizedScore, number[]>();

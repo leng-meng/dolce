@@ -609,3 +609,37 @@ function lastToken(ss: ScoreStaff, systems: StaffScore["systems"]): StaffToken |
   }
   return null;
 }
+
+/** 识别核对时改系统切分（识谱软件「与下一系统合并 / 从这一行拆开」）：`merge` 第几个系统（全曲序，同 `buildScore` 的系统序）并上下一个，`split` 把第几个系统从第几行起拆成新系统。 */
+export type SystemOp = { merge: number } | { split: { system: number; row: number } };
+
+/**
+ * 按 `op` 改各页的系统（就地改 `SPage.systems`，谱行、小节、音不动），改完调用方重新 `buildScore`。
+ * 合并只在同一页上的相邻两个系统之间（跨页的两段本来就是两个系统）。做不了返回 false。
+ */
+export function restructureSystems(pages: readonly { page: SPage }[], op: SystemOp): boolean {
+  const list: { page: SPage; sys: SSystem }[] = [];
+  for (const { page } of pages) for (const sys of page.systems) list.push({ page, sys });
+  const reindex = (page: SPage): void => page.systems.forEach((s, i) => (s.index = i));
+  if ("merge" in op) {
+    const a = list[op.merge];
+    const b = list[op.merge + 1];
+    if (!a || !b || a.page !== b.page) return false;
+    a.sys.staves = [...a.sys.staves, ...b.sys.staves].sort((x, y) => x.box.top - y.box.top);
+    a.sys.init();
+    a.page.systems.splice(a.page.systems.indexOf(b.sys), 1);
+    reindex(a.page);
+    return true;
+  }
+  const a = list[op.split.system];
+  const r = op.split.row;
+  if (!a || r <= 0 || r >= a.sys.staves.length) return false;
+  const tail = new SSystem();
+  tail.staves = a.sys.staves.slice(r);
+  a.sys.staves = a.sys.staves.slice(0, r);
+  a.sys.init();
+  tail.init();
+  a.page.systems.splice(a.page.systems.indexOf(a.sys) + 1, 0, tail);
+  reindex(a.page);
+  return true;
+}

@@ -894,6 +894,12 @@ export const zh = {
   "omr.restLabel": "休",
   "omr.rebuildFailed": "重建失败：{error}",
   "omr.rebuilt": "已按新的谱表指派重建（未重新识别）",
+  "omr.row.merge": "与下一系统合并",
+  "omr.row.split": "从这一行起拆成新系统",
+  "omr.row.ignore": "这一行不是谱（忽略）",
+  "omr.row.assign": "这一行归属声部…",
+  "omr.rebuiltReplayed": "已重建（未重新识别），手改回放了 {n} 处、{lost} 处没能回放",
+  "omr.restructureNo": "这里不能这样改（合并只在同一页相邻两个系统之间，拆开要在系统中间的一行）",
   // 谱面编辑提示、选中读数、移调对话框、模型编辑报错
   "ve.chordNotePicked": "选中了和弦里从低往高第 {n} 个音，Delete 只删它",
   "ve.chordOnlyXml": "简谱一个声部只印一路旋律：和弦音请另起声部（123 的 V:），这里只对 MusicXML 生效",

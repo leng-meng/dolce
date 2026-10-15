@@ -12,7 +12,7 @@ import type { JianpuRow } from "./jianpufuse";
 import type { HeaderCredit, WordLine } from "../omrkit/headertext";
 import type { Rect } from "../omrkit/types";
 import { markSplitBars } from "../staffomr/notedata";
-import { buildScore, type StaffProfile } from "../staffomr/score";
+import { buildScore, restructureSystems, type StaffProfile } from "../staffomr/score";
 import type { StaffReviewResult, StaffReviewStats } from "../staffomr/review";
 import { pageTextPt, scoreToMusicXml } from "../staffomr/toxml";
 import type { SPage, Staff } from "../staffomr/model";
@@ -169,6 +169,11 @@ export async function recognizeRasterSong(
     assignment: () => score.systems.map((e, si) => e.sys.staves.map((st) => score.scoreStaves.findIndex((ss) => ss.staves[si] === st))),
     rebuild: (slots) => {
       score = buildScore(entries, { slots, lyricsBelow });
+      return { xml: scoreToMusicXml(score, notesOf, { title, credits, ...(noteId ? { noteId } : {}) }), score };
+    },
+    restructure: (op) => {
+      if (!restructureSystems(entries, op)) return null;
+      score = buildScore(entries, { lyricsBelow, profileOf });
       return { xml: scoreToMusicXml(score, notesOf, { title, credits, ...(noteId ? { noteId } : {}) }), score };
     },
   };

@@ -8,7 +8,7 @@ import { musicFamily } from "./symbolmap";
 import type { StaffGlyphLookup } from "./staffglyphs";
 import type { TextGlyphLookup } from "./textglyphs";
 import { recognizeStaffPage, vectorPageCredits } from "./pagerun";
-import { buildScore } from "./score";
+import { buildScore, restructureSystems, type StaffProfile, type SystemOp } from "./score";
 import { pageTextPt, scoreToMusicXml } from "./toxml";
 import type { StaffNote } from "./notedata";
 import type { Staff } from "./model";
@@ -50,6 +50,7 @@ export interface StaffPdfResult {
     score: ReturnType<typeof buildScore>;
     assignment(): number[][];
     rebuild(slots: number[][]): { xml: string; score: ReturnType<typeof buildScore> };
+    restructure?(op: SystemOp): { xml: string; score: ReturnType<typeof buildScore> } | null;
   };
 }
 
@@ -86,16 +87,15 @@ export async function recognizeStaffDoc(
     opts.onProgress?.(++done, list.length);
   }
   // 内容剖面（有没有词、音域中位数）交给 `buildScore` 做全局指派，见 `score.ts::assignSlots`
-  const score = buildScore(entries, {
-    profileOf: (st) => {
-      const ns = notesByStaff.get(st) ?? [];
-      const ps = ns
-        .filter((n) => !n.rest && !n.grace && n.step)
-        .map((n) => "CDEFGAB".indexOf(n.step!) + 7 * n.octave!)
-        .sort((a, b) => a - b);
-      return { lyric: ns.some((n) => n.lyrics?.length), pitch: ps.length ? ps[ps.length >> 1] : null };
-    },
-  });
+  const profileOf = (st: Staff): StaffProfile => {
+    const ns = notesByStaff.get(st) ?? [];
+    const ps = ns
+      .filter((n) => !n.rest && !n.grace && n.step)
+      .map((n) => "CDEFGAB".indexOf(n.step!) + 7 * n.octave!)
+      .sort((a, b) => a - b);
+    return { lyric: ns.some((n) => n.lyrics?.length), pitch: ps.length ? ps[ps.length >> 1]! : null };
+  };
+  const score = buildScore(entries, { profileOf });
   // 原图对照：逐页逐音编号写进 `<note id>`、记下源框（同 `rasteromr/song.ts`）
   const noteBoxes: NonNullable<StaffPdfResult["detail"]>["noteBoxes"] = new Map();
   if (opts.noteIds) {
@@ -123,6 +123,11 @@ export async function recognizeStaffDoc(
     assignment: () => cur.systems.map((e, si) => e.sys.staves.map((st) => cur.scoreStaves.findIndex((ss) => ss.staves[si] === st))),
     rebuild: (slots) => {
       cur = buildScore(entries, { slots });
+      return { xml: scoreToMusicXml(cur, notesOf, xmlOpts), score: cur };
+    },
+    restructure: (op) => {
+      if (!restructureSystems(entries, op)) return null;
+      cur = buildScore(entries, { profileOf });
       return { xml: scoreToMusicXml(cur, notesOf, xmlOpts), score: cur };
     },
   };
