@@ -31,6 +31,7 @@ import type { ProjectKind, ProjectSnapshot } from "./omrproject";
 import { t } from "../i18n";
 import { COMPARE_VALUES, type CompareValue } from "./comparemode";
 import { isPdf } from "../omrkit/pdf";
+import type { StaffReviewResult } from "../staffomr/review";
 
 /** 一份识别输入（拖进来、选进来的图片或 PDF）。 */
 export interface RecogInput {
@@ -469,7 +470,7 @@ export class OmrController implements FormatSource {
   }
 
   /** 位图五线谱的识别结果（各页位图与音符坐标），对照视图用；简谱识别或清掉后为 null */
-  staffResult: import("../staffomr/review").StaffReviewResult | null = null;
+  staffResult: StaffReviewResult | null = null;
 
   private kindField(): Element | null {
     return this.kindSelects[1]?.closest(".toolbar-select-field") ?? null;
@@ -657,12 +658,22 @@ export class OmrController implements FormatSource {
 
   /** 并排面板的各页：原图 + 每个音一个框（`data-id` = 排版稿里的元素 id）。 */
   private async sidePages(doc: ScoreDoc | null): Promise<SVGSVGElement[]> {
-    const page = (bin: Binary, boxes: { id: ElementId; x: number; y: number; w: number; h: number }[]): SVGSVGElement => {
+    type View = { url: string; x: number; y: number; w: number; h: number } | null;
+    const page = (bin: Binary, boxes: { id: ElementId; x: number; y: number; w: number; h: number }[], view: View = null): SVGSVGElement => {
       const NS = "http://www.w3.org/2000/svg";
       const svg = document.createElementNS(NS, "svg");
       svg.setAttribute("class", "omr-side-page");
-      svg.setAttribute("viewBox", `0 0 ${bin.w} ${bin.h}`);
-      svg.appendChild(baseImage(bin));
+      if (view) {
+        // 整页原图（谱图没铺满页面的 PDF，见 `pageViewImage`）：框仍按位图坐标，viewBox 把页面伸出去的那截框进来
+        svg.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`);
+        const img = document.createElementNS(NS, "image");
+        for (const [k, v] of [["x", view.x], ["y", view.y], ["width", view.w], ["height", view.h]] as const) img.setAttribute(k, String(v));
+        img.setAttribute("href", view.url);
+        svg.appendChild(img);
+      } else {
+        svg.setAttribute("viewBox", `0 0 ${bin.w} ${bin.h}`);
+        svg.appendChild(baseImage(bin));
+      }
       for (const b of boxes) {
         const pad = Math.max(3, b.h * 0.25);
         const r = document.createElementNS(NS, "rect");
@@ -681,8 +692,9 @@ export class OmrController implements FormatSource {
       const res = this.staffResult;
       const ids = await this.staffIds(doc);
       const byOmr = new Map([...ids].map(([k, v]) => [v, k]));
+      const views = await this.staffPageViews(res);
       return res.pages.map((p, i) => page(p.result.raster!.bin, [...res.noteBoxes].filter(([oid, b]) => b.page === i && byOmr.has(oid))
-        .map(([oid, b]) => ({ id: byOmr.get(oid)!, x: b.box.left, y: b.box.top, w: b.box.right - b.box.left, h: b.box.bottom - b.box.top }))));
+        .map(([oid, b]) => ({ id: byOmr.get(oid)!, x: b.box.left, y: b.box.top, w: b.box.right - b.box.left, h: b.box.bottom - b.box.top })), views[i]));
     }
     if (!this.bin || !this.score) return [];
     const map = this.idMapOf(doc);
@@ -692,6 +704,28 @@ export class OmrController implements FormatSource {
       return id !== undefined && b ? [{ id, x: b.x, y: b.y, w: b.w, h: b.h }] : [];
     }) : [];
     return [page(this.bin, boxes)];
+  }
+
+  /** 并排原图的整页底图（`pageViewImage`），按识别结果缓存；原图不是 PDF、取不到的页为 null（照旧画位图） */
+  private pageViews: { res: StaffReviewResult; views: Promise<({ url: string; x: number; y: number; w: number; h: number } | null)[]> } | null = null;
+  private staffPageViews(res: StaffReviewResult): Promise<({ url: string; x: number; y: number; w: number; h: number } | null)[]> {
+    if (this.pageViews?.res !== res) {
+      const inputs = this.lastInputs;
+      // 只有位图路：矢量 PDF 的位图本就是整页渲出来的
+      const raster = this.sessionKind === "staff";
+      const views = (async () => {
+        const rb = await import("../rasteromr/browser");
+        const out: ({ url: string; x: number; y: number; w: number; h: number } | null)[] = [];
+        for (const p of res.pages) {
+          const src = inputs[p.source];
+          const bin = p.result.raster?.bin;
+          out.push(raster && src && bin && isPdf(src.bytes, src.mime) ? await rb.pageViewImage(src.bytes, p.pn, bin.w).catch(() => null) : null);
+        }
+        return out;
+      })();
+      this.pageViews = { res, views };
+    }
+    return this.pageViews.views;
   }
 
   /** 五线谱：模型和弦 id → 识别时写进 `<note id>` 的编号（按当前原文读，改过的谱也认得回来）。 */

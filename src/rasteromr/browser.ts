@@ -13,7 +13,7 @@ import { staffGroupCount } from "./detect";
 import { recognizeRasterSong, type RasterSongResult } from "./song";
 import { ocrHarmonyStrips, ocrJianpuStrips, ocrLabelStrips, ocrLyricStrips, ocrTimeStrips, ocrWordStrips, ocrHeaderStrips, detectPageTexts } from "./ocrlive";
 import type { TimeStrip } from "./timesig";
-import { isPdf } from "../omrkit/pdf";
+import { isPdf, largestPageImageAt } from "../omrkit/pdf";
 import { PagePool, type FromWorker, type PagePort } from "./pagepool";
 
 // 在线 OCR 要推理运行时：自己装上，不靠编辑器先 import 了 `omr/index`
@@ -203,6 +203,45 @@ export async function recognizeRasterPdfs(
   } finally {
     pool?.terminate();
     for (const s of sources) s.pdf.destroy?.();
+  }
+}
+
+/** 谱图四边离页边都不到这么多（PDF 点）就不另画整页：扫描件、照片包成的 PDF 谱图就是整页。同 `pagecompose.ts` 的 `MIN_GAP_PT`。 */
+const PAGE_VIEW_GAP_PT = 20;
+
+/**
+ * 核对视图（并排原图）的底图：识别用的位图只取页上最大那张图，排版软件出的 PDF（破碎、宁静电子版）页眉是另贴的小图块与文字层、
+ * 四周还有页边，单画位图就缺了页眉。谱图没铺满页面时，按位图的分辨率（像素/点 = 位图宽 / 谱图在页面上的宽）把整页画出来，
+ * 返回 PNG 与它在**位图坐标**里的位置（`x`、`y` 为负：页面在位图左上方伸出去的那一截），框照旧按位图坐标画。
+ * 谱图铺满页面、或带旋转/错切的不画（返回 null，调用方照旧用位图）。
+ */
+export async function pageViewImage(pdfBytes: Uint8Array, pn: number, binW: number): Promise<{ url: string; x: number; y: number; w: number; h: number } | null> {
+  const { pdf, OPS } = await openRasterPdf(pdfBytes); // 图对象要带 `data`（同取图），不然认不出谱图
+  try {
+    const page = await pdf.getPage(pn);
+    try {
+      const found = await largestPageImageAt(page, OPS, (o) => (o.data && o.width && o.height ? o.width * o.height : null));
+      if (!found) return null;
+      const [a, b, c, d, e, f] = found.ctm;
+      if (b || c || a <= 0 || d <= 0) return null;
+      const [x0, y0, x1, y1] = page.view as number[];
+      if (Math.max(e - x0, x1 - (e + a), f - y0, y1 - (f + d)) < PAGE_VIEW_GAP_PT) return null;
+      const s = binW / a;
+      const vp = page.getViewport({ scale: s });
+      const cv = document.createElement("canvas");
+      cv.width = Math.round(vp.width);
+      cv.height = Math.round(vp.height);
+      const ctx = cv.getContext("2d");
+      if (!ctx) return null;
+      ctx.fillStyle = "#fff";
+      ctx.fillRect(0, 0, cv.width, cv.height);
+      await page.render({ canvasContext: ctx, viewport: vp }).promise;
+      return { url: cv.toDataURL("image/png"), x: -(e - x0) * s, y: -(y1 - (f + d)) * s, w: cv.width, h: cv.height };
+    } finally {
+      page.cleanup?.();
+    }
+  } finally {
+    pdf.destroy?.();
   }
 }
 
