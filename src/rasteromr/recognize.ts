@@ -52,7 +52,7 @@ import { connectedComponents } from "../omrkit/ccl";
 import { areaClose, close, ellipseOpen } from "../omrkit/morph";
 import { type LineFrame, makePitchSteps, ledgerCandidates, makePitchGrid, sharedLegers, ownLegers } from "./pitchgrid";
 import { bridgeFaintBars, pastSysLine, joinThroughBars, inkSystemBarlines, bridgeFaintSysLines, dropLoneBarlines, voteSystemBarlines } from "./barvote";
-import { nearRestLine, restKind, nearStaffStart, fillAround, isEighthRest, symbolInk, isStackedPair, isBarRest, enclosedWhite, crossRuns, midOfStaff, offStaffRest, sharpCrossbars, crossbarAccidental, crossbarAccidentalBox, tallStrokes, longestVRun, splitAt, sharpShape, wholesByShape, openCavities, STAFF_START } from "./restshape";
+import { nearRestLine, restKind, nearStaffStart, fillAround, isEighthRest, symbolInk, isStackedPair, isBarRest, enclosedWhite, crossRuns, midOfStaff, offStaffRest, sharpCrossbars, crossbarAccidental, crossbarAccidentalBox, flatAccidentalBox, tallStrokes, longestVRun, splitAt, sharpShape, wholesByShape, openCavities, STAFF_START } from "./restshape";
 import { sharpsByStrokes, dropCourtesyKeys, demoteMidKeys, extendKeyChains, dropHeadsInKey, pruneMidKeys, fixKeyNaturals, keySections, extendKeyByStrokes, shareSystemKeys, shareKeySignature, carrySystemKeys, extendKeyByCarry, findMidKeysByTemplate, shareMidKeys, dropBarsInKey, keyFromChords, fixFlatReadAsSix, attachAccidentalsByPitch, naturalsByStrokes, lastKey, KEY_GAP, KEY_GAP_FIRST, LOOSE_ACC_GAP } from "./keysig";
 import { vRunAt, snapHeadsToStems, splitSecondStems, splitVoiceStems, tagLooseStems, splitUnisons, markCrossStaff } from "./stems";
 import { type TimeColumn, shareSystemClefs, shareOctaveClefs, shareTimeSignature } from "./clefmeter";
@@ -237,6 +237,10 @@ const ACC_PAIR_W = 2.4;
 const ACC_PROBE_W = 1.4;
 const ACC_PROBE_H = 1.7;
 const ACC_PROBE_SHARP_H = 2.8;
+/** 窄过这么多格的临时记号是半截。 */
+const ACC_HALF_W = 0.45;
+/** 记号盒中与头心差不过这么多格算这个头的（降号盒这时已收到肚子上，见 `FLAT_BOWL_TOP`）。 */
+const ACC_OWN_DY = 0.45;
 const SPOT_RX = 0.28;
 const SPOT_RY = 0.22;
 /** 斑点的尺寸闸（格）与离外线多远以内（格，带加线的头）。 */
@@ -3935,12 +3939,34 @@ export async function recognizeRasterPage(
   // 字典查得出临时记号才收
   {
     const sp = unit.space;
-    const heads = syms.filter((s0) => /^notehead/.test(s0.code));
+    // 从右往左：和弦前几列临时记号，靠里那列先认出来，外列的窗才好隔着它往左挪
+    const heads = syms.filter((s0) => /^notehead/.test(s0.code)).sort((a, b) => b.box.x - a.box.x);
     const accs = syms.filter((s0) => isAccidental(s0.code));
+    // 窄过 0.45 格的「临时记号」是字典按块认出的半截（升号横笔压线被切开，左半一块、右半认成别的；破碎 p8 m80），不当已有
+    const whole = (a: RasterSym) => a.box.w >= sp * ACC_HALF_W;
+    const cyOf = (b: Rect) => b.y + b.h / 2;
+    // 记号右边另有头与它更同高：一根升号高三格，盖得住和弦里两三个头的心，却只是其中一个的
+    const ownsBetter = (a: RasterSym, h: RasterSym) => {
+      const d = Math.abs(cyOf(a.box) - cyOf(h.box));
+      return heads.some((o) => o !== h && o.box.x >= a.box.x + a.box.w - 2 && o.box.x - (a.box.x + a.box.w) <= sp * 1.6 && Math.abs(cyOf(a.box) - cyOf(o.box)) < d && Math.abs(cyOf(a.box) - cyOf(o.box)) <= sp * ACC_OWN_DY);
+    };
     for (const h of heads) {
       const hcy = h.box.y + h.box.h / 2;
-      if (accs.some((a) => a.box.x + a.box.w <= h.box.x + 2 && a.box.x + a.box.w >= h.box.x - sp * 1.6 && a.box.y < hcy && a.box.y + a.box.h > hcy)) continue;
-      const rx0 = Math.max(0, Math.round(h.box.x - sp * ACC_PROBE_W)), rx1 = Math.round(h.box.x) - 1;
+      if (accs.some((a) => whole(a) && a.box.x + a.box.w <= h.box.x + 2 && a.box.x + a.box.w >= h.box.x - sp * 1.6 && a.box.y < hcy && a.box.y + a.box.h > hcy && !ownsBetter(a, h))) continue;
+      let rx1 = Math.round(h.box.x) - 1;
+      // 错开在干另一侧的头（二度）：左列的头挡在前面，窗从左列头的左缘起（破碎 p8 m80 F♯4）
+      for (;;) {
+        const o = heads.find((o) => o !== h && o.box.x < rx1 && o.box.x + o.box.w >= rx1 - sp * 0.3 && o.box.x + o.box.w <= rx1 + 4 && Math.abs(cyOf(o.box) - hcy) <= sp * 1.2);
+        if (!o) break;
+        rx1 = Math.round(o.box.x) - 1;
+      }
+      // 前面已有一列临时记号（不是这个头的）：窗隔过它往左开，找外列（同上 E♭4 的 ♭ 在 F♯4 的 ♯ 左边）
+      for (;;) {
+        const a = accs.find((a) => whole(a) && a.box.x <= rx1 && a.box.x + a.box.w >= rx1 - sp * 0.5 && a.box.y < hcy + sp * 0.5 && a.box.y + a.box.h > hcy - sp * 0.5);
+        if (!a) break;
+        rx1 = Math.round(a.box.x) - 1;
+      }
+      const rx0 = Math.max(0, Math.round(rx1 + 1 - sp * ACC_PROBE_W));
       const ry0 = Math.max(0, Math.round(hcy - sp * ACC_PROBE_H)), ry1 = Math.min(nl.h - 1, Math.round(hcy + sp * ACC_PROBE_H));
       if (rx1 - rx0 < 3) continue;
       const W = rx1 - rx0 + 1, H = ry1 - ry0 + 1;
@@ -4010,11 +4036,12 @@ export async function recognizeRasterPage(
       // 头盒、比窗还高的干照旧扣掉
       // 去线图那一路只认出半个（窄过 0.45 格，横杠压线被抹、只剩一竖）的当没认出，交给原图那一档（赞美三一真神 m12 低音 ♯）
       let found = fromNl && fromNl.box.w >= sp * 0.45 ? fromNl : null;
-      if (!found) {
+      // 窗里取 `src` 的墨，扣掉头盒与比窗还高的干
+      const winOf = (src: Binary): Binary => {
         const img = { w: W, h: H, data: new Uint8Array(W * H) } as Binary;
         for (let y = ry0; y <= ry1; y++)
           for (let x = rx0; x <= rx1; x++) {
-            if (!raster.bin.data[y * raster.bin.w + x]) continue;
+            if (!src.data[y * src.w + x]) continue;
             if (heads.some((o) => x >= o.box.x && x < o.box.x + o.box.w && y >= o.box.y && y < o.box.y + o.box.h)) continue;
             img.data[(y - ry0) * W + (x - rx0)] = 1;
           }
@@ -4025,7 +4052,10 @@ export async function recognizeRasterPage(
           for (let y = Math.max(ry0, Math.round(top)); y <= Math.min(ry1, Math.round(bot)); y++)
             for (let x = Math.max(rx0, Math.round(vx - half)); x <= Math.min(rx1, Math.round(vx + half)); x++) img.data[(y - ry0) * W + (x - rx0)] = 0;
         }
-        const r = crossbarAccidentalBox(img, { x: 0, y: 0, w: W, h: H }, unit, true);
+        return img;
+      };
+      if (!found) {
+        const r = crossbarAccidentalBox(winOf(raster.bin), { x: 0, y: 0, w: W, h: H }, unit, true);
         if (r) {
           const box = { x: r.box.x + rx0, y: r.box.y + ry0, w: r.box.w, h: r.box.h };
           // 框宽要够一个临时记号（还原号约 0.6 格、升号 0.7~0.9 格），也不碰窗的上下边：别的笔画截一半也凑得出两道横
@@ -4033,14 +4063,36 @@ export async function recognizeRasterPage(
           if (inside && box.w >= sp * 0.55 && Math.abs(box.y + box.h / 2 - hcy) <= sp * 0.8 && box.h <= sp * 3.2) found = { box, code: r.code };
         }
       }
+      // 降号没有两道横：在修补图上按「通高竖笔 + 下半右边闭合肚子」认（`restshape.ts::flatAccidentalBox`）。
+      // 竖笔被谱线切成几截、上端粘着前一个音的头，按块查不出（破碎 p8 m80 E♭4）
+      if (!found) {
+        const r = flatAccidentalBox(winOf(repaired), { x: 0, y: 0, w: W, h: H }, unit);
+        if (r && r.y > 0 && r.y + r.h < H - 1) {
+          const box = { x: r.x + rx0, y: r.y + ry0, w: r.w, h: r.h };
+          if (Math.abs(cyOf(box) - hcy) <= sp * 0.8) found = { box, code: "accidentalFlat" };
+        }
+      }
       // 窄过 0.45 格的不是临时记号（抹干后剩下的一根竖条也配得上升号，恩友歌伴奏 m1）；
       // 与已认出的别的符号（行首调号、别的临时记号）交叠三成以上的是把它又截了一半（恩友歌伴奏 m13 行首调号的升号）
-      if (!found || found.box.w < sp * 0.45) continue;
-      if (syms.some((s0) => isAccidental(s0.code) && overlapFrac(found!.box, s0.box) > 0.3)) continue;
-      const { box, code } = found;
+      if (!found || found.box.w < sp * ACC_HALF_W) continue;
+      const hit = syms.filter((s0) => isAccidental(s0.code) && overlapFrac(found!.box, s0.box) > 0.3);
+      if (hit.some(whole)) continue;
+      const { code } = found;
+      // 降号盒照前面字典认的一样收到肚子上（`FLAT_BOWL_TOP`）：挂头按盒中与头心同高
+      const cut = code === "accidentalFlat" ? Math.round(found.box.h * FLAT_BOWL_TOP) : 0;
+      const box = { ...found.box, y: found.box.y + cut, h: found.box.h - cut };
+      // 交叠的只是半截：让给认全的。大半落在新框里、窄过它四分之三的别的碎块（升号右半被字典认成 wiggleTrill）一并去掉
+      for (let i = syms.length - 1; i >= 0; i--) {
+        const s0 = syms[i];
+        const frag = !/^notehead/.test(s0.code) && s0.box.w < found.box.w * 0.75 && overlapFrac(s0.box, found.box) > 0.8;
+        if (!hit.includes(s0) && !frag) continue;
+        syms.splice(i, 1);
+        const j = accs.indexOf(s0);
+        if (j >= 0) accs.splice(j, 1);
+      }
       syms.push({ box, code });
       accs.push({ box, code });
-      ledger.claim(box, `accprobe:${code}`);
+      ledger.claim(found.box, `accprobe:${code}`);
     }
   }
   // 行中的谱号只信「行中换谱号」那一路验过的：字典按块查出来的行中「谱号」多是误认（万古磐石歌八分二度连干带尾认成高音谱号），

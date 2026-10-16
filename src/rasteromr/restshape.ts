@@ -536,6 +536,75 @@ function crossbarIn(bin: Binary, b: Rect, unit: RasterUnit, win: boolean): { cod
   return null;
 }
 
+/** 降号：竖笔高（格）、整个字形宽（格）、肚子往竖笔右边伸出至少多少（格）、闭合白腔至少多大（格²）、竖笔上段右边至多多少墨（占比）。 */
+const FLAT_STEM_H = [1.5, 3.0] as const;
+const FLAT_W = [0.45, 1.0] as const;
+const FLAT_BELLY = 0.35;
+const FLAT_HOLE = 0.04;
+const FLAT_TOP_INK = 0.15;
+
+/**
+ * **降号按结构认**：一根通高竖笔，右边只在下半挂一个闭合的肚子。字典按块查不出它的时候用——
+ * 竖笔被谱线切成几截、上端又粘着前一个音的头（破碎 p8 m80 钢琴右手和弦前外列的 ♭）。
+ * 图要用修补图（谱线抹掉、切口补回），原图上谱线连通一切、去线图上竖笔断开。
+ *
+ * 逐列找最长竖游程落在 `FLAT_STEM_H` 的竖笔，从它起灌连通块：块不往竖笔左边伸、宽在 `FLAT_W`、
+ * 往右伸出 `FLAT_BELLY` 格以上；竖笔上面四成高的右边几乎没墨（升号、还原号、带干的头上下都有）；块里有闭合白腔。
+ */
+export function flatAccidentalBox(bin: Binary, b: Rect, unit: RasterUnit): Rect | null {
+  const sp = unit.space;
+  const ink = (x: number, y: number) => x >= b.x && y >= b.y && x < b.x + b.w && y < b.y + b.h && !!bin.data[y * bin.w + x];
+  const stems: { x: number; xr: number; top: number; bot: number }[] = [];
+  for (let x = b.x; x < b.x + b.w; x++) {
+    let best = { top: 0, bot: -1 };
+    for (let y = b.y; y < b.y + b.h; y++) {
+      if (!ink(x, y)) continue;
+      let z = y;
+      while (ink(x, z + 1)) z++;
+      if (z - y > best.bot - best.top) best = { top: y, bot: z };
+      y = z;
+    }
+    const len = best.bot - best.top + 1;
+    if (len < sp * FLAT_STEM_H[0] || len > sp * FLAT_STEM_H[1]) continue;
+    const g = stems[stems.length - 1];
+    if (g && x - g.xr <= 1) (g.xr = x), (g.top = Math.min(g.top, best.top)), (g.bot = Math.max(g.bot, best.bot));
+    else stems.push({ x, xr: x, top: best.top, bot: best.bot });
+  }
+  for (const st of stems) {
+    if (st.xr - st.x + 1 > sp * 0.3) continue;
+    // 从竖笔灌连通块
+    const seen = new Set<number>();
+    const stack: number[] = [];
+    for (let y = st.top; y <= st.bot; y++) if (ink(st.x, y)) stack.push(y * bin.w + st.x);
+    let x0 = Infinity, y0 = Infinity, x1 = -1, y1 = -1;
+    while (stack.length) {
+      const i = stack.pop()!;
+      if (seen.has(i)) continue;
+      seen.add(i);
+      const x = i % bin.w, y = (i - x) / bin.w;
+      x0 = Math.min(x0, x), x1 = Math.max(x1, x), y0 = Math.min(y0, y), y1 = Math.max(y1, y);
+      for (const [nx, ny] of [[x - 1, y], [x + 1, y], [x, y - 1], [x, y + 1]]) if (ink(nx, ny) && !seen.has(ny * bin.w + nx)) stack.push(ny * bin.w + nx);
+    }
+    const box = { x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1 };
+    if (x0 < st.x - 1 || box.w < sp * FLAT_W[0] || box.w > sp * FLAT_W[1] || x1 - st.xr < sp * FLAT_BELLY) continue;
+    if (box.h > sp * FLAT_STEM_H[1] + 2) continue;
+    // 竖笔上面四成高：右边几乎没墨
+    let top = 0, all = 0;
+    for (let y = st.top; y < st.top + (st.bot - st.top) * 0.4; y++)
+      for (let x = st.xr + 2; x <= x1; x++) (all++, seen.has(y * bin.w + x) && top++);
+    if (all && top / all > FLAT_TOP_INK) continue;
+    // 闭合白腔：只看这一块的墨
+    const local = { w: box.w + 2, h: box.h + 2, data: new Uint8Array((box.w + 2) * (box.h + 2)) } as Binary;
+    for (const i of seen) {
+      const x = i % bin.w, y = (i - x) / bin.w;
+      local.data[(y - y0 + 1) * local.w + (x - x0 + 1)] = 1;
+    }
+    if (enclosedWhite(local, { left: 1, top: 1, right: box.w, bottom: box.h }, sp, 1) < sp * sp * FLAT_HOLE) continue;
+    return box;
+  }
+  return null;
+}
+
 export function offStaffRest(box: { y: number; h: number }, lines: { y: number }[], unit: RasterUnit): boolean {
   const cy = box.y + box.h / 2;
   const ys = [...lines].map((l) => l.y).sort((a, b) => a - b);
