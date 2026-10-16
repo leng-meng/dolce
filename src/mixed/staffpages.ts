@@ -143,8 +143,8 @@ function placePartAboveStaff(score: StaffLayout, p: PartLayout, mixed: boolean):
       for (const m of sys.measures) {
         for (const l of p.measures[m.index]?.lyrics ?? []) {
           if (l.staff !== 0 || l.y <= 0 || l.empty) continue;
-          const cx = m.xpos() + l.x + l.xOffset;
-          placed.push({ x0: cx - l.width / 2, x1: cx + l.width / 2, y0: l.y - l.font.metrics.descent, y1: l.y + l.font.size });
+          const lx = m.xpos() + l.x + l.xOffset; // 字的左缘
+          placed.push({ x0: lx, x1: lx + l.width, y0: l.y - l.font.metrics.descent, y1: l.y + l.font.size });
         }
       }
       // **速度记号最后排**（摞在最上面）：力度、文字记号贴着谱面，速度是整段的标题性记号，
@@ -321,6 +321,9 @@ function sourceFlow(score: StaffLayout, items: FrameItem[], ph: number): LayoutF
   /** 系统内可压的谱表（首个可见谱表之后的）与各自可压的量 */
   const slack = (i: number) => items[i]!.system.staves.filter((st, k) => k > 0 && st.staffVisible && st.distance > st.minDistance);
   const staffExcess = (i: number) => slack(i).reduce((a, st) => a + st.distance - st.minDistance, 0);
+  /** 系统内各谱表距离比原谱多出来的总和 */
+  const growth = (i: number) =>
+    items[i]!.system.staves.reduce((a, st, k) => a + (k > 0 && st.staffVisible ? st.distance - (st.srcDistance ?? st.distance) : 0), 0);
   /** 首谱表顶线最高能到哪（页首：框顶不高过 `lo`，首页还要让开页眉 `musicYOffset`） */
   const floorOf = (i: number, lo: number) => lo + items[i]!.topY + items[i]!.musicYOffset;
   const refresh = (i: number) => {
@@ -337,7 +340,11 @@ function sourceFlow(score: StaffLayout, items: FrameItem[], ph: number): LayoutF
     const ls: number[] = [];
     list.forEach((i, k) => {
       const floor = k === 0 ? floorOf(i, lo) : ls[k - 1]! + gaps[k]!;
-      ls.push(Math.max(moved.has(i) ? floor : want[i]!, floor));
+      // 上一行比原谱长高了（谱表间距按轮廓撑开、上一行自己又往下让过）：这一行跟着往下顺延，保住原谱两行之间的空；
+      // 从前只照原位，长高的那截吃掉两行之间的空、贴到 `SOURCE_SYSTEM_GAP`（破碎 p5 49 小节那行与下一行）
+      const prev = k > 0 ? list[k - 1]! : -1;
+      const target = moved.has(i) ? floor : k === 0 || moved.has(prev) ? want[i]! : ls[k - 1]! + want[i]! - want[prev]! + growth(prev);
+      ls.push(Math.max(target, floor));
     });
     const lastI = list[list.length - 1]!;
     const over = ls[ls.length - 1]! - items[lastI]!.bottomY - ph;

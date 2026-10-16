@@ -121,7 +121,7 @@ function makeTime(time: DocTime): TimeSig {
   return t;
 }
 
-interface TieRef { note: NoteLayout; pitch: number; endTick: Fraction }
+interface TieRef { note: NoteLayout; pitch: number; endTick: Fraction; /** 源谱写了的朝向（`<tied orientation>`），起点才有 */ above?: boolean }
 
 /** 一个元素在小节里的游标（divisions）：`onset` 缺省 = 前一个元素的终点 */
 function measureTiming(m: Measure): { onsets: number[]; endAfter: number[]; end: number } {
@@ -173,6 +173,8 @@ class DocPartLoader {
 
   tieStarts: TieRef[] = [];
   tieStops: TieRef[] = [];
+  /** 起点音 → 源谱写的延音线朝向（`<tied orientation="over|under">`；识别稿照原图写） */
+  tieAboveOf = new Map<DocNote, boolean>();
   // lrc linking: num → [LyricLayout list in order]
   lrcByNum = new Map<string, LyricLayout[]>();
   // lyric extend (melisma) points, paired 2-by-2 in processLrcExtend
@@ -215,6 +217,14 @@ class DocPartLoader {
       }
     }
     for (const mk of marks) {
+      // 延音线朝向只在自动铺排时照源谱：带坐标的原文照原 C++ 工程按声部与符干猜（那边的 orientation 从来不读）
+      if (mk.type === "tied") {
+        if (!score.autoLayout) continue;
+        const dir = mk.placement === "above" || mk.orientation === "over" ? true : mk.placement === "below" || mk.orientation === "under" ? false : undefined;
+        const n = this.docChordById.get(mk.start)?.notes[mk.startNote ?? 0];
+        if (dir !== undefined && n) this.tieAboveOf.set(n, dir);
+        continue;
+      }
       if (mk.type !== "slur" && mk.type !== "tuplet") continue;
       if (!ids.has(mk.start) || !ids.has(mk.end)) continue;
       const list = this.marksByEnd.get(mk.end);
@@ -556,6 +566,7 @@ class DocPartLoader {
       const ry = pos?.relativeY;
       if (ry !== undefined) y += ry;
       lrc.y = y;
+      if (pos?.defaultY !== undefined) lrc.srcY = y;
       const lf = xmlFont(l);
       lrc.font = lf?.family || lf?.size
         ? new Font(lf.family ?? this.score.defaults.lyricFont.family, lf.size ? lf.size / this.score.scaling : this.score.defaults.lyricFont.size)
@@ -580,7 +591,7 @@ class DocPartLoader {
   private processTie(note: DocNote | null, nt: NoteLayout, tick: Fraction): void {
     if (note?.tie?.start) {
       nt.tieBegin = true;
-      this.tieStarts.push({ note: nt, pitch: nt.writtenPitch, endTick: tick.plus(nt.chord.dur) });
+      this.tieStarts.push({ note: nt, pitch: nt.writtenPitch, endTick: tick.plus(nt.chord.dur), above: this.tieAboveOf.get(note) });
     }
     if (note?.tie?.stop) {
       nt.tieEnd = true;
@@ -940,6 +951,12 @@ class DocPartLoader {
     const pos = xmlPos(w);
     const dy = pos?.defaultY;
     if (dy !== undefined) blk.y = dy;
+    // 自动铺排时写了 default-y 的文字是识别稿照原图写的（声部标签「Alto」、「rit.」）：同力度一样照原位、照原字号，
+    // 不抬到整行最高处（`placeAboveStaff` 只按横向跨过那段轮廓让）
+    if (dy !== undefined && this.score.autoLayout) {
+      blk.sourceY = true;
+      if ((xmlFont(w)?.size ?? 0) > 0) blk.sourceSize = true;
+    }
     const ry = pos?.relativeY;
     if (ry !== undefined) blk.y += ry;
     // x 口径同 parser.cpp::processTextPos：有 relative-x 就相对拍位（updateDataXPos 再加拍位 x）；
@@ -1236,6 +1253,10 @@ class DocPartLoader {
         tied.endNote = stop.note;
         tied.startTick = start.note.chord.tick();
         tied.endTick = start.endTick;
+        if (start.above !== undefined) {
+          tied.above = start.above;
+          tied.srcDir = true;
+        }
         break;
       }
     }
