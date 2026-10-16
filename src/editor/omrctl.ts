@@ -290,6 +290,7 @@ export class OmrController implements FormatSource {
   private async recognizeFilesInner(files: readonly RecogInput[], g: number): Promise<boolean> {
     if (!files.length) return false;
     this.lastInputs = [...files];
+    void this.showPending(files, g); // 判路之前就清掉旧图、铺原图与占位（判路要栅格化第一页，得等一会）
     const first = files[0]!;
     // 文字层完整的五线谱 PDF（矢量）先试：只要不是指定按简谱识别
     if (files.length === 1 && this.kind !== "jianpu" && isPdf(first.bytes, first.mime) && (await this.tryStaffPdf(first.bytes, performance.now(), g))) return true;
@@ -568,12 +569,16 @@ export class OmrController implements FormatSource {
   /** 识别途中：并排面板先放原图（不带框），谱面区每页一张「识别中」占位，识别完换成结果 */
   private pending: { g: number; side: boolean; pages: SVGTextElement[] } | null = null;
 
-  /** 开始识别（位图五线谱 / 矢量 PDF / 简谱，判完路就调）：能看的先给——原图（并排，按用户的核对方式）与逐页的识别进度占位。
-   *  同一次识别只铺一次（矢量路没认出音、改走位图路时不重铺）；识别模式（核对视图）里不动 */
+  /** 开始识别（`recognizeFilesInner` 一进来就调，不等判路）：旧图当场清掉，能看的先给——原图（并排，按用户的核对方式）与逐页的识别进度占位。
+   *  同一次识别只铺一次（各路里再调是空操作） */
   private async showPending(files: readonly RecogInput[], g: number): Promise<void> {
-    if (this.host.mode === "recognize" || this.pending?.g === g) return;
+    if (this.pending?.g === g) return;
     this.pending = { g, side: this.side, pages: [] };
     this.onEarlyView?.();
+    // 旧谱面、旧原图当场清掉（占位与原图等量完页数再铺）
+    this.host.clearPages();
+    this.sideEl?.replaceChildren();
+    this.sideKey = null;
     // 代码区还是上一份文档（开始页进来是示例谱）：识别期间盖住，别让人以为那就是结果
     const code = document.getElementById("code-pane");
     code?.classList.add("omr-pending");
@@ -732,8 +737,8 @@ export class OmrController implements FormatSource {
 
   private async drawSide(id: ElementId | null): Promise<void> {
     const box = this.sideEl!;
-    // 识别途中：先放原图（不带框），识别完 `enterAfterRecognize` 再摆一次
-    if (this.pending && !this.staffResult) {
+    // 识别途中：先放这次的原图（不带框；上一次的结果还没清，别画回旧图），识别完 `enterAfterRecognize` 再摆一次
+    if (this.pending) {
       if (this.sideKey === "plain") return;
       this.sideKey = "plain";
       const pages = await this.plainOriginalPages();
