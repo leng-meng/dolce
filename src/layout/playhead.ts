@@ -31,9 +31,10 @@ export class Playhead {
       this.rect?.remove();
       return;
     }
-    const pad = fixed ? 0 : 4;
-    const x0 = box.x0 - pad;
-    const x1 = box.x1 + pad;
+    const pad = 4;
+    // 定宽的横向不再加边（宽度已含），竖向照旧伸出谱表带
+    const x0 = fixed ? box.x0 : box.x0 - pad;
+    const x1 = fixed ? box.x1 : box.x1 + pad;
     const y0 = span.y0 - pad * 2;
     const y1 = span.y1 + pad * 2;
     let rect = this.rect;
