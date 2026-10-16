@@ -32,8 +32,12 @@ import { t } from "../i18n";
 import { COMPARE_VALUES, type CompareValue } from "./comparemode";
 import { isPdf } from "../omrkit/pdf";
 import type { StaffReviewResult } from "../staffomr/review";
+import type { RenderedPage } from "../rasteromr/browser";
 
 /** 一份识别输入（拖进来、选进来的图片或 PDF）。 */
+/** 并排原图一页的整页底图：图的地址与它在识别位图坐标里的位置（见 `placePageView`） */
+type PageView = { url: string; x: number; y: number; w: number; h: number } | null;
+
 export interface RecogInput {
   bytes: Uint8Array;
   mime?: string;
@@ -320,6 +324,7 @@ export class OmrController implements FormatSource {
     this.busy = true;
     this.cancelRequested = false;
     this.progress(t("omr.staffRunning"));
+    this.prerenderOriginals(files); // 并排原图的原样底图不等识别，现在就画起来
     let res;
     try {
       res = await rb.recognizeRasterPdfs(pdfs, {
@@ -658,22 +663,28 @@ export class OmrController implements FormatSource {
 
   /** 并排面板的各页：原图 + 每个音一个框（`data-id` = 排版稿里的元素 id）。 */
   private async sidePages(doc: ScoreDoc | null): Promise<SVGSVGElement[]> {
-    type View = { url: string; x: number; y: number; w: number; h: number } | null;
-    const page = (bin: Binary, boxes: { id: ElementId; x: number; y: number; w: number; h: number }[], view: View = null): SVGSVGElement => {
+    const page = (bin: Binary, boxes: { id: ElementId; x: number; y: number; w: number; h: number }[], view?: Promise<PageView>): SVGSVGElement => {
       const NS = "http://www.w3.org/2000/svg";
       const svg = document.createElementNS(NS, "svg");
       svg.setAttribute("class", "omr-side-page");
+      svg.setAttribute("viewBox", `0 0 ${bin.w} ${bin.h}`);
       if (view) {
-        // 整页原图（见 `pageViewImage`）：框仍按位图坐标，viewBox 把页面伸出去的那截框进来
-        svg.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`);
-        const img = document.createElementNS(NS, "image");
-        for (const [k, v] of [["x", view.x], ["y", view.y], ["width", view.w], ["height", view.h]] as const) img.setAttribute(k, String(v));
-        img.setAttribute("href", view.url);
-        img.setAttribute("preserveAspectRatio", "none");
-        img.style.setProperty("image-orientation", "none"); // 识别时 JPEG 原样包进 PDF、不认 EXIF 方向，底图也不转
-        svg.appendChild(img);
+        // 整页原图（见 `placePageView`）画好之前先铺白纸（不然面板黑着），画好了换上：框仍按位图坐标，viewBox 把页面伸出去的那截框进来
+        const paper = document.createElementNS(NS, "rect");
+        for (const [k, v] of [["x", 0], ["y", 0], ["width", bin.w], ["height", bin.h]] as const) paper.setAttribute(k, String(v));
+        paper.setAttribute("fill", "#fff");
+        svg.appendChild(paper);
+        void view.then((v) => {
+          if (!v) return void paper.replaceWith(baseImage(bin));
+          svg.setAttribute("viewBox", `${v.x} ${v.y} ${v.w} ${v.h}`);
+          const img = document.createElementNS(NS, "image");
+          for (const [k, n] of [["x", v.x], ["y", v.y], ["width", v.w], ["height", v.h]] as const) img.setAttribute(k, String(n));
+          img.setAttribute("href", v.url);
+          img.setAttribute("preserveAspectRatio", "none");
+          img.style.setProperty("image-orientation", "none"); // 识别时 JPEG 原样包进 PDF、不认 EXIF 方向，底图也不转
+          paper.replaceWith(img);
+        });
       } else {
-        svg.setAttribute("viewBox", `0 0 ${bin.w} ${bin.h}`);
         svg.appendChild(baseImage(bin));
       }
       for (const b of boxes) {
@@ -694,7 +705,7 @@ export class OmrController implements FormatSource {
       const res = this.staffResult;
       const ids = await this.staffIds(doc);
       const byOmr = new Map([...ids].map(([k, v]) => [v, k]));
-      const views = await this.staffPageViews(res);
+      const views = this.staffPageViews(res);
       return res.pages.map((p, i) => page(p.result.raster!.bin, [...res.noteBoxes].filter(([oid, b]) => b.page === i && byOmr.has(oid))
         .map(([oid, b]) => ({ id: byOmr.get(oid)!, x: b.box.left, y: b.box.top, w: b.box.right - b.box.left, h: b.box.bottom - b.box.top })), views[i]));
     }
@@ -708,30 +719,50 @@ export class OmrController implements FormatSource {
     return [page(this.bin, boxes)];
   }
 
-  /** 并排原图的整页底图（`pageViewImage`，原样画原图），按识别结果缓存；取不到的页为 null（照旧画位图） */
-  private pageViews: { res: StaffReviewResult; views: Promise<({ url: string; x: number; y: number; w: number; h: number } | null)[]> } | null = null;
-  private staffPageViews(res: StaffReviewResult): Promise<({ url: string; x: number; y: number; w: number; h: number } | null)[]> {
-    if (this.pageViews?.res !== res) {
-      void this.pageViews?.views.then((vs) => vs.forEach((v) => v?.url.startsWith("blob:") && URL.revokeObjectURL(v.url)));
-      const inputs = this.lastInputs;
-      // 只有位图路：矢量 PDF 的位图本就是整页渲出来的
-      const raster = this.sessionKind === "staff";
-      const views = (async () => {
-        const rb = await import("../rasteromr/browser");
-        const out: ({ url: string; x: number; y: number; w: number; h: number } | null)[] = [];
-        for (const p of res.pages) {
-          const src = inputs[p.source];
-          const bin = p.result.raster?.bin;
-          if (!raster || !src || !bin) out.push(null);
-          else if (isPdf(src.bytes, src.mime)) out.push(await rb.pageViewImage(src.bytes, p.pn, bin).catch(() => null));
-          // 图片直接画原图：识别时它被包成一页与图同大的 PDF，位图与原图一一对应（彩色放大过的按位图宽高拉伸）
-          else out.push({ url: URL.createObjectURL(new Blob([src.bytes as BlobPart], src.mime ? { type: src.mime } : {})), x: 0, y: 0, w: bin.w, h: bin.h });
-        }
-        return out;
-      })();
-      this.pageViews = { res, views };
+  /** 原图各份的原样底图（`renderPdfPages`），按输入列表缓存：开始识别时就画起来（`prerenderOriginals`），不等识别。
+   *  图片输入直接是原图的地址；PDF 是逐页的 promise（外层知道页数时给出）。 */
+  private originals: { inputs: readonly RecogInput[]; sources: Promise<Promise<RenderedPage | null>[] | string>[] } | null = null;
+  private prerenderOriginals(inputs: readonly RecogInput[]): NonNullable<OmrController["originals"]> {
+    const cur = this.originals;
+    if (cur && cur.inputs.length === inputs.length && cur.inputs.every((x, i) => x.bytes === inputs[i]!.bytes)) return cur;
+    this.releaseOriginals();
+    // 一份一份接着画：PDF 各页在 `renderPdfPages` 里已按页序排队，几份之间也排队，免得同时开几个画布
+    let prev: Promise<unknown> = Promise.resolve();
+    const sources = inputs.map((src) => {
+      const s: Promise<Promise<RenderedPage | null>[] | string> = isPdf(src.bytes, src.mime)
+        ? prev.then(async () => (await import("../rasteromr/browser")).renderPdfPages(src.bytes))
+        : Promise.resolve(URL.createObjectURL(new Blob([src.bytes as BlobPart], src.mime ? { type: src.mime } : {})));
+      prev = s.then((pages) => (typeof pages === "string" ? null : Promise.all(pages))).catch(() => null);
+      return s;
+    });
+    this.originals = { inputs: [...inputs], sources };
+    return this.originals;
+  }
+
+  private releaseOriginals(): void {
+    const revoke = (u: string | undefined): void => void (u?.startsWith("blob:") && URL.revokeObjectURL(u));
+    for (const s of this.originals?.sources ?? []) {
+      void s.then((v) => (typeof v === "string" ? revoke(v) : v.forEach((p) => void p.then((r) => revoke(r?.url))))).catch(() => undefined);
     }
-    return this.pageViews.views;
+    this.originals = null;
+  }
+
+  /** 并排原图各页的整页底图：原样底图（`prerenderOriginals`）按识别位图摆好（`placePageView`）。逐页一个 promise，画好一页先给一页；
+   *  取不到的页为 null（照旧画位图）。图片直接画原图：识别时它被包成一页与图同大的 PDF，位图与原图一一对应（彩色放大过的按位图宽高拉伸）。 */
+  private staffPageViews(res: StaffReviewResult): Promise<PageView>[] {
+    // 只有位图路：矢量 PDF 的位图本就是整页渲出来的
+    if (this.sessionKind !== "staff") return res.pages.map(() => Promise.resolve(null));
+    const { sources } = this.prerenderOriginals(this.lastInputs);
+    return res.pages.map(async (p): Promise<PageView> => {
+      const bin = p.result.raster?.bin;
+      const src = sources[p.source];
+      if (!bin || !src) return null;
+      const got = await src.catch(() => null);
+      if (got === null) return null;
+      if (typeof got === "string") return { url: got, x: 0, y: 0, w: bin.w, h: bin.h };
+      const r = await (got[p.pn - 1] ?? Promise.resolve(null));
+      return r ? (await import("../rasteromr/browser")).placePageView(r, bin) : null;
+    });
   }
 
   /** 五线谱：模型和弦 id → 识别时写进 `<note id>` 的编号（按当前原文读，改过的谱也认得回来）。 */
