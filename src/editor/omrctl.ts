@@ -664,11 +664,13 @@ export class OmrController implements FormatSource {
       const svg = document.createElementNS(NS, "svg");
       svg.setAttribute("class", "omr-side-page");
       if (view) {
-        // 整页原图（谱图没铺满页面的 PDF，见 `pageViewImage`）：框仍按位图坐标，viewBox 把页面伸出去的那截框进来
+        // 整页原图（见 `pageViewImage`）：框仍按位图坐标，viewBox 把页面伸出去的那截框进来
         svg.setAttribute("viewBox", `${view.x} ${view.y} ${view.w} ${view.h}`);
         const img = document.createElementNS(NS, "image");
         for (const [k, v] of [["x", view.x], ["y", view.y], ["width", view.w], ["height", view.h]] as const) img.setAttribute(k, String(v));
         img.setAttribute("href", view.url);
+        img.setAttribute("preserveAspectRatio", "none");
+        img.style.setProperty("image-orientation", "none"); // 识别时 JPEG 原样包进 PDF、不认 EXIF 方向，底图也不转
         svg.appendChild(img);
       } else {
         svg.setAttribute("viewBox", `0 0 ${bin.w} ${bin.h}`);
@@ -706,10 +708,11 @@ export class OmrController implements FormatSource {
     return [page(this.bin, boxes)];
   }
 
-  /** 并排原图的整页底图（`pageViewImage`），按识别结果缓存；原图不是 PDF、取不到的页为 null（照旧画位图） */
+  /** 并排原图的整页底图（`pageViewImage`，原样画原图），按识别结果缓存；取不到的页为 null（照旧画位图） */
   private pageViews: { res: StaffReviewResult; views: Promise<({ url: string; x: number; y: number; w: number; h: number } | null)[]> } | null = null;
   private staffPageViews(res: StaffReviewResult): Promise<({ url: string; x: number; y: number; w: number; h: number } | null)[]> {
     if (this.pageViews?.res !== res) {
+      void this.pageViews?.views.then((vs) => vs.forEach((v) => v?.url.startsWith("blob:") && URL.revokeObjectURL(v.url)));
       const inputs = this.lastInputs;
       // 只有位图路：矢量 PDF 的位图本就是整页渲出来的
       const raster = this.sessionKind === "staff";
@@ -719,7 +722,10 @@ export class OmrController implements FormatSource {
         for (const p of res.pages) {
           const src = inputs[p.source];
           const bin = p.result.raster?.bin;
-          out.push(raster && src && bin && isPdf(src.bytes, src.mime) ? await rb.pageViewImage(src.bytes, p.pn, bin.w).catch(() => null) : null);
+          if (!raster || !src || !bin) out.push(null);
+          else if (isPdf(src.bytes, src.mime)) out.push(await rb.pageViewImage(src.bytes, p.pn, bin).catch(() => null));
+          // 图片直接画原图：识别时它被包成一页与图同大的 PDF，位图与原图一一对应（彩色放大过的按位图宽高拉伸）
+          else out.push({ url: URL.createObjectURL(new Blob([src.bytes as BlobPart], src.mime ? { type: src.mime } : {})), x: 0, y: 0, w: bin.w, h: bin.h });
         }
         return out;
       })();
