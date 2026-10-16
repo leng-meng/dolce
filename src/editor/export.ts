@@ -277,8 +277,10 @@ export async function exportLayoutPdf(app: App): Promise<void> {
       const { w, h } = painter.pageSize(i);
       const svg = painter.renderPage(i);
       svg.setAttribute("xmlns", SVG_NS);
-      svg.setAttribute("width", `${w}pt`);
-      svg.setAttribute("height", `${h}pt`);
+      // 不带单位：usvg 把 `pt` 按 96 dpi 折成 px（×4/3），svg2pdf 又按 72 dpi 把 px 当 pt，
+      // 带 `pt` 整页放大 4/3（A5 出来成了近 A4）。无单位的用户单位在这条链上正好 1:1 落成 pt
+      svg.setAttribute("width", String(w));
+      svg.setAttribute("height", String(h));
       paintBg(svg, app.bgColor);
       pages.push(new XMLSerializer().serializeToString(svg));
     }
