@@ -6,6 +6,7 @@
 //   私有仓库的 `beat-check.mjs` 也经 CLI 调它，不再自己另算一份。
 //
 // 口径（与 `beat-check.mjs` 在迦南诗选上验过的一致）：
+// - MusicXML 形状按起点算声部终点：`<forward>` 空过的前几拍也算这个声部的（钢琴一只手前两拍不出声）。
 // - 一律折成「四分音符 = 1 拍」；附点、增时线已并在 `Chord.duration` 里，多连音按比例折实际时值；倚音、`y` 不占时值。
 // - 拍号按小节生效（曲中转拍号）；混合拍（头部并排几个拍号 `Song.extraTimes`，或识别给的 `opts.meters`）对上任意一个就算过。
 // - **合法的例外**只放过这几种，其余报出来的都该是真错：
@@ -48,16 +49,21 @@ const beatsOf = (t: { beats: number; beatType: number }): number => t.beats * (4
  *  同一小节有多个声部只有一种来源：ABC `&` 的临时多声部（§7.4），各分支都该占满一小节——
  *  所以要逐分支算，主分支对了不代表其它分支对。
  *  按 `divisions` 算（`<type>` 不含增时线）：MusicXML 形状的 divisions 已是实际时值，
- *  简谱形状的多连音记名义值（`omr/todoc.ts`、123 解析端同口径），要按比例折回。 */
+ *  简谱形状的多连音记名义值（`omr/todoc.ts`、123 解析端同口径），要按比例折回。
+ *  MusicXML 形状按**起点**算声部的终点（`onset`，缺省接前一个元素的终点）：`<forward>` 空过的前几拍也是这个声部的——
+ *  钢琴右手前两拍不出声、第三拍起一个二分（宁静的伯利恒 m10，左手琶音这时升到右手谱表上），时值和只有两拍，终点正好一小节。 */
 function measureQuarters(m: Measure, divisions: number, xml: boolean): Map<number, number> {
   const out = new Map<number, number>();
+  let end = 0;
   for (const el of m.elements) {
-    if (el.kind === "chord" && el.grace) continue;
-    const d = el.duration;
+    const grace = el.kind === "chord" && el.grace;
+    const d = grace ? undefined : el.duration;
+    const start = xml ? (el.onset ?? end) : 0;
+    end = start + (d?.divisions ?? 0);
     if (!d) continue;
     const raw = d.divisions / divisions;
     const q = !xml && d.timeMod ? (raw * d.timeMod.normal) / d.timeMod.actual : raw;
-    out.set(el.voice, (out.get(el.voice) ?? 0) + q);
+    out.set(el.voice, xml ? Math.max(out.get(el.voice) ?? 0, end / divisions) : (out.get(el.voice) ?? 0) + q);
   }
   return out;
 }

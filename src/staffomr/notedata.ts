@@ -779,6 +779,8 @@ export interface StaffNote {
    *（钢琴左手的琶音升进右手谱表）。不参加这一行的凑拍与分声部，声部号另记。位图路 `markCrossStaff` 填。
    */
   crossStaff?: boolean;
+  /** 借地方写的是哪一行（`crossStaff` 的音按这一行凑拍、分声部，写出时进这一行的声部，`<staff>` 仍按符头所在那行）。 */
+  crossTo?: Staff;
   /** 落在八度移位段里（音高已经移过了，这里只记一笔给 `<octave-shift>` 用）。 */
   octaveShift?: "up" | "down";
   /** 力度记号（`mp`/`f`…）。MusicXML 里出成 `<direction>`，排在这个音符之前。 */
@@ -1375,8 +1377,10 @@ const chordOverlapX = (a: StaffChord, b: StaffChord): boolean => !(a.left > b.ri
  * `ignoreSmall`：先不带它试一遍，失败再带它试一遍（原文 :1477-1480）。
  * 它把「单音、且符头明显比别人小」的和弦当**倚音**剔出去——倚音不占拍子，
  * 算进去这一小节永远凑不满。
+ *
+ * `anchorOf`：同系统已凑满的谱行给的拍位（`checkBars` 在前几趟都失败后才传），见下面 `byAnchor`；`lead` 容第一列前面空着。
  */
-function checkFull(chords: StaffChord[], expect: number, sp: number, ignoreSmall: boolean): boolean {
+function checkFull(chords: StaffChord[], expect: number, sp: number, ignoreSmall: boolean, anchorOf?: (ch: StaffChord) => number | undefined, lead = false): boolean {
   if (!chords.length) return false;
   const EPS = 1e-6;
   let chs = chords;
@@ -1465,7 +1469,41 @@ function checkFull(chords: StaffChord[], expect: number, sp: number, ignoreSmall
     }
     return Math.abs(Math.max(...ends) - expect) < EPS && Math.abs(res - expect) < EPS;
   };
-  if (!byMin() && !byEnds()) return false;
+  // **按同系统别的谱行对拍位**（`anchorOf`，只在前两种都凑不满时由 `checkBars` 传进来）：一列落在前面的长音还在响的时候，
+  // 前两种都只能接在最早结束之后，排不进去——破碎钢琴左手 m39/m80/m99「四分 两个八分 二分」，二分下面第四拍还有个干朝上的 A3 四分
+  // 另一声部，按次序接成五拍。那一列与右手第四拍的和弦对齐，起点就取右手那一拍
+  const byAnchor = (): boolean => {
+    if (!anchorOf) return false;
+    // 插进去的那列与还在响的音要分得出是两个声部：都有干、朝向相反（扫描件漏了符杠的八分读成四分，
+    // 后一个八分对着上一行的拍位插进去当第二声部，凑满了却是错的：破碎扫描 m69 女低）
+    const twoVoices = (g: { chords: StaffChord[] }, sounding: StaffChord[]) =>
+      sounding.length > 0 && g.chords.every((c) => c.stem) && sounding.every((c) => c.stem && c.notes[0].stemUp !== g.chords[0].notes[0].stemUp)
+      && g.chords.every((c) => c.notes[0].stemUp === g.chords[0].notes[0].stemUp);
+    let res = 0;
+    let prev = -1;
+    const ends: number[] = [];
+    const placed: { ch: StaffChord; end: number }[] = [];
+    for (const g of grps) {
+      let a: number | undefined;
+      for (const ch of g.chords) a ??= anchorOf(ch);
+      const insert = a !== undefined && a > prev + EPS && a < res - EPS && twoVoices(g, placed.filter((p) => p.end > a! + EPS).map((p) => p.ch));
+      // 小节头空着（这一行前几拍不出声，别的行在走）：只容第一列往后挪
+      const gap = lead && a !== undefined && prev < 0 && a > EPS && a < expect - EPS;
+      g.offset = insert || gap ? a! : res;
+      prev = g.offset;
+      for (const ch of g.chords) {
+        const d = guessDur(ch);
+        if (!isFinite(d) || d <= 0) return false;
+        ends.push(g.offset + d);
+        placed.push({ ch, end: g.offset + d });
+      }
+      const next = Math.min(...ends.filter((e) => e > g.offset + EPS));
+      if (!isFinite(next)) return false;
+      res = next;
+    }
+    return Math.abs(Math.max(...ends) - expect) < EPS && Math.abs(res - expect) < EPS;
+  };
+  if (!byMin() && !byEnds() && !byAnchor()) return false;
   for (const g of grps)
     for (const ch of g.chords) {
       ch.offset = g.offset;
@@ -1775,6 +1813,30 @@ export function checkBars(
   const pending: { o: BarCheck; chords: StaffChord[]; inBar: StaffNote[]; overfull: (len: number) => boolean }[] = [];
   const sp = pg.normalStaffSpace || pg.space;
   let cur = { beats: carry?.beats ?? 4, beatType: carry?.beatType ?? 4 };
+  /** 凑满了的小节里定了拍位的和弦（`谱行#小节`），给同系统凑不满的谱行对拍位 */
+  const timedChords = new Map<string, StaffChord[]>();
+  /** 同系统别的谱行第 `i` 小节定了拍位的和弦 → 一个和弦的起点：与哪个横向对齐（中心差 < 0.6 线距）就取它的起点；
+   *  `loose` 时都不对齐的取左边最近那个的终点（宁静的伯利恒钢琴 m10 右手的二分和弦接在左手升上来的那个八分后面） */
+  const anchorsFor = (stf: Staff, i: number, loose = false): ((c: StaffChord) => number | undefined) | undefined => {
+    const sys = pg.systems.find((sy) => sy.staves.includes(stf));
+    const ref = (sys?.staves ?? []).filter((s0) => s0 !== stf).flatMap((s0) => timedChords.get(`${s0.index}#${i}`) ?? []);
+    if (!ref.length) return undefined;
+    const cx = (c: StaffChord) => (c.left + c.right) / 2;
+    return (c) => {
+      let best: StaffChord | undefined;
+      let left: StaffChord | undefined;
+      for (const r of ref) {
+        if (Math.abs(cx(r) - cx(c)) < sp * 0.6 && (!best || Math.abs(cx(r) - cx(c)) < Math.abs(cx(best) - cx(c)))) best = r;
+        if (r.right < c.left && (!left || r.right > left.right)) left = r;
+      }
+      return best ? best.offset : loose && left ? left.offset + left.dur : undefined;
+    };
+  };
+  /** 这一小节有跨谱表借写的音（借出去或借进来）：是大谱表的一手，另一手的拍位才可信。 */
+  const crossLinked = (stf: Staff, i: number): boolean => {
+    const bar = stf.bars[i];
+    return !!bar && notes.some((n) => (n.crossTo === stf || (n.staff === stf && n.crossTo)) && n.x >= bar.left && n.x < bar.right);
+  };
   for (const stf of pg.staves) {
     // **逐小节**取当时生效的拍号：一行谱上可能变拍好几次
     // （实测 Opus 那本 p663 的第三行里 4/4 → 2/4 → 4/4，按整行取最左那处会全错）
@@ -1786,7 +1848,8 @@ export function checkBars(
         ci++;
       }
       const expect = cur.beats / cur.beatType;
-      const inBar = notes.filter((n) => n.staff === stf && !n.crossStaff && n.x >= bar.left && n.x < bar.right);
+      // 别的行借这一行写的音（`crossTo`）算进来：宁静的伯利恒钢琴左手琶音后半截升进右手谱表，只剔出右手、不进左手的话左手只剩半小节
+      const inBar = notes.filter((n) => (n.crossTo ? n.crossTo === stf : n.staff === stf && !n.crossStaff) && n.x >= bar.left && n.x < bar.right);
       if (!inBar.length) return;
       // 这一小节里的和弦（`initChords` 已归好，去重即可）
       const chords: StaffChord[] = [];
@@ -1800,6 +1863,11 @@ export function checkBars(
       let full = checkFull(chords, expect, sp, false);
       if (!full) full = checkFull(chords, expect, sp, true);
       if (!full) full = blackenMixed(chords, expect, sp);
+      // 同系统已凑满的谱行（钢琴右手之于左手）给拍位，再凑一次（见 `checkFull` 的 `byAnchor`）
+      if (!full) {
+        const anchorOf = anchorsFor(stf, i);
+        if (anchorOf) full = checkFull(chords, expect, sp, false, anchorOf);
+      }
       // **短小节按同系统上面那行的长度再凑一次**：与弱起配套的末小节只有三拍，
       // 两个声部挤在一行、节奏各走各的（《赞美一神》男高「四分 + 两个八分」、
       // 男低「两个八分 + 四分」），拿拍号的四拍去凑，两趟都凑不满、也拆不开声部，
@@ -1820,9 +1888,42 @@ export function checkBars(
       const sum = voiceSum(inBar, expect);
       // 分完声部第一声部正好一整小节的也算满（`checkFull` 两趟没凑上、按次序分出来却是满的：我一生要赞美你 m1-4）
       const o: BarCheck = { staff: stf, index: i, sum, expect, count: inBar.length, full: full || Math.abs(sum - expect) < 1e-6, beat };
+      if (full) timedChords.set(`${stf.index}#${i}`, chords.filter((c) => c.timed && !c.grace));
       out.push(o);
       if (!full && !split) pending.push({ o, chords, inBar, overfull });
     });
+  }
+  // **借写的两行合起来凑**：左手琶音升进右手谱表的小节，两行常常各自都凑不满——左手四个八分（后两个写在上面）只到两拍、
+  // 右手一个二分从第三拍起（宁静的伯利恒 m11）。两行的和弦合在一起按 x 分时间列正好一小节，拍位就有了，再各自分声部
+  for (const a of [...pending]) {
+    if (!pending.includes(a)) continue;
+    const partner = a.inBar.find((n) => n.crossTo === a.o.staff)?.staff;
+    const b = partner && pending.find((q) => q.o.staff === partner && q.o.index === a.o.index);
+    if (!b || Math.abs(b.o.expect - a.o.expect) > 1e-6) continue;
+    const joint = [...a.chords, ...b.chords.filter((c) => !a.chords.includes(c))];
+    if (!checkFull(joint, a.o.expect, sp, false)) continue;
+    for (const q of [a, b]) {
+      splitVoice(q.chords, q.o.expect);
+      q.o.sum = voiceSum(q.inBar, q.o.expect);
+      q.o.full = true;
+      timedChords.set(`${q.o.staff.index}#${q.o.index}`, q.chords.filter((c) => c.timed && !c.grace));
+    }
+    pending.splice(pending.indexOf(a), 1);
+    pending.splice(pending.indexOf(b), 1);
+  }
+  // **按同系统别的谱行的拍位补凑**：上面逐行走的时候，下面的谱行还没定拍位（钢琴右手在左手之上，
+  // 宁静的伯利恒右手的和弦要等左手连同升上来的琶音凑满了才知道从第几拍起）。凑满的从 `pending` 里摘掉
+  for (let k = pending.length - 1; k >= 0; k--) {
+    const { o, chords, inBar } = pending[k];
+    // 只给有跨谱表借写的小节：合唱谱单行声部在扫描件上认错了音，拿别的行的拍位能把错的读法「凑满」（破碎扫描 m61、m80）
+    if (!crossLinked(o.staff, o.index)) continue;
+    const anchorOf = anchorsFor(o.staff, o.index, true);
+    if (!anchorOf || !checkFull(chords, o.expect, sp, false, anchorOf, true)) continue;
+    splitVoice(chords, o.expect);
+    o.sum = voiceSum(inBar, o.expect);
+    o.full = true;
+    timedChords.set(`${o.staff.index}#${o.index}`, chords.filter((c) => c.timed && !c.grace));
+    pending.splice(k, 1);
   }
   // **被系统换行劈开的两半合起来正好一小节**：上面凑不满、也没按同系统那行的长度拆开的行末（行首）小节，下一系统同一行的第一小节
   //（上一系统同一行的最后一小节）也不满、整拍，这一半的长度就是拍号减去那一半——按它再凑一次（齐来谢主歌 m4 三拍挤着两个声部、行末劈开，

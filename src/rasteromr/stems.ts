@@ -61,7 +61,7 @@ const CROSS_STEM = 5;
  * 与那边的音共用一条符杠。照符头所在的行归属，这些音就混进右手的旋律里——一小节多出四五个音，凑不满拍、
  * 声部也拆不开，逐声部对拍时右手那行整段错位（是爱 p4、p5 各有一个系统多出十来个音）。
  * 同系统上下相邻的两行之间，符干远端过了两行之间的中线、干长五格以上，且那条符杠上另有相邻那一行自己的音的，是相邻那一行借地方写的：
- * 标 `crossStaff`，声部号另记，不参加这一行的凑拍（`checkBars`）。音高仍按符头所在那行的谱号读。
+ * 标 `crossStaff`、`crossTo` 记借的那一行：不参加这一行的凑拍，算进那一行的（`checkBars`），写出时进那一行的声部。音高仍按符头所在那行的谱号读。
  */
 export function markCrossStaff(pg: SPage, notes: StaffNote[], stems: StemInfo[], sp: number): void {
   const bySym = new Map<Sym, StaffNote>();
@@ -87,6 +87,7 @@ export function markCrossStaff(pg: SPage, notes: StaffNote[], stems: StemInfo[],
           const shared = stems.some((o) => o !== st && o.beams.some((q) => st.beams.includes(q)) && o.notes.some((t) => t.code === "noteheadBlack" && bySym.get(t)?.staff === other && !bySym.get(t)?.crossStaff));
           if (!shared) continue;
           n.crossStaff = true;
+          n.crossTo = other;
           n.voice = CROSS_VOICE;
         }
       }

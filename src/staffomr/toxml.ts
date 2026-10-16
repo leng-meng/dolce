@@ -276,7 +276,7 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
       if (n.wedgeStop) body += `<direction placement="below"><direction-type><wedge number="${wedgeNo}" type="stop"/></direction-type>${dirStaff}</direction>`;
       if (n.wedgeStart)
         body += `<direction placement="below"><direction-type><wedge number="${wedgeNo}" type="${n.wedgeStart}"/></direction-type>${dirStaff}</direction>`;
-      body += noteXml(n, ticks(n.duration), staffNo, withVoice, voiceBase);
+      body += noteXml(n, ticks(n.duration), n.crossTo && staffNo ? (partStaffNo.get(n.staff) ?? staffNo) : staffNo, withVoice, voiceBase);
       if (!n.chordExtra && !n.grace) cur += ticks(n.duration);
     }
     // 按拍位排满的小节里，提前收尾的声部补 `<forward>` 到小节末：合唱谱的女低、男低常常
@@ -759,7 +759,13 @@ function scoreToMusicXmlRaw(
           if (!st) return;
           const bar = st.bars[bi];
           if (!bar) return;
-          const inBar = notesOf(st).filter((n) => n.x >= bar.left && n.x < bar.right);
+          // 跨谱表书写的音（`crossTo`）按借的那一行写：同一 part 里另一行借这一行地方写的剔出去，这一行借别行写的收进来
+          //（`<staff>` 仍按符头所在那行，见 `noteXml`）。借到别的 part 的照旧留在符头那行
+          const inPart = (s0?: Staff) => !!s0 && staves.includes(s0);
+          const inBar = [
+            ...notesOf(st).filter((n) => !(n.crossTo && n.crossTo !== st && inPart(n.crossTo))),
+            ...staves.filter((s0) => s0 && s0 !== st).flatMap((s0) => notesOf(s0!).filter((n) => n.crossTo === st)),
+          ].filter((n) => n.x >= bar.left && n.x < bar.right);
           // 行中换谱号（读音高时已经按它读了，`clefFor`）：写进这一小节，下一行行首要不要再写照它比
           const mids = midRowClefs(entry, st).filter((c) => c.box.left >= bar.left && c.box.left < bar.right);
           const midXml = mids.map((c) => {
