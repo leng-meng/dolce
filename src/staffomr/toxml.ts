@@ -63,6 +63,82 @@ function textPt(n: StaffNote, size: number | undefined): number | undefined {
 
 const fontAttr = (pt: number | undefined) => (pt ? ` font-size="${pt}"` : "");
 
+/**
+ * 页面上一点 → MusicXML 的纵坐标（tenths，相对这行谱的**顶线**，向上为正）：线距按该处实测的五线（位图路谱线会斜），
+ * 一个线距 10 tenths。取整（识别量出来的位置本来就只有这个精度）。
+ */
+function staffY(st: Staff, x: number, y: number): number {
+  const ys = st.lineYsAt?.(x) ?? st.lineYs;
+  const sp = ys.length >= 2 ? (ys[ys.length - 1]! - ys[0]!) / (ys.length - 1) : st.stepDistance() * 2;
+  return sp > 0 ? Math.round(((ys[0]! - y) * 10) / sp) : 0;
+}
+
+/** 页面上的横向距离 → tenths（取整），按这行谱的线距折 */
+function staffDx(st: Staff, dx: number): number {
+  const sp = st.stepDistance() * 2;
+  return sp > 0 ? Math.round((dx * 10) / sp) : 0;
+}
+
+/**
+ * Bravura 力度字母的墨迹上下沿（线距，基线在 0；取自 `bravura_metadata.json` 的 glyphBBoxes）。
+ * 原图量的是墨迹高，换成字号要除以同一串字在 Bravura 里的墨迹高——不能按字体盒（CLAUDE.md「Bravura 的字体盒不能当墨迹盒用」）。
+ */
+const DYNAMIC_INK: Record<string, [number, number]> = {
+  p: [-0.568, 1.096], m: [-0.04, 1.096], f: [-0.608, 1.776], s: [-0.04, 1.092], r: [0, 1.096], z: [-0.04, 1.072], n: [-0.04, 1.096],
+};
+/** 同上，首字母墨迹左缘离笔位多远（线距）：原图量的是墨迹左缘，`relative-x` 要的是笔位 */
+const DYNAMIC_LSB: Record<string, number> = { p: -0.356, m: -0.08, f: -0.564, s: 0, r: -0.08, z: -0.12, n: -0.092 };
+
+/** 写在谱表顶线之上的算「上方」（宣主荣耀人声的 f、mp 印在谱表上方），其余在下方 */
+function aboveStaff(st: Staff, x: number, y: number): boolean {
+  return staffY(st, x, y) > 0;
+}
+
+/**
+ * `<dynamics>`：没量到墨迹框（OCR 读出来的）照旧只写 `placement="below"`；量到了且写源谱版面时，
+ * 照原图写上下方、基线（`default-y`）、笔位离符头左缘（`relative-x`）与字号（墨迹高折成 Bravura 的 pt）。
+ */
+function dynamicXml(n: StaffNote, dirStaff: string): string {
+  const name = n.dynamic!;
+  const b = n.dynamicBox;
+  const ink = [...name].map((c) => DYNAMIC_INK[c]).filter((v): v is [number, number] => !!v);
+  const pg = n.staff?.page;
+  if (!withSourceLayout || !b || !ink.length || !pg) {
+    return `<direction placement="below"><direction-type><dynamics><${name}/></dynamics></direction-type>${dirStaff}</direction>`;
+  }
+  const lo = Math.min(...ink.map((v) => v[0]));
+  const hi = Math.max(...ink.map((v) => v[1]));
+  // 一个 Bravura 线距合多少页面单位（em = 4 线距）
+  const unit = (b.bottom - b.top) / (hi - lo);
+  const baseline = b.bottom + lo * unit;
+  const pen = b.left - (DYNAMIC_LSB[name[0]!] ?? 0) * unit;
+  const pt = roundPt(4 * unit * ptPerUnit(pg));
+  const x = n.sym.box.left;
+  const pl = aboveStaff(n.staff, x, (b.top + b.bottom) / 2) ? "above" : "below";
+  return `<direction placement="${pl}"><direction-type><dynamics default-y="${staffY(n.staff, x, baseline)}" relative-x="${staffDx(n.staff, pen - x)}" font-size="${pt}"><${name}/></dynamics></direction-type>${dirStaff}</direction>`;
+}
+
+/** `<wedge>` 起点：写源谱版面时照原图写上下方、中线（`default-y`）、左端离符头左缘（`relative-x`）；渐弱的开口（`spread`）写在起点 */
+function wedgeStartXml(n: StaffNote, no: number, dirStaff: string): string {
+  const w = n.wedgeAt;
+  if (!withSourceLayout || !w) return `<direction placement="below"><direction-type><wedge number="${no}" type="${n.wedgeStart}"/></direction-type>${dirStaff}</direction>`;
+  const x = n.sym.box.left;
+  const pl = aboveStaff(n.staff, w.x0, w.cy) ? "above" : "below";
+  const spread = n.wedgeStart === "diminuendo" && w.spread ? ` spread="${staffDx(n.staff, w.spread)}"` : "";
+  return `<direction placement="${pl}"><direction-type><wedge number="${no}" type="${n.wedgeStart}" default-y="${staffY(n.staff, w.x0, w.cy)}" relative-x="${staffDx(n.staff, w.x0 - x)}"${spread}/></direction-type>${dirStaff}</direction>`;
+}
+
+/** `<wedge type="stop">`：右端离符头左缘（`relative-x`）；渐强的开口写在止点（MusicXML 的 `spread` 写在开口那一端） */
+function wedgeStopXml(n: StaffNote, no: number, dirStaff: string): string {
+  const w = n.wedgeStopAt;
+  if (!withSourceLayout || !w) return `<direction placement="below"><direction-type><wedge number="${no}" type="stop"/></direction-type>${dirStaff}</direction>`;
+  const sp = w.spread ? ` spread="${staffDx(n.staff, w.spread)}"` : "";
+  return `<direction placement="below"><direction-type><wedge number="${no}" type="stop" relative-x="${staffDx(n.staff, w.x1 - n.sym.box.left)}"${sp}/></direction-type>${dirStaff}</direction>`;
+}
+
+/** 写出源谱版面（符干端点、力度松叶原位）：`scoreToMusicXml` 按 `opts.layout` 设，只在写出时有效 */
+let withSourceLayout = false;
+
 const TYPE_OF: [number, string][] = [
   [2, "breve"],
   [1, "whole"],
@@ -273,13 +349,11 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
       }
       for (const w of n.words ?? [])
         body += `<direction placement="${w.above ? "above" : "below"}"><direction-type><words${fontAttr(textPt(n, w.size))}>${escapeXml(w.text)}</words></direction-type>${dirStaff}</direction>`;
-      if (n.dynamic)
-        body += `<direction placement="below"><direction-type><dynamics><${n.dynamic}/></dynamics></direction-type>${dirStaff}</direction>`;
+      if (n.dynamic) body += dynamicXml(n, dirStaff);
       // 松叶：**止排在起之前**——同一个音符上前一条松叶收尾、下一条起头是常事，
       // 反过来写会让两条重叠（MusicXML 里同号的 wedge 不能套嵌）。
-      if (n.wedgeStop) body += `<direction placement="below"><direction-type><wedge number="${wedgeNo}" type="stop"/></direction-type>${dirStaff}</direction>`;
-      if (n.wedgeStart)
-        body += `<direction placement="below"><direction-type><wedge number="${wedgeNo}" type="${n.wedgeStart}"/></direction-type>${dirStaff}</direction>`;
+      if (n.wedgeStop) body += wedgeStopXml(n, wedgeNo, dirStaff);
+      if (n.wedgeStart) body += wedgeStartXml(n, wedgeNo, dirStaff);
       body += noteXml(n, ticks(n.duration), n.crossTo && staffNo ? (partStaffNo.get(n.staff) ?? staffNo) : staffNo, withVoice, voiceBase);
       if (!n.chordExtra && !n.grace) cur += ticks(n.duration);
     }
@@ -324,6 +398,12 @@ function voiceTicks(inBar: StaffNote[], ticks: (d: number) => number): number {
   return used;
 }
 
+/**
+ * 多谱表声部显式写 `<part-symbol>brace</part-symbol>`（紧跟 `<staves>`）。规范缺省就是 brace，Finale 导出也不写，
+ * 但并非每个读入端都按缺省补（本仓库从前就不补）；识别出的多谱表声部只来自花括号或「G + F 谱号」大谱表，一律是 brace。
+ */
+const PART_SYMBOL = "<part-symbol>brace</part-symbol>";
+
 /** 正在写的 part 里各行谱的谱表号（`<staff>`）：跨谱表的弧止端按起端那行编号用。 */
 const partStaffNo = new Map<Staff, number>();
 
@@ -352,7 +432,9 @@ function noteXmlRaw(n: StaffNote, dur: number, staffNo = 0, withVoice = false, v
   // 两者不是一回事：G 调里一个没印记号的 F 也要写 `<alter>1</alter>`。
   const alter = n.alter !== 0 ? `<alter>${n.alter}</alter>` : "";
   const acc = n.accidental !== null ? `<accidental>${accidentalName(n.accidental)}</accidental>` : "";
-  const stem = n.stemUp === null ? "" : `<stem>${n.stemUp ? "up" : "down"}</stem>`;
+  // 符干端点照原图（`<stem default-y>`）：排版不再按缺省 3.5 格重算，长短与符杠斜度跟原谱走
+  const tip = withSourceLayout && n.stemTip !== undefined ? ` default-y="${staffY(n.staff, n.sym.px, n.stemTip)}"` : "";
+  const stem = n.stemUp === null ? "" : `<stem${tip}>${n.stemUp ? "up" : "down"}</stem>`;
   // `<lyric>` 是 `<note>` 的最后一批子元素，排在 `<stem>`/`<accidental>` 之后
   // 一字多音收尾的那个音：只出一个带 `<extend type="stop"/>` 的空 `<lyric>`（延长线画到这里）
   const lyric = (n.lyrics ?? []).map((l) => lyricXml(l)).join("") +
@@ -701,10 +783,12 @@ export function scoreToMusicXml(
   opts: StaffXmlOptions = {},
 ): string {
   currentNoteId = opts.noteId ?? null;
+  withSourceLayout = opts.layout !== false;
   try {
     return scoreToMusicXmlRaw(score, notesOf, opts);
   } finally {
     currentNoteId = null;
+    withSourceLayout = false;
   }
 }
 
@@ -816,7 +900,7 @@ function scoreToMusicXmlRaw(
           const at = score.systems.findIndex((_, sj) => part.scoreStaves.some((ss) => ss.staves[sj]));
           if (at >= 0) {
             const clefs = part.scoreStaves.map((ss) => (ss.staves[at] ? clefXml(rowStartClef(score.systems[at], ss.staves[at]!)) : ""));
-            if (nStaves > 1) attrs += `<staves>${nStaves}</staves>`;
+            if (nStaves > 1) attrs += `<staves>${nStaves}</staves>${PART_SYMBOL}`;
             clefs.forEach((c, k) => {
               if (c) attrs += nStaves > 1 ? c.replace("<clef>", `<clef number="${k + 1}">`) : c;
             });
@@ -875,7 +959,7 @@ function scoreToMusicXmlRaw(
           // 行首的谱号与读音高时用的同一个（`clefFor`）：这一行没认出谱号的沿用上一系统的，不是一律高音谱号
           const clefs = staves.map((st) => (st ? clefXml(rowStartClef(entry, st)) : ""));
           if (clefs.join("|") !== prevClef.join("|")) {
-            if (staves.length > 1) attrs += `<staves>${staves.length}</staves>`;
+            if (staves.length > 1) attrs += `<staves>${staves.length}</staves>${prevClef.length ? "" : PART_SYMBOL}`;
             clefs.forEach((c, k) => {
               if (!c) return;
               attrs += staves.length > 1 ? c.replace("<clef>", `<clef number="${k + 1}">`) : c;

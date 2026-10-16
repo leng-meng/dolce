@@ -88,6 +88,11 @@ export function xmlPos(obj: object | null | undefined): Position | undefined {
   return obj ? readPos(posHost(obj)) : undefined;
 }
 
+/** `<wedge spread>`（tenths，开口那一端的开口高）。 */
+export function wedgeSpread(obj: object | null | undefined): number | undefined {
+  return obj ? attrNum(posHost(obj), "spread") : undefined;
+}
+
 /** `<measure width>`（tenths）。 */
 export function measureWidth(m: Measure): number | undefined {
   return attrNum(surfaceOf(m), "width");
@@ -156,6 +161,19 @@ export function staffDetailsOf(attrs: MeasureAttrs | undefined): { staff?: numbe
     if (po) out.printObject = po !== "no";
     return out;
   });
+}
+
+/** `<attributes>` 里的 `<part-symbol top-staff bottom-staff>`：多谱表声部左侧的符号。没写返回 undefined（规范缺省为 brace）。 */
+export function partSymbolOf(attrs: MeasureAttrs | undefined): { symbol: string; top?: number; bottom?: number } | undefined {
+  const el = attrs ? surfaceOf(attrs) : undefined;
+  const ps = el ? child(el, "part-symbol") : null;
+  if (!ps) return undefined;
+  const out: { symbol: string; top?: number; bottom?: number } = { symbol: (ps.textContent ?? "").trim() || "brace" };
+  const t = ps.getAttribute("top-staff");
+  const b = ps.getAttribute("bottom-staff");
+  if (t) out.top = Number(t);
+  if (b) out.bottom = Number(b);
+  return out;
 }
 
 /** 原文 `<print>` 的系统与谱表间距。 */

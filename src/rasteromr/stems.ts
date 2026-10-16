@@ -241,6 +241,8 @@ export function splitUnisons(notes: StaffNote[], stems: StemInfo[], beams: BeamS
     const n = notes[i];
     if (n.rest || !up.has(n.sym) || !down.has(n.sym) || intoText(n.sym)) continue;
     n.stemUp = true;
+    // 原来那根干的端点不知归哪个声部，两个都不带（排版按缺省长度画）
+    n.stemTip = undefined;
     notes.splice(i + 1, 0, { ...n, stemUp: false, chordExtra: true, lyrics: undefined, chord: undefined });
   }
 }

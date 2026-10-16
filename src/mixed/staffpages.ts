@@ -165,8 +165,10 @@ function placePartAboveStaff(score: StaffLayout, p: PartLayout, mixed: boolean):
         if (t.staff !== 0 || (!t.autoY && !(t.y > 0))) continue;
         // 源谱版面档已放到下方的（`placement="below"` 的力度、文字记号，`placeDynamicsBelow`）不抬回上方
         if (t.autoY && t.y < 0 && t.src?.placement === "below") continue;
+        // 识别稿照原图写了高度的力度（`sourceY`）：源谱版面档里只按它横向跨过的那段轮廓让开，不抬到整行最高处
+        const keepSource = t.sourceY && !!sky;
         // 带坐标的谱：原文高过和弦行的文字也落回和弦那一层（005「（副歌）」用户定：与和弦大致同高），撞上再摞；速度记号不动
-        if (t.y < floor || (!score.autoLayout && st.hasHarmony && !isTempo(t))) t.y = floor;
+        if (!keepSource && (t.y < floor || (!score.autoLayout && st.hasHarmony && !isTempo(t)))) t.y = floor;
         const w = t.width();
         const left = m.xpos() + t.x - (t.justify === LCR.Center ? w / 2 : t.justify === LCR.Right ? w : 0);
         // 横向按墨迹量：全角括号「（」「）」前进宽里一半是空白，按前进宽量「（副歌）」就把旁边的和弦也算成撞上了（008）
@@ -174,6 +176,7 @@ function placePartAboveStaff(score: StaffLayout, p: PartLayout, mixed: boolean):
         const x0 = left + inkL;
         const x1 = left + inkR;
         if (sky && t.autoY && !isTempo(t)) t.y = localFloor(x0, x1);
+        else if (keepSource) t.y = Math.max(t.y, localFloor(x0, x1) - MIXED_TEXT_CLEAR / 2);
         const h = textInkHeight(t);
         for (let again = true; again; ) {
           again = false;

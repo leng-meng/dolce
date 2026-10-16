@@ -78,14 +78,15 @@ export function findWedges(pg: SPage): PObj[] {
  */
 export function wedgeSpans(objs: PObj[]): import("./notations").WedgeSpan[] {
   const out: import("./notations").WedgeSpan[] = [];
-  const span = (tipX: number, tipY: number, x0: number, x1: number): void => {
-    out.push({ type: tipX <= (x0 + x1) / 2 ? "crescendo" : "diminuendo", x0, x1, cy: tipY });
+  const span = (tipX: number, tipY: number, x0: number, x1: number, spread: number): void => {
+    out.push({ type: tipX <= (x0 + x1) / 2 ? "crescendo" : "diminuendo", x0, x1, cy: tipY, ...(spread > 0 ? { spread } : {}) });
   };
   for (let i = 0; i < objs.length; i++) {
     const pts = objs[i].path ? pathPoints(objs[i].path!) : [];
     if (pts.length === 3) {
       const xs = pts.map((p) => p.x);
-      span(pts[1].x, pts[1].y, Math.min(...xs), Math.max(...xs));
+      const ys = pts.map((p) => p.y);
+      span(pts[1].x, pts[1].y, Math.min(...xs), Math.max(...xs), Math.max(...ys) - Math.min(...ys));
       continue;
     }
     const o2 = objs[i + 1];
@@ -99,8 +100,8 @@ export function wedgeSpans(objs: PObj[]): import("./notations").WedgeSpan[] {
     const rightGap = Math.abs(ar.y - br.y);
     const x0 = Math.min(al.x, bl.x);
     const x1 = Math.max(ar.x, br.x);
-    if (leftGap <= rightGap) span(x0, (al.y + bl.y) / 2, x0, x1);
-    else span(x1, (ar.y + br.y) / 2, x0, x1);
+    if (leftGap <= rightGap) span(x0, (al.y + bl.y) / 2, x0, x1, rightGap);
+    else span(x1, (ar.y + br.y) / 2, x0, x1, leftGap);
   }
   return out;
 }

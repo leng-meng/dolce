@@ -631,14 +631,17 @@ function drawWedge(container: Group, obj: Wedge, sys: Sys): void {
   const startInSys = mifL.system === sys;
   const endInSys = mifR.system === sys;
   const firstMif = sys.measures[0];
+  // 端点相对拍位的偏移（`relative-x`）：源谱版面档（识别稿照原图写的）才加，只加在落在本系统的那一端；
+  // 带坐标的原文照原 C++ 工程不加
+  const dx = sys.score.keepBreaks;
   const xL = startInSys
-    ? mifL.getEntPos(obj.startTick.minus(mifL.offset)) + mifL.xpos()
+    ? mifL.getEntPos(obj.startTick.minus(mifL.offset)) + mifL.xpos() + (dx ? obj.dxLeft : 0)
     : firstMif.getEntPos(new Fraction(0));
   const xR = endInSys
-    ? mifR.getEntPos(obj.endTick.minus(mifR.offset)) + mifR.xpos()
+    ? mifR.getEntPos(obj.endTick.minus(mifR.offset)) + mifR.xpos() + (dx ? obj.dxRight : 0)
     : sys.width();
 
-  const h = 15.0 / 2;
+  const h = obj.spread / 2;
   // 真实端点：渐强尖端在 start（高 0）、宽口在 end（高 h），渐弱相反。
   // 落在系统边界的断点不按 tick 插值（否则尖端附近的续接段开度过小），固定取
   // BREAK_FRAC×h，使断开的松叶在续接系统上有明显开口。

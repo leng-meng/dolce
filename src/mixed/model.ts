@@ -456,6 +456,8 @@ export class ChordLayout {
 
   stemLen = 0; // 无符干（全音符）默认 0，与 musicpp 一致；有符干者在 calcStemLen 赋值
   stemUp = true;
+  /** 源谱版面档：原图符干末端的 y（与 `NoteLayout.cy()` 同一坐标，来自 `<stem default-y>`）。符杠组照它定斜度与高低（`BeamGroup.fitSourceTips`） */
+  srcTipY: number | null = null;
   stemExtra = 0; // 跨谱表符杠时符干延伸量（model.hpp stemExtra / styler.cpp calcSlopeLen）
 
   notes: NoteLayout[] = [];
@@ -649,6 +651,13 @@ export class ChordLayout {
       }
       last = n;
     }
+  }
+
+  /** 二度翻到符干另一侧的符头横移一个符头宽（朝上的往右、朝下的往左）。音符 x 要先定好：
+   *  Sibelius 原文在读入时（它的 default-x 不含这一截），自动铺排在 `autoPlaceNotes` 定好 x 之后。 */
+  applyFlipOffset(meta: MetaData): void {
+    const width = smuflWidth(meta, this.sym());
+    for (const nt of this.notes) if (nt.flipped) nt.x += this.stemUp ? width : -width;
   }
 
   static sortByOffset(arr: ChordLayout[]): void {
@@ -1389,6 +1398,10 @@ export class MeasureText extends TextBlock {
   relative = true;
   /** y 是自动铺排给的缺省高度（原文没写 default-y）：混排时要让到简谱层之上（`formatMixedScore`） */
   autoY = false;
+  /** 力度记号原文写了 `default-y`（识别稿照原图的位置）：自动铺排不改成缺省高度，只在撞上东西时推开 */
+  sourceY = false;
+  /** 力度记号原文写了字号：自动铺排不统一成歌词字号 */
+  sourceSize = false;
   /** `ScoreDoc` 里对应的 `<direction>`（导出时把排好的高度写回，`engrave.ts`） */
   src: DocDirection | null = null;
 
@@ -1399,6 +1412,9 @@ export class MeasureText extends TextBlock {
 }
 
 // ---------------- BeamGroup ----------------
+
+/** 照原图端点画的符杠组，最短的干至少这么长（tenths；一层符杠时，每多一层加 8） */
+const SOURCE_BEAM_MIN_STEM = 25;
 
 export class BeamGroup {
   chords: ChordLayout[] = [];
@@ -1430,7 +1446,38 @@ export class BeamGroup {
     const ref = this.chords.find((ch) => !ch.rest) ?? this.chords[0]!;
     for (const ch of this.chords) if (ch.rest) ch.stemUp = ref.stemUp;
     this.doubleDir = this.chords.some((ch) => ch.stemUp !== ref.stemUp);
-    this.format(0);
+    if (!this.fitSourceTips()) this.format(0);
+  }
+
+  /**
+   * 源谱版面档（识别稿）：组里每个音都带原图的符干端点时，符杠照原图——首尾两根干的端点连一条线（斜率同样截在 ±0.3），
+   * 各干补到这条线上；整条线太贴符头（最短的干不到 `SOURCE_BEAM_MIN_STEM`，按层数加长）就整条平移出去。
+   * 音的横向位置重排过，首尾端点照旧、斜度随之变化。两个方向混排、跨谱表的组仍按原公式（`format`）。
+   */
+  private fitSourceTips(): boolean {
+    const sounding = this.chords.filter((ch) => !ch.rest);
+    if (this.doubleDir || sounding.length < 2 || this.crossStaff() || sounding.some((ch) => ch.srcTipY === null)) return false;
+    const a = sounding[0]!, b = sounding[sounding.length - 1]!;
+    const xa = a.stemX(), xb = b.stemX();
+    let slope = xb - xa > 1e-6 ? (b.srcTipY! - a.srcTipY!) / (xb - xa) : 0;
+    slope = Math.max(-0.3, Math.min(0.3, slope));
+    const xm = (xa + xb) / 2, ym = (a.srcTipY! + b.srcTipY!) / 2;
+    const up = a.stemUp;
+    const inc = up ? -1 : 1;
+    const minLen = SOURCE_BEAM_MIN_STEM + Math.max(0, this.levels() - 1) * 8;
+    let short = 0;
+    for (const ch of this.chords) {
+      const y = ym + slope * (ch.stemX() - xm);
+      ch.stemLen = inc * (y - ch.tailNote().cy());
+      short = Math.max(short, minLen - ch.stemLen);
+    }
+    if (short > 0) for (const ch of this.chords) ch.stemLen += short;
+    return true;
+  }
+
+  /** 组里最多几层符杠 */
+  private levels(): number {
+    return Math.max(1, ...this.chords.map((ch) => ch.beams.length));
   }
 
   /** 最小二乘斜率（styler.cpp::leastSquare）。 */
@@ -1730,14 +1777,7 @@ export class PartMeasureLayout {
     for (const ch of this.chords) {
       ch.sort();
       ch.autoFlip();
-      if (sibelius) {
-        for (const nt of ch.notes) {
-          if (nt.flipped) {
-            const width = smuflWidth(meta, ch.sym());
-            nt.x += ch.stemUp ? width : -width;
-          }
-        }
-      }
+      if (sibelius) ch.applyFlipOffset(meta);
     }
 
     const staves = this.part.staves.length;
@@ -2052,6 +2092,8 @@ export class Wedge extends SpanObj {
   autoY = false;
   dxLeft = 0;
   dxRight = 0;
+  /** 开口高（tenths，`<wedge spread>`；缺省 15，同原 C++ 工程） */
+  spread = 15;
 }
 
 /** 踏板线（model.hpp:873 PedalLine）。 */
@@ -2447,6 +2489,8 @@ export class PartGroup {
   number = "";
   barline = false;
   symbol = GroupSymbol.None;
+  /** 单个多谱表声部的 `<part-symbol top-staff bottom-staff>`：符号只括声部内这几行谱（0 基，含两端） */
+  staffRange?: [number, number];
 }
 
 /** 三次贝塞尔 B(t)（t∈[0,1]）在一个坐标分量上的最小值：比较端点与 B'(t)=0 的内部极值点。 */
@@ -2928,7 +2972,8 @@ export class Sys {
     let first = -1;
     let last = -1;
     for (const p of grp.parts) {
-      for (const st of p.staves) {
+      for (const [k, st] of p.staves.entries()) {
+        if (grp.staffRange && (k < grp.staffRange[0] || k > grp.staffRange[1])) continue;
         const stf = st.order;
         if (!this.staves[stf].staffVisible) continue;
         if (first < 0) first = stf;

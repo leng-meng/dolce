@@ -740,6 +740,8 @@ export interface StaffNote {
   dots: number;
   /** 符干朝上。没有符干为 null。 */
   stemUp: boolean | null;
+  /** 符干远离符头那一端的 y（页面单位）：写出成 `<stem default-y>`，排版照原图的符干长。复合字形（符干画在字形里）的音没有 */
+  stemTip?: number;
   /** 符尾/符杠条数。 */
   beams: number;
   /**
@@ -792,10 +794,16 @@ export interface StaffNote {
   /** 与节拍器印在同一条的速度文字（`Andante ♩ = c. 76` 的 `Andante`）：与节拍器写进**同一个** `<direction>`，不拆成两个对象。 */
   tempoText?: string;
   tempoSize?: number;
+  /** 力度记号在原图上的墨迹框（页面单位）：写出成 `default-y` / `relative-x` / `font-size`，排版照原位原大小。见 `attachDynamicTexts` */
+  dynamicBox?: { left: number; right: number; top: number; bottom: number };
   /** 松叶从这个音符**起**（`<wedge type="crescendo|diminuendo">`）。见 `attachWedges`。 */
   wedgeStart?: "crescendo" | "diminuendo";
+  /** 起在这个音上的松叶在原图上的样子（页面单位）：左端 x、中线 y、开口高 */
+  wedgeAt?: { x0: number; cy: number; spread?: number };
   /** 松叶到这个音符**止**（`<wedge type="stop">`）。 */
   wedgeStop?: boolean;
+  /** 止在这个音上的松叶在原图上的右端 x 与（渐强时）开口高（页面单位） */
+  wedgeStopAt?: { x1: number; spread?: number };
   /** 连音（三连音之类）：`actual` 个音占 `normal` 个音的时值。`start` / `stop`：这一组最左、最右的那个音（和弦各音都记），
    *  MusicXML 的 `<tuplet>` 只在这两处写起止（`applyTuplet`）。 */
   tuplet?: { actual: number; normal: number; start?: boolean; stop?: boolean };
@@ -989,7 +997,7 @@ export function buildNotes(
 
     // 复合音符字形自带时值、没有杠可分
     const beam = stem && s.compositeBase === undefined ? beamOf.get(stem) : undefined;
-    out.push({ sym: s, staff: stf, rest, diatonic, step, octave, alter: 0, accidental, duration: base, base, dots: 0, stemUp, beams: nb, ...(beam ? { beam } : {}), x: s.px, voice: 1, slash: s.code.startsWith("noteheadSlash") || undefined });
+    out.push({ sym: s, staff: stf, rest, diatonic, step, octave, alter: 0, accidental, duration: base, base, dots: 0, stemUp, ...(stem ? { stemTip: stem.up ? stem.seg.box.top : stem.seg.box.bottom } : {}), beams: nb, ...(beam ? { beam } : {}), x: s.px, voice: 1, slash: s.code.startsWith("noteheadSlash") || undefined });
   }
   // **先按谱行、再按 x**。只按 x 排会把一页里几行谱的音符横向交织在一起
   // ——顺序一乱，与 GT 的逐音比对就全废（实测准确率卡在两成半）。

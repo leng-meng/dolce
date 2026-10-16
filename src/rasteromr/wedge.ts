@@ -22,6 +22,8 @@ export interface RasterWedge {
   x1: number;
   /** 纵向中心（像素）——挂到哪行谱靠它。 */
   cy: number;
+  /** 宽口那头的开口高（像素，外缘到外缘） */
+  spread?: number;
   contourId: number;
   /** 配对认出来的那一条：另一条臂的 contour（单团认出来的没有这一项）。 */
   pairedId?: number;
@@ -187,6 +189,7 @@ function pairArms(pool: Contour[], map: ContourMap, unit: RasterUnit): RasterWed
         x0: Math.min(a.x0, b.x0),
         x1: Math.max(a.x1, b.x1),
         cy: (a.y0 + a.y1 + b.y0 + b.y1) / 4,
+        spread: openD,
         contourId: a.c.id,
         pairedId: b.c.id,
       });
@@ -323,6 +326,7 @@ function judge(
     x0: xa,
     x1: xb - 1,
     cy: (y0 + y1) / 2,
+    spread: open * unit.space,
     contourId: c.id,
     y0,
     y1,

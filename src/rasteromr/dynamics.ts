@@ -20,6 +20,8 @@ export interface RasterDynamic {
   py: number;
   /** 拼出来的力度文本（`f` / `mf` / `ff` / `mp`…）。 */
   text: string;
+  /** 整串字母的墨迹框（像素） */
+  box?: { left: number; right: number; top: number; bottom: number };
 }
 
 /**
@@ -63,7 +65,7 @@ export function groupDynamics(anchors: Sym[], map: ContourMap, unit: RasterUnit)
     const acy = (a.box.top + a.box.bottom) / 2;
     // `dynamicMP` 是**一个字形就是「mp」**，不必再拼
     if (a.code === "dynamicMP") {
-      out.push({ px: a.box.left, py: acy, text: "mp" });
+      out.push({ px: a.box.left, py: acy, text: "mp", box: { left: a.box.left, right: a.box.right, top: a.box.top, bottom: a.box.bottom } });
       continue;
     }
     // 锚自己是哪个字母：字典把 `m` 也归进 `dynamicForte` 类（实测距离 71~98，
@@ -71,6 +73,8 @@ export function groupDynamics(anchors: Sym[], map: ContourMap, unit: RasterUnit)
     const own = ah >= 2.0 ? "f" : ah <= 1.5 && aw >= 1.4 ? "m" : "p";
     let left = a.box.left;
     let right = a.box.right;
+    let top = a.box.top;
+    let bottom = a.box.bottom;
     const parts: { x: number; ch: string }[] = [{ x: a.box.left, ch: own }];
     const refH = own === "f" ? ah : ah / 0.45; // 锚是 m 时，按 x 高反推那一串的字号
     for (let again = true; again; ) {
@@ -88,6 +92,8 @@ export function groupDynamics(anchors: Sym[], map: ContourMap, unit: RasterUnit)
         parts.push({ x: b.x, ch });
         left = Math.min(left, b.x);
         right = Math.max(right, b.x + b.w);
+        top = Math.min(top, b.y);
+        bottom = Math.max(bottom, b.y + b.h);
         again = true;
       }
     }
@@ -95,7 +101,7 @@ export function groupDynamics(anchors: Sym[], map: ContourMap, unit: RasterUnit)
     for (const b of sorted) if (b !== a && b.box.left >= left - 1 && b.box.right <= right + 1) used.add(b);
     const text = parts.sort((p, q) => p.x - q.x).map((p) => p.ch).join("");
     if (!VALID.has(text)) continue; // 拼不出一个像样的力度就整个丢掉（宁可少，不可编）
-    out.push({ px: left, py: acy, text });
+    out.push({ px: left, py: acy, text, box: { left, right, top, bottom } });
   }
   return out;
 }
