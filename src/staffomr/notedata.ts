@@ -1752,6 +1752,7 @@ export interface BarCheck {
  * 在曲首；与前或后一个同样的半截小节合起来正好一整小节；在曲末、与曲首的弱起合起来正好一小节；
  * 挨着段落界（右端双纵线/反复线，或紧跟在它后面）。
  * 上一行行末、这一行行首两个小节都不满的，是被系统换行劈开的一个小节，后半截记 `Bar.splitTail`。
+ * 首页首系统的第一小节不满（整拍）的是曲首弱起，记 `Bar.pickup`（只认首系统：序列按系统行数分，别的行数的序列头在曲中）。
  */
 export function markSplitBars(pages: { page: SPage; bars: BarCheck[] }[]): void {
   const seqs = new Map<string, BarCheck[]>();
@@ -1782,6 +1783,7 @@ export function markSplitBars(pages: { page: SPage; bars: BarCheck[] }[]): void 
       if (bar && b.index === 0 && !edge && prev && prev.staff !== b.staff && prev.index === prev.staff.bars.length - 1 && short(prev) && short(b))
         bar.splitTail = true;
       if (!part(b)) return;
+      if (bar && b.index === 0 && pages[0]?.page.systems[0]?.staves.includes(b.staff)) bar.pickup = true;
       if (i === 0 || edge || (part(prev) && pair(prev, b)) || (part(next) && pair(b, next)) || (i === seq.length - 1 && part(seq[0]) && pair(seq[0], b))) b.split = true;
     });
 }

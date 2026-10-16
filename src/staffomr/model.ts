@@ -434,6 +434,9 @@ export class Bar {
   endingStop = false;
   /** 行首这一小节是上一行行末那个半截的后半（两半合起来正好一整小节，见 `markSplitBars`）：写出 `implicit="yes"`。 */
   splitTail = false;
+  /** 曲首的弱起小节（首页首系统第一小节、不满拍且是整拍数，见 `markSplitBars`）：写出 `implicit="yes"`，
+   *  没印的行与整小节休止按它的实长写（不按拍号写满，不然弱起播成一整小节、全曲晚几拍）。 */
+  pickup = false;
   constructor(staff: Staff) {
     this.staff = staff;
   }

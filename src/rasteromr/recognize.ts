@@ -348,6 +348,10 @@ const LYRIC_ARC_REACH = 1.5;
 const TEXT_ARC_PAD = 0.5;
 /** 免判的弧离谱表（上下线）不过这么多格。 */
 const TEXT_ARC_STAFF = 2;
+/** 跨小节线的延音线：在小节线左右这么多格的窗口里取修补图上连着的墨（弧两头各一个八分的距离）。 */
+const BAR_TIE_REACH = 2;
+/** 跨小节线的延音线两端各伸出小节线几格。 */
+const BAR_TIE_CROSS = 0.3;
 /** 按游程去线图上拼弧：两截之间的空隙上限、每截的高度上限（格）。弧顶贴线那段实测 0.3~1.1 格。 */
 const RUN_BRIDGE = 1.2;
 const RUN_PIECE_H = 1;
@@ -4981,12 +4985,24 @@ export async function recognizeRasterPage(
   // 修补图上的一块，组成它的去线图碎块全是候选（无主或只被符杠、歌词、谱线认过）才整块判；
   // 连上了别的东西（符头、干）的，退回去线图上一块一块判（同以前）
   { const D = (globalThis as any).process?.env?.SLDBG?.split(",").map(Number); if (D) for (const c of cmap.contours) { const b = c.bbox; if (b.x + b.w < D[0] || b.x > D[2] || b.y + b.h < D[1] || b.y > D[3]) continue; console.log("DBG", c.id, b, "w", c.w.toFixed(2), "h", c.h.toFixed(2), "cmp", c.compact.toFixed(3), "area", c.area, ledger.claimsOf(c.id).map((k) => k.by).join("|"), "arc?", findRasterSlurs(cmap, unit, [c], 0, repaired).map((a) => [a.lx, a.ly, a.rx, a.ry])); } }
+  // 行首行尾的窗口：各行谱第一个音之前、最后一个音之后那段（半截弧只在这里找，同一处起笔的分叉也只在这里拆）
+  const edgeWins: Rect[] = [];
+  for (const st of pg.staves) {
+    const sp = unit.space;
+    const ns = notes.filter((n) => n.staff === st && !n.rest);
+    if (!ns.length) continue;
+    const first = Math.min(...ns.map((n) => n.sym.box.left)), last = Math.max(...ns.map((n) => n.sym.box.right));
+    const y = st.box.top - sp * STUB_REACH, h = st.box.bottom - st.box.top + sp * STUB_REACH * 2;
+    edgeWins.push({ x: first - sp * STUB_LEAD, y, w: sp * (STUB_LEAD + 0.5), h });
+    edgeWins.push({ x: last - sp * 0.5, y, w: st.box.right - last + sp * 1.5, h });
+  }
+  const inEdgeWin = (b: Rect) => edgeWins.some((w) => b.x >= w.x && b.x + b.w <= w.x + w.w && b.y >= w.y && b.y + b.h <= w.y + w.h);
   const candIds = new Set([...ledger.unclaimed(), ...beamOnly].map((c) => c.id));
   const cand = candidateMap(cmap, rlayer, (id) => candIds.has(id));
   const whole = cand.merged;
   /** 整块判过的修补块里的去线碎块，不再单独判 */
   const covered = new Set(whole.flatMap((rc) => cand.parts.get(rc.id)!));
-  const slurs = findRasterSlurs(cand.map, unit, whole, pg.objs.length + pg.segs.length + 1000);
+  const slurs = findRasterSlurs(cand.map, unit, whole, pg.objs.length + pg.segs.length + 1000, undefined, undefined, inEdgeWin);
   // 修补块判成了弧的，碎块已归它；没判成的修补块里的碎块也照旧单独判一次（补线连上了别的细墨，整块不像弧）
   const wholeHit = new Set(slurs.map((sl) => `${sl.obj.box.left},${sl.obj.box.top}`));
   const singles = [...ledger.unclaimed(), ...beamOnly].filter((c) => {
@@ -4994,25 +5010,14 @@ export async function recognizeRasterPage(
     const rc = whole.find((q) => cand.parts.get(q.id)!.includes(c.id))!;
     return !wholeHit.has(`${rc.bbox.x},${rc.bbox.y}`);
   });
-  slurs.push(...findRasterSlurs(cmap, unit, singles, pg.objs.length + pg.segs.length + 1000 + slurs.length, repaired));
+  slurs.push(...findRasterSlurs(cmap, unit, singles, pg.objs.length + pg.segs.length + 1000 + slurs.length, repaired, undefined, inEdgeWin));
   // 歌词账上来的块：修补块里含着歌词碎块的也算
   for (const rc of whole) if (cand.parts.get(rc.id)!.some((id) => ledger.claimsOf(id).some((k) => k.by === "lyric"))) lyricArcBoxes.add(`${rc.bbox.x},${rc.bbox.y}`);
-  // 跨行弧的半截（`slur.ts::findStubSlurs`）：只看各行谱第一个音之前、最后一个音之后那段（行首行尾）
+  // 跨行弧的半截（`slur.ts::findStubSlurs`）：只看各行谱第一个音之前、最后一个音之后那段（行首行尾，`inEdgeWin`）
   {
-    const sp = unit.space;
-    const wins: Rect[] = [];
-    for (const st of pg.staves) {
-      const ns = notes.filter((n) => n.staff === st && !n.rest);
-      if (!ns.length) continue;
-      const first = Math.min(...ns.map((n) => n.sym.box.left)), last = Math.max(...ns.map((n) => n.sym.box.right));
-      const y = st.box.top - sp * STUB_REACH, h = st.box.bottom - st.box.top + sp * STUB_REACH * 2;
-      wins.push({ x: first - sp * STUB_LEAD, y, w: sp * (STUB_LEAD + 0.5), h });
-      wins.push({ x: last - sp * 0.5, y, w: st.box.right - last + sp * 1.5, h });
-    }
-    const inWin = (b: Rect) => wins.some((w) => b.x >= w.x && b.x + b.w <= w.x + w.w && b.y >= w.y && b.y + b.h <= w.y + w.h);
     const taken = slurs.map((sl) => sl.obj.box);
     const free = (b: Rect) => !taken.some((t) => b.x < t.right && b.x + b.w > t.left && b.y < t.bottom && b.y + b.h > t.top);
-    const cands = [...ledger.unclaimed(), ...beamOnly].filter((c) => inWin(c.bbox) && free(c.bbox));
+    const cands = [...ledger.unclaimed(), ...beamOnly].filter((c) => inEdgeWin(c.bbox) && free(c.bbox));
     slurs.push(...findStubSlurs(cmap, unit, cands, pg.objs.length + pg.segs.length + 1000 + slurs.length, repaired));
   }
   for (const sl of slurs) ledger.claim({ x: sl.obj.box.left, y: sl.obj.box.top, w: sl.obj.box.right - sl.obj.box.left, h: sl.obj.box.bottom - sl.obj.box.top }, "slur");
@@ -5044,6 +5049,53 @@ export async function recognizeRasterPage(
     // 小节线那团也看：跨小节线的延音线粘在线上
     const groupsWithHeads = cmap.contours.filter((c) => ledger.claimsOf(c.id).some((k) => /^(head|stack|cluster):|^seg:BarLine$/.test(k.by)));
     const fused = findFusedSlurs(cmap, unit, groupsWithHeads, headBoxes, pg.objs.length + pg.segs.length + 1000 + slurs.length);
+    // 跨小节线的短延音线在**修补图**上再看一次：弧顶压线，去线时左端断开一小截，粘在小节线上的只剩半条，拱不起来
+    //（破碎 p2 m15–16、p3 m19–20 钢琴右手：只剩两格、拱 0.15 格）。修补图上小节线还连着符头、干，整块进不了候选，
+    // 所以只在小节线左右 `BAR_TIE_REACH` 格的窗口里，从小节线的像素出发按八邻接把修补图上连着的墨填出来，当一团再抠
+    const known = [...slurs, ...fused];
+    // 已认过的同一条弧不收：两端都在半格以内算同一条（外面罩着圆滑线时两条盒子重叠，不能按盒重叠判）
+    const same = (a: SlurArc) => known.some((b) => Math.abs(a.lx - b.lx) < unit.space * 0.5 && Math.abs(a.rx - b.rx) < unit.space * 0.5 && Math.abs(a.ly - b.ly) < unit.space * 0.5);
+    const synth = new Int32Array(cmap.w * cmap.h);
+    const SYN = -1;
+    for (const c of cmap.contours) {
+      if (!ledger.claimsOf(c.id).some((k) => k.by === "seg:BarLine")) continue;
+      const reach = Math.round(unit.space * BAR_TIE_REACH);
+      const x0 = Math.max(0, c.bbox.x - reach), x1 = Math.min(cmap.w, c.bbox.x + c.bbox.w + reach);
+      const y0 = c.bbox.y, y1 = c.bbox.y + c.bbox.h;
+      const stack: number[] = [];
+      for (let y = y0; y < y1; y++) for (let x = c.bbox.x; x < c.bbox.x + c.bbox.w; x++) {
+        const k = y * cmap.w + x;
+        if (cmap.labels[k] === c.id && repaired.data[k] && synth[k] !== SYN) (synth[k] = SYN), stack.push(k);
+      }
+      let bx0 = x1, bx1 = x0, by0 = y1, by1 = y0;
+      const filled: number[] = [];
+      while (stack.length) {
+        const k = stack.pop()!;
+        filled.push(k);
+        const x = k % cmap.w, y = (k - x) / cmap.w;
+        bx0 = Math.min(bx0, x), bx1 = Math.max(bx1, x), by0 = Math.min(by0, y), by1 = Math.max(by1, y);
+        for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
+          const xx = x + dx, yy = y + dy;
+          if (xx < x0 || xx >= x1 || yy < y0 || yy >= y1) continue;
+          const q = yy * cmap.w + xx;
+          if (repaired.data[q] && synth[q] !== SYN) (synth[q] = SYN), stack.push(q);
+        }
+      }
+      const blob = { ...c, id: SYN, bbox: { x: bx0, y: by0, w: bx1 - bx0 + 1, h: by1 - by0 + 1 } };
+      const map = { ...cmap, labels: synth };
+      // 两端要分在小节线两边、各伸出 `BAR_TIE_CROSS` 格：只碰到小节线的是贴着它的符尾（万福泉源歌 m0 八分音符的旗）。
+      // 小节线的位置取这块里墨最多的那一列（块的包围盒常连着弧的一半，比线宽得多）
+      let barX = c.bbox.x, most = -1;
+      for (let x = c.bbox.x; x < c.bbox.x + c.bbox.w; x++) {
+        let k = 0;
+        for (let y = y0; y < y1; y++) if (cmap.labels[y * cmap.w + x] === c.id) k++;
+        if (k > most) (most = k), (barX = x);
+      }
+      const crosses = (a: SlurArc) => a.lx < barX - unit.space * BAR_TIE_CROSS && a.rx > barX + unit.space * BAR_TIE_CROSS;
+      for (const sl of findFusedSlurs(map, unit, [blob], headBoxes, pg.objs.length + pg.segs.length + 1000 + slurs.length + fused.length, () => true))
+        if (crosses(sl) && !same(sl)) fused.push(sl), known.push(sl);
+      for (const k of filled) synth[k] = 0;
+    }
     for (const sl of fused) ledger.claim({ x: sl.obj.box.left, y: sl.obj.box.top, w: sl.obj.box.right - sl.obj.box.left, h: sl.obj.box.bottom - sl.obj.box.top }, "slur:fused");
     slurs.push(...fused);
   }
@@ -5180,7 +5232,17 @@ export async function recognizeRasterPage(
   for (let i = slurs.length - 1; i >= 0; i--) if (runArcs.has(slurs[i]) && (!slurs[i].from || !slurs[i].to || slurs[i].from === slurs[i].to)) slurs.splice(i, 1);
   reconnectSlurs(pg, slurs);
   attachEdgeSlurStarts(slurs, notes, unit.space, new Set(index > 1 ? (pg.systems[0]?.staves ?? []) : []));
-  const chordTies = tieChords(slurs, notes, unit.space);
+  const chordTies = tieChords(slurs, notes, unit.space, (x0, x1, y0, y1) => {
+    const { bin } = raster;
+    const xa = Math.max(0, Math.round(x0)), xb = Math.min(bin.w, Math.round(x1));
+    const ya = Math.max(0, Math.round(y0)), yb = Math.min(bin.h - 1, Math.round(y1));
+    const rows: number[] = [];
+    for (let y = ya; y <= yb; y++) if (!gridYs.some((ly) => Math.abs(ly - y) <= unit.lineThick)) rows.push(y);
+    if (xb <= xa || !rows.length) return 0;
+    let hit = 0;
+    for (let x = xa; x < xb; x++) if (rows.some((y) => bin.data[y * bin.w + x])) hit++;
+    return hit / (xb - xa);
+  });
   // 弧号「页码.页内序号」（页码按 `pageSeq` 数）：只当配对的键用，跨页不能撞号
   let slurSeq = 0;
   markSlurNotes(slurs, opts.pageSeq !== undefined ? () => `${opts.pageSeq! + 1}.${++slurSeq}` : undefined);

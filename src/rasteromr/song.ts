@@ -229,7 +229,7 @@ export async function recognizeRasterSong(
   const credits = (header ?? []).map(({ text, type, justify, size, box }) => ({ text, type, justify, box, ...(headerPage ? { size: pageTextPt(headerPage, size) } : {}) }));
   // 没给标题（编辑器里打开的图、PDF）就拿页眉的头一个标题
   const title = opts.title ?? credits.find((c) => c.type === "title")?.text;
-  const xml = scoreToMusicXml(score, notesOf, { title, credits, ...(noteId ? { noteId } : {}) });
+  const xml = scoreToMusicXml(score, notesOf, { title, credits, crossPageTies: true, ...(noteId ? { noteId } : {}) });
   stats.systems = score.systems.length;
   stats.parts = score.parts.length;
   return {
@@ -237,12 +237,12 @@ export async function recognizeRasterSong(
     assignment: () => score.systems.map((e, si) => e.sys.staves.map((st) => score.scoreStaves.findIndex((ss) => ss.staves[si] === st))),
     rebuild: (slots) => {
       score = buildScore(entries, { slots, lyricsBelow });
-      return { xml: scoreToMusicXml(score, notesOf, { title, credits, ...(noteId ? { noteId } : {}) }), score };
+      return { xml: scoreToMusicXml(score, notesOf, { title, credits, crossPageTies: true, ...(noteId ? { noteId } : {}) }), score };
     },
     restructure: (op) => {
       if (!restructureSystems(entries, op)) return null;
       score = buildScore(entries, { lyricsBelow, profileOf });
-      return { xml: scoreToMusicXml(score, notesOf, { title, credits, ...(noteId ? { noteId } : {}) }), score };
+      return { xml: scoreToMusicXml(score, notesOf, { title, credits, crossPageTies: true, ...(noteId ? { noteId } : {}) }), score };
     },
   };
 }

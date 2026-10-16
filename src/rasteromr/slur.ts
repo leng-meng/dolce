@@ -41,15 +41,95 @@ const SPREAD_MAX = 0.6;
  * @param only 只看这些 contour（传账本里**无主**的那些）。
  * @param nextId 造假 `PObj` 用的起始 id（与页面里其它对象别撞号）。
  */
-export function findRasterSlurs(map: ContourMap, unit: RasterUnit, only: Contour[], nextId: number, mask?: Binary, thinMean = THIN_MEAN): SlurArc[] {
+/** `forkWin`：拆分叉（`splitFork`）拆出来的那一截要整个落在这里（行首行尾的窗口）；不给就不拆 */
+export function findRasterSlurs(
+  map: ContourMap, unit: RasterUnit, only: Contour[], nextId: number, mask?: Binary, thinMean = THIN_MEAN,
+  forkWin?: (r: Rect) => boolean,
+): SlurArc[] {
   const out: SlurArc[] = [];
   for (const c of only) {
     if (c.w < MIN_W || c.w > MAX_W || c.h > MAX_H) continue;
     if (c.compact > MAX_COMPACT && c.area > c.bbox.w * unit.space * thinMean) continue;
-    const arc = judgeArc(map, c, unit, nextId + out.length, mask);
-    if (arc) out.push(arc);
+    const ink = (x: number, y: number) => map.labels[y * map.w + x] === c.id && (!mask || mask.data[y * mask.w + x] === 1);
+    const arc = judgeArcBox(c.bbox, ink, unit, nextId + out.length);
+    if (!arc) continue;
+    const two = forkWin ? splitFork(c.bbox, ink, unit, arc, nextId + out.length, forkWin) : null;
+    if (two) out.push(...two);
+    else out.push(arc);
   }
   return out;
+}
+
+// ── 同一个起点分出来的两条弧 ─────────────────────────────────────────────────
+//
+// 行首一条跨行延音线的后半截与一条圆滑线从同一处起笔（谱号调号之后），延音线短短一截收在第一个音底下，
+// 圆滑线接着往后走，两条墨在起头那里是一块（破碎 p3 m17 钢琴右手：E4 延音线的后半截 + E4…F4 圆滑线），整块判成一条圆滑线，
+// 延音线的半截就没了。一头有一段（不短于 `FORK_MIN` 格）逐列正好两段墨、靠音符那一段走到头断了，
+// 就把那一段（连同它前面两条共用的起头）拆出来单判一条，剩下的是主弧；两条都过弧线那几道闸才拆。
+// 只在行首行尾拆（拆出来的那截整个落在调用方给的窗口里）：行中间的圆滑线贴着歌词、符尾的地方也有两段墨（高举主大能 m2）
+
+/** 分叉段至少多宽（格）。 */
+const FORK_MIN = 1;
+/** 分叉段离弧的一头不超过全宽的几成。 */
+const FORK_EDGE = 0.4;
+/** 拆出来的那一截的对象 id 偏移（只要不与同一批撞号）。 */
+const SPLIT_ID = 100000;
+
+function splitFork(b: Rect, ink: (x: number, y: number) => boolean, unit: RasterUnit, arc: SlurArc, id: number, win: (r: Rect) => boolean): SlurArc[] | null {
+  const sp = unit.space;
+  // 逐列墨段
+  const runs: [number, number][][] = [];
+  for (let x = b.x; x < b.x + b.w; x++) {
+    const col: [number, number][] = [];
+    let y0 = -1;
+    for (let y = b.y; y <= b.y + b.h; y++) {
+      const on = y < b.y + b.h && ink(x, y);
+      if (on && y0 < 0) y0 = y;
+      if (!on && y0 >= 0) col.push([y0, y - 1]), (y0 = -1);
+    }
+    runs.push(col);
+  }
+  const W = runs.length;
+  // 两段墨的连续列，挨着弧的一头（左头或右头）
+  const spans: [number, number][] = [];
+  for (let i = 0; i < W; ) {
+    if (runs[i]!.length !== 2) {
+      i++;
+      continue;
+    }
+    let j = i;
+    while (j + 1 < W && runs[j + 1]!.length === 2) j++;
+    spans.push([i, j]);
+    i = j + 1;
+  }
+  for (const [i0, i1] of spans) {
+    if (i1 - i0 + 1 < sp * FORK_MIN) continue;
+    const left = i1 < W * FORK_EDGE, right = i0 > W * (1 - FORK_EDGE);
+    if (!left && !right) continue;
+    // 靠音符那一段：弧在下方时是上面那段（y 小），弧在上方时是下面那段
+    const inner = (col: [number, number][]) => (arc.above ? col[1]! : col[0]!);
+    // 分叉段往弧中间那侧外面一列只剩一段墨：靠音符那条在那儿断了
+    const past = left ? i1 + 1 : i0 - 1;
+    if (past < 0 || past >= W || runs[past]!.length !== 1) continue;
+    const branch = new Set<number>();
+    for (let i = i0; i <= i1; i++) {
+      const [y0, y1] = inner(runs[i]!);
+      for (let y = y0; y <= y1; y++) branch.add(y * 100000 + b.x + i);
+    }
+    // 共用的起头（弧端到分叉段之间）两条都算
+    const shared = left ? [0, i0 - 1] : [i1 + 1, W - 1];
+    const sharedInk = (x: number, y: number) => x - b.x >= shared[0]! && x - b.x <= shared[1]! && ink(x, y);
+    const bx0 = left ? b.x : b.x + i0, bx1 = left ? b.x + i1 : b.x + W - 1;
+    if (!win({ x: bx0, y: b.y, w: bx1 - bx0 + 1, h: b.h })) continue;
+    const twig = judgeArcBox(
+      { x: bx0, y: b.y, w: bx1 - bx0 + 1, h: b.h },
+      (x, y) => branch.has(y * 100000 + x) || sharedInk(x, y), unit, id + SPLIT_ID, STUB_BOW_MIN, STUB_ONE_RUN,
+    );
+    const main = judgeArcBox(b, (x, y) => ink(x, y) && !branch.has(y * 100000 + x), unit, id);
+    if (!twig || !main || twig.above !== arc.above || main.above !== arc.above) continue;
+    return [main, twig];
+  }
+  return null;
 }
 
 // ── 跨行弧的半截 ───────────────────────────────────────────────────────────
@@ -58,17 +138,20 @@ export function findRasterSlurs(map: ContourMap, unit: RasterUnit, only: Contour
 // 只有一格来宽、拱得也浅（半条弧），过不了 `MIN_W` 与 `BOW_MIN`（破碎 p2 第三系统钢琴右手开头 A4 下方两截，1.17 / 1.23 格）。
 // 只在行首行尾那段窗口里（调用方给）放宽这两道闸。
 
-/** 半截弧的宽度下限、拱的下限（格）。 */
-const STUB_MIN_W = 0.8;
+/** 半截弧的宽度下限、拱的下限（格）。行尾的延音线头只有半格多宽（破碎 p2 m16 钢琴右手 E4，0.64 格），下限 0.6 */
+const STUB_MIN_W = 0.6;
 const STUB_BOW_MIN = 0.08;
 /** 半截弧逐列一段墨的占比下限：贴着谱线的那截去线后有几列断成两段（同上，下方那截压在第五线上）。 */
 const STUB_ONE_RUN = 0.6;
+/** 半截弧的平均厚度上限（格）：行尾那截延音线不到一格宽、贴着谱线，去线后剩的块又短又尖（破碎 p2 m16 钢琴右手 E4，0.64 格宽、平均厚 0.28 格），
+ *  整条弧的 `THIN_MEAN` 卡得住它 */
+const STUB_THIN_MEAN = 0.3;
 
 export function findStubSlurs(map: ContourMap, unit: RasterUnit, only: Contour[], nextId: number, mask?: Binary): SlurArc[] {
   const out: SlurArc[] = [];
   for (const c of only) {
     if (c.w < STUB_MIN_W || c.w >= MIN_W * 2 || c.h > 1.5) continue;
-    if (c.compact > MAX_COMPACT && c.area > c.bbox.w * unit.space * THIN_MEAN) continue;
+    if (c.compact > MAX_COMPACT && c.area > c.bbox.w * unit.space * STUB_THIN_MEAN) continue;
     const arc = judgeArc(map, c, unit, nextId + out.length, mask, STUB_BOW_MIN, STUB_ONE_RUN);
     if (arc) out.push(arc);
   }
@@ -163,18 +246,25 @@ const HEAD_PAD = 0.2;
 /** 粘连弧的宽度下限、拱的下限（格）：抠剩下的碎墨（符尾、字的笔画）比独立的弧多，闸收紧一档。 */
 const FUSED_MIN_W = 2.5;
 const FUSED_BOW_MIN = 0.35;
+/** 粘在小节线上的弧的宽度下限（格）：跨小节线连两个八分的延音线只有两格多，左端去线时还常断掉一小截
+ *（破碎 p2 m15–16 钢琴右手 G4）。只给修补图上的小节线那团用（调用方 `barOnly`）：那团墨里没有符尾、字的笔画，放宽不招碎墨 */
+const FUSED_BAR_MIN_W = 1.5;
 /** 竖笔抠掉后弧上补回的缝宽上限（格）：符干、小节线两三个像素。 */
 const BRIDGE_GAP = 0.25;
 
 /**
  * 从音符那组墨里抠出粘连的弧。`groups` 是要看的 contour（有符头认领、够宽的），`heads` 是全页符头盒。
  */
-export function findFusedSlurs(map: ContourMap, unit: RasterUnit, groups: Contour[], heads: readonly Rect[], nextId: number): SlurArc[] {
+export function findFusedSlurs(
+  map: ContourMap, unit: RasterUnit, groups: Contour[], heads: readonly Rect[], nextId: number,
+  barOnly: (c: Contour) => boolean = () => false,
+): SlurArc[] {
   const sp = unit.space;
   const out: SlurArc[] = [];
   for (const c of groups) {
     const b = c.bbox;
-    if (b.w < sp * FUSED_MIN_W) continue;
+    const minW = sp * (barOnly(c) ? FUSED_BAR_MIN_W : FUSED_MIN_W);
+    if (b.w < minW) continue;
     const keep = new Uint8Array(b.w * b.h);
     for (let x = 0; x < b.w; x++) {
       let y = 0;
@@ -216,7 +306,7 @@ export function findFusedSlurs(map: ContourMap, unit: RasterUnit, groups: Contou
     const lab = new Int32Array(b.w * b.h);
     for (const { id, bbox: bb, area } of connectedComponents({ w: b.w, h: b.h, data: keep }, 0, lab)) {
       const w = bb.w, h = bb.h;
-      if (w < sp * FUSED_MIN_W || h > sp * MAX_H || area > w * sp * THIN_RUN * 1.5) continue;
+      if (w < minW || h > sp * MAX_H || area > w * sp * THIN_RUN * 1.5) continue;
       const box: Rect = { x: b.x + bb.x, y: b.y + bb.y, w, h };
       const arc = judgeArcBox(box, (x, y) => lab[(y - b.y) * b.w + x - b.x] === id, unit, nextId + out.length);
       if (!arc) continue;

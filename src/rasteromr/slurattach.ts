@@ -7,6 +7,9 @@ import { validateSlurNote, type SlurArc } from "../staffomr/slur";
 // 剩下认得出的常只有最外侧那条（望十架 p3 m29–30 钢琴右手）。而这条弧挂端点按最近的符头挑，常挂到和弦里别的音上，成了圆滑线。
 // 两件事：① 弧两头都在和弦上、两边有共同的音级、弧近水平，改挂到最外侧的共同音（弧在下取最低、在上取最高），判延音线；
 // ② 两边音级完全相同（两个音以上）、已有一条延音线，其余同音也补上（返回要补的对，`markSlurNotes` 之后打标记）。
+//    **补之前要有证据**：同一段上另有一条弧，或在原图上验墨——两个和弦之间、那个音上下各 `CHORD_TIE_BAND` 格的带里（谱线、加线那几行不算）有墨的列要过 `CHORD_TIE_INK`。
+//    印了却认不出的延音线照样留着碎墨（望十架那几截）；排版软件只印最外侧一条的（破碎 p5 m49 钢琴左手八度只连下面的 D2、
+//    p12 m108 右手全音符和弦只连顶音），和弦之间是白的，补上就多出几条延音线、MIDI 里少起几个音。
 
 /** 弧两端纵向差的上限（格）：延音线是平的。 */
 const CHORD_TIE_DY = 0.6;
@@ -14,7 +17,34 @@ const CHORD_TIE_DY = 0.6;
 /** 改挂时弧端离那个音外缘的上限（格）。 */
 const CHORD_TIE_REACH = 1;
 
-export function tieChords(slurs: SlurArc[], notes: StaffNote[], sp: number): [StaffNote, StaffNote][] {
+/** 验墨带：音头中心上下各几格。 */
+const CHORD_TIE_BAND = 0.7;
+
+/** 验墨带：和弦最外侧那个音往外伸几格（它的延音线画在和弦外面，弧腹离头一格多）。 */
+const CHORD_TIE_OUTER = 2.5;
+
+/** 验墨：和弦之间有墨的列至少占几成。 */
+const CHORD_TIE_INK = 0.5;
+
+/** 同一段上的另一条弧：左右各放几格、至少有这条的几成长。 */
+const CHORD_TIE_TWIN = 1.5;
+const CHORD_TIE_TWIN_LEN = 0.3;
+const CHORD_TIE_TWIN_R = 3;
+
+/** `inkCols(x0, x1, y0, y1)`：原图 [x0, x1) 列里，[y0, y1] 行（谱线行除外）有墨的列占几成。不给就不验 */
+export function tieChords(
+  slurs: SlurArc[], notes: StaffNote[], sp: number,
+  inkCols?: (x0: number, x1: number, y0: number, y1: number) => number,
+): [StaffNote, StaffNote][] {
+  /** `outer`：-1 / 1 = 这个音是和弦里最上 / 最下那个、找到的那条在另一头：它的延音线画在和弦外侧，带子往外伸到 `CHORD_TIE_OUTER` 格
+   *（望十架 p8 m60 两个全音符的和弦，上面的音延音线在上、下面的音在下） */
+  const inked = (a: StaffNote, b: StaffNote, outer: number) => {
+    if (!inkCols) return true;
+    const yc = (a.sym.box.top + a.sym.box.bottom) / 2;
+    const x0 = a.sym.box.right + sp * 0.2, x1 = b.sym.box.left - sp * 0.2;
+    const up = outer < 0 ? CHORD_TIE_OUTER : CHORD_TIE_BAND, down = outer > 0 ? CHORD_TIE_OUTER : CHORD_TIE_BAND;
+    return x1 <= x0 || inkCols(x0, x1, yc - sp * up, yc + sp * down) >= CHORD_TIE_INK;
+  };
   const column = (n: StaffNote): StaffNote[] =>
     notes.filter((m) => !m.rest && !m.grace && m.staff === n.staff && (m.group === n.group || Math.abs(m.x - n.x) < sp * 1.2));
   const out: [StaffNote, StaffNote][] = [];
@@ -23,6 +53,30 @@ export function tieChords(slurs: SlurArc[], notes: StaffNote[], sp: number): [St
     if (!from || !to || from === to || from.staff !== to.staff || to.x <= from.x) continue;
     if (Math.abs(sl.ly - sl.ry) > sp * CHORD_TIE_DY) continue;
     const A = column(from), B = column(to);
+    // ⓪ 一头单音、一头和弦，两头相邻（中间这行谱上没有别的音），单音那个音级在和弦里：弧挂到了和弦里别的音上，改挂共同音、判延音线。
+    // 二度和弦的音错开排，弧从错到干另一侧的头起（破碎 p5 m55–56 钢琴右手 F4/G4 → F4，弧高出头两格，规则 ① 的「贴着」过不了），
+    // 跨小节线的那几处同此（m59、m74、m93）
+    if (!sl.tie && (A.length < 2) !== (B.length < 2)) {
+      const single = A.length < 2 ? from : to;
+      const chord = A.length < 2 ? B : A;
+      const right = Math.max(...A.map((n) => n.x)), left = Math.min(...B.map((n) => n.x));
+      const between = notes.some((m) => !m.rest && !m.grace && m.staff === from.staff && m.x > right + sp * 0.3 && m.x < left - sp * 0.3);
+      // 只管**二度**：共同音与弧挂着的那头差一个音级（挤在一起的两个头，里面那个的延音线没地方画，画到和弦外面去了）。
+      // 三度以上的和弦里每个音的延音线都画得下，弧挂在外侧那个音上就是它自己的圆滑线（新编赞美诗 073 m20 F4/A4 → A4 是 F4→A4 的圆滑线）。
+      // 还得同一个声部：同一个和弦组、干与单音同向（闭合谱两个声部共一行，「和弦」常是女高女低各一个音，011 m25）
+      const end = single === from ? to : from;
+      const twin = chord.find(
+        (n) =>
+          n.diatonic === single.diatonic && n !== single && Math.abs(n.diatonic - end.diatonic) <= 1 && n.group === end.group &&
+          (n.stemUp === null || single.stemUp === null || n.stemUp === single.stemUp),
+      );
+      if (!between && twin) {
+        if (single === from) sl.to = twin;
+        else sl.from = twin;
+        sl.tie = true;
+      }
+      continue;
+    }
     if (A.length < 2 || B.length < 2) continue;
     const dA = new Set(A.map((n) => n.diatonic)), dB = new Set(B.map((n) => n.diatonic));
     const common = [...dA].filter((d) => dB.has(d)).sort((a, b) => a - b);
@@ -38,9 +92,19 @@ export function tieChords(slurs: SlurArc[], notes: StaffNote[], sp: number): [St
       sl.tie = true;
     }
     if (dA.size < 2 || dA.size !== dB.size || common.length !== dA.size) continue;
+    // 两个和弦之间另有一条弧落在同一段里（同一行谱，左右各放 `CHORD_TIE_TWIN` 格，不短于这条的 `CHORD_TIE_TWIN_LEN`）：
+    // 每个音各有一条。外侧的那几条画在和弦外面（是爱 p1 m1 两音和弦，上面的音延音线在上、下面的音在下），验墨看不到；
+    // 里面那条比外面的短、起得晚（是爱 m54 三音和弦），压线的常只认出半截（是爱 m1 下面那条只到一半），都照算；
+    // 右端常顺着下一个和弦的符杠续长（是爱 m65 下面那条），右边多放到 `CHORD_TIE_TWIN_R` 格
+    const twin = slurs.some(
+      (o) =>
+        o !== sl && (o.from ?? o.to)?.staff === from.staff &&
+        o.lx >= sl.lx - sp * CHORD_TIE_TWIN && o.rx <= sl.rx + sp * CHORD_TIE_TWIN_R && o.rx - o.lx >= (sl.rx - sl.lx) * CHORD_TIE_TWIN_LEN,
+    );
     for (const d of common) {
       const a = A.find((n) => n.diatonic === d)!, b = B.find((n) => n.diatonic === d)!;
-      if (a !== sl.from) out.push([a, b]);
+      const outer = sl.above ? (d === common[0] ? 1 : 0) : d === common[common.length - 1] ? -1 : 0;
+      if (a !== sl.from && (twin || inked(a, b, outer))) out.push([a, b]);
     }
   }
   return out;
@@ -57,6 +121,9 @@ const PIECE_PAD = 0.3;
 /** 两截端点相挨的上限（格）。 */
 const PIECE_TOUCH = 0.6;
 
+/** 接头处往音符那侧收了多少格算「这一截在这儿收尾」。 */
+const PIECE_TAIL = 0.3;
+
 export function mergeArcPieces(slurs: SlurArc[], sp: number): void {
   const pad = sp * PIECE_PAD;
   const inBox = (b: { left: number; right: number; top: number; bottom: number }, x: number, y: number) =>
@@ -69,9 +136,13 @@ export function mergeArcPieces(slurs: SlurArc[], sp: number): void {
         if (a === b || a.above !== b.above || a.dashed || b.dashed) continue;
         if (!(a.lx < b.lx && b.rx > a.rx)) continue;
         // 或者两截的端点挨着（续端之后盒子没跟着长，`extendArcEnds` 只挪端点）
-        // 接头不能同时是两截各自的谷底（弧在上方；弧在下方是顶）：首尾共用一个音的前后两条弧，接头两边都往外拱
-        const low = (s: SlurArc, y: number) => (s.above ? y >= s.obj.box.bottom - sp * 0.5 : y <= s.obj.box.top + sp * 0.5);
-        const touch = Math.abs(a.rx - b.lx) <= sp * PIECE_TOUCH && Math.abs(a.ry - b.ly) <= sp * PIECE_TOUCH && !(low(a, a.ry) && low(b, b.ly));
+        // 接头两边都往音符那侧收（弧在上方：a 的右端、b 的左端都比各自的顶低 `PIECE_TAIL` 格以上；弧在下方反过来）的不并：
+        // 那是首尾共用一个音的前后两条弧，一条弧被切成的两截在接头处总有一截是平着或往外走的。
+        // 「端点挨着」与「盒子互相罩着」两路都过这道闸（破碎 p12 m100 女低：圆滑线收在 D5 上、紧接 D5→D5 跨小节线的延音线，
+        // 并成一条就成了从圆滑线起点到下一小节 D5 的弧）
+        const tail = (s: SlurArc, y: number) => (s.above ? y - s.obj.box.top : s.obj.box.bottom - y) >= sp * PIECE_TAIL;
+        if (tail(a, a.ry) && tail(b, b.ly)) continue;
+        const touch = Math.abs(a.rx - b.lx) <= sp * PIECE_TOUCH && Math.abs(a.ry - b.ly) <= sp * PIECE_TOUCH;
         if (!touch && (!inBox(a.obj.box, b.lx, b.ly) || !inBox(b.obj.box, a.rx, a.ry))) continue;
         const ab = a.obj.box, bb = b.obj.box;
         const box = { left: Math.min(ab.left, bb.left), right: Math.max(ab.right, bb.right), top: Math.min(ab.top, bb.top), bottom: Math.max(ab.bottom, bb.bottom) };
