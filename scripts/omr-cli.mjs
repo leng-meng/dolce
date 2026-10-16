@@ -8,6 +8,7 @@
 //   node scripts/omr-cli.mjs 图.jpg --thread-mode=always --threads=8   # 调线程策略
 //   node scripts/omr-cli.mjs 图.jpg --lyrics 歌词.txt        # 参照歌词互证：形近字按歌词选字、补漏字，不一致处报到 stderr
 //   node scripts/omr-cli.mjs 图.jpg -l 歌词.lrc --lyrics-report 核对.json   # 核对结果另落 JSON
+//   node scripts/omr-cli.mjs split 歌本.pdf -o 歌谱/       # 歌本切分：整本 PDF 或页图目录 → 一首一张图 + 目录核对
 // 格式清单取自 src/omr/emit.ts::OMR_EMITTERS，加格式不用改本脚本。
 //
 // 参照歌词（--lyrics）只配**单张图**：一份歌词文件对一首歌（.txt / .lrc，编码 UTF-8/GBK/UTF-16 自动认）。
@@ -31,6 +32,8 @@ const MIME = { ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png" 
 const IMG_EXT = new Set([".jpg", ".jpeg", ".png", ".webp", ".bmp", ".tif", ".tiff"]);
 
 const argv = process.argv.slice(2);
+if (argv[0] === "split") await runSplit(argv.slice(1)); // 不返回
+
 const opts = { format: "shige", out: null, profile: false, help: false, imgs: [], lyrics: null, lyricsReport: null };
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i];
@@ -164,3 +167,67 @@ if (imgs.length > 1) {
     + `平均 ${(total / imgs.length).toFixed(0)}ms/张（首张含模型加载）`);
 }
 process.exit(failed ? 1 : 0);
+
+// ───────────────────────── split：歌本切分 ─────────────────────────
+// 整本分页简谱（PDF 取每页内嵌源图，或页图文件夹按文件名自然序）→ 输出目录里一首一张 `曲号 曲名.jpg`：
+// 一页多首按标题切开、一首跨页按序拼接，去页码，拼缝处用本首的系统间距，边距照源图、切口补纸色；
+// 再自动认书内目录页（「首句 曲号 页码」）核对缺漏，报告写到 `输出目录/切分报告.txt`（及 --report JSON）。
+// 有缺号或重号时退出码 1。
+async function runSplit(args) {
+  const o = { input: null, out: null, report: null, quality: 92, tocPages: null, dryRun: false };
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i];
+    if (a === "-o" || a === "--out") o.out = args[++i];
+    else if (a === "--report") o.report = args[++i];
+    else if (a === "--quality") o.quality = Number(args[++i]);
+    else if (a === "--toc-pages") o.tocPages = args[++i];
+    else if (a === "--dry-run") o.dryRun = true;
+    else if (a.startsWith("--threads=")) process.env.OMR_THREADS = a.slice(10);
+    else if (a.startsWith("--thread-mode=")) process.env.OMR_THREAD_MODE = a.slice(14);
+    else if (a === "-h" || a === "--help") o.input = null, o.out = null, i = args.length;
+    else o.input = a;
+  }
+  if (!o.input || (!o.out && !o.dryRun)) {
+    console.error(`用法: omr-cli.mjs split <歌本.pdf | 页图目录> -o <输出目录>
+              [--report 报告.json] [--quality 92] [--toc-pages 3-15] [--dry-run]
+  --toc-pages  目录页（按源页序，1 起；如 3-15 或 3,5,7-9）；不给则自动认歌谱区之前全是字行的页
+  --dry-run    只扫描、核对并打印报告，不写图片`);
+    process.exit(o.input ? 1 : 0);
+  }
+  if (!(o.quality >= 1 && o.quality <= 100)) { console.error("--quality 要在 1–100"); process.exit(1); }
+  const tocPages = o.tocPages ? parseRanges(o.tocPages).map((n) => n - 1) : undefined;
+
+  const url = ["./omr.js", "../out/cli/omr.js"].map((r) => new URL(r, import.meta.url)).find((u) => existsSync(fileURLToPath(u)));
+  if (!url) { console.error("找不到 omr.js —— 仓库里先跑 npm run build:cli"); process.exit(1); }
+  const cli = await import(url.href);
+
+  const t0 = performance.now();
+  const src = await cli.openBookSource(o.input);
+  const tick = (label) => (d, n) => { if (process.stderr.isTTY) process.stderr.write(`\r${label} ${d}/${n}`); if (d === n) process.stderr.write(process.stderr.isTTY ? "\n" : `${label} ${n}/${n}\n`); };
+  const plan = await cli.planBook(src, cli.paddleOcrBackend(), { tocPages, onProgress: tick("扫描") });
+  const names = cli.songFileNames(plan.songs);
+  const rep = cli.checkAgainstToc(plan, names, (i) => src.name(i));
+  if (!o.dryRun) {
+    await cli.writeSongs(src, plan.layouts, names, o.out, { quality: o.quality, onProgress: tick("写出") });
+    await writeFile(join(o.out, "切分报告.txt"), rep.text);
+  }
+  if (o.report) {
+    const { text, ...rest } = rep;
+    await writeFile(o.report, JSON.stringify({ ...rest, songs: plan.songs.map((s, k) => ({ file: names[k] + ".jpg", ...s })) }, null, 2));
+  }
+  await src.close();
+  console.error(rep.text);
+  console.error(`用时 ${((performance.now() - t0) / 1000).toFixed(1)}s` + (o.dryRun ? "" : `，已写入 ${o.out}`));
+  process.exit(rep.missing.length || rep.duplicate.length ? 1 : 0);
+}
+
+/** 「3-15」「3,5,7-9」→ 数组。 */
+function parseRanges(s) {
+  const out = [];
+  for (const part of s.split(/[,，]/)) {
+    const m = /^\s*(\d+)\s*(?:-\s*(\d+))?\s*$/.exec(part);
+    if (!m) { console.error(`--toc-pages 写法不对：${s}`); process.exit(1); }
+    for (let n = Number(m[1]); n <= Number(m[2] ?? m[1]); n++) out.push(n);
+  }
+  return out;
+}

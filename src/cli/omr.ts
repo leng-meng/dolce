@@ -63,3 +63,10 @@ export async function recognizeImage(
   const emitted = omrEmitter(format).emit(detail.score);
   return { text: emitted.text, kind: emitted.kind, format, detail };
 }
+
+// 歌本切分（omr-cli split）：整本 PDF / 页图文件夹 → 一首一张图 + 目录核对
+export { planBook, songFileNames, checkAgainstToc } from "../omr/booksplit";
+export { scanPage, pageBinary } from "../omr/booksplit/scan";
+export type { BookPlan, SplitReport } from "../omr/booksplit";
+export { openBookSource } from "../omr/booksplit/source.node";
+export { writeSongs } from "../omr/booksplit/write.node";

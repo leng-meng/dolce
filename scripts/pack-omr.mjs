@@ -239,6 +239,8 @@ async function build(target) {
     dependencies: {
       "onnxruntime-node": pkg.devDependencies["onnxruntime-node"],
       sharp: pkg.dependencies.sharp,
+      // 只有 split 读 PDF 时才动态加载（Node ≥ 22.13）；识别单张图用不到
+      "pdfjs-dist": pkg.dependencies["pdfjs-dist"],
     },
   }, null, 2) + "\n");
 
@@ -298,6 +300,7 @@ omr-cli.cmd 图片.jpg                      :: 默认输出诗歌本文本谱到
 omr-cli.cmd 图片.jpg -f tomato -o 曲.txt  :: 换格式、写文件
 omr-cli.cmd 图片.jpg --profile            :: 附带分段耗时
 omr-cli.cmd 图片.jpg -l 歌词.txt          :: 附同一首的歌词文本，词谱互证纠错（不一致处打到 stderr）
+omr-cli.cmd split 歌本.pdf -o 歌谱\         :: 歌本切分：整本 PDF / 页图目录 → 一首一张图，按目录核对缺漏
 \`\`\`
 
 ${CRT ? `\`onnxruntime.dll\` 与 \`onnxruntime_binding.node\` 动态链接 VC++ 运行库（\`MSVCP140.dll\` /
@@ -311,10 +314,16 @@ Win10/11 多半已装过，报「找不到 VCRUNTIME140.dll」时到微软官网
 ./omr-cli.mjs 图片.jpg -f tomato -o 曲.txt   # 换格式、写文件
 ./omr-cli.mjs 图片.jpg --profile             # 附带分段耗时
 ./omr-cli.mjs 图片.jpg -l 歌词.txt           # 附同一首的歌词文本，词谱互证纠错（不一致处打到 stderr）
+./omr-cli.mjs split 歌本.pdf -o 歌谱/        # 歌本切分：整本 PDF / 页图目录 → 一首一张图，按目录核对缺漏
 \`\`\``}
 
 格式：\`shige\`（诗歌本文本谱，默认）、\`tomato\`（番茄简谱）、\`123\`（123 简谱）。
-输入只吃位图（jpg/png/webp/bmp/tiff），**不吃 PDF**。
+识别输入只吃位图（jpg/png/webp/bmp/tiff），**不吃 PDF**。
+
+歌本切分（\`split\`）：分页的简谱诗歌集切成一首一张 \`曲号 曲名.jpg\`——一页多首按标题切开、一首跨页按序拼接，
+去掉页码，拼缝处用本首的系统间距，边距照源图。输入是扫描 PDF（取每页内嵌的原图，不重新渲染；需 Node ≥ 22.13）
+或页图目录（按文件名自然序）。自动认书内目录页（「首句 曲号 页码」）核对缺号、重号、起始页，报告写到输出目录的
+\`切分报告.txt\`；认错目录页时用 \`--toc-pages 3-15\` 指定（按源页序，1 起），\`--dry-run\` 只出报告不写图。
 
 当库用：
 

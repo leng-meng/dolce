@@ -93,6 +93,10 @@ The interface is available in **English and Chinese**: it follows your browser l
   song's lyric text as a reference. Look-alike characters are corrected from it and dropped characters filled
   back in; anything else that disagrees (edition wording, extra or missing syllables, likely missed slurs, repeat
   order) is listed for review rather than changed.
+- **Hymnal splitting.** `omr-cli.mjs split book.pdf -o songs/` turns a paged jianpu hymnal (scanned PDF or a
+  folder of page images) into one `number title.jpg` per song: pages holding several songs are cut at the titles,
+  songs running over pages are joined into one image with page numbers removed and system spacing kept even, and
+  the result is checked against the book's own table of contents for missing or duplicate numbers.
 
 **Typesetting**
 - **Four views:**
