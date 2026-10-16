@@ -502,8 +502,6 @@ export const en: Record<MsgKey, string> = {
   "export.noLines": "This score has no music lines to export",
   "export.noPuLines": "This text jianpu has no music lines to export",
   "export.jpwUnreadable": "This .jpwabc can't be read",
-  "export.mixedName": "Mixed",
-  "export.staffName": "Staff",
   "export.currentFormat": "{format} (current format)",
   "export.title": "Export",
   "export.failed": "Export failed",

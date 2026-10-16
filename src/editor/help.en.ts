@@ -7,7 +7,7 @@ export const FEATURE_TOPICS_EN: { title: string; body: string[] }[] = [
     title: "Open, save and save as",
     body: [
       "Use **Open score** on the start page, or drag a file onto the window: 123 (`.123`, the main jianpu format — see the 123 format tab), `.jpwabc` (JP-Word), jianpu-ly (`.jly`, Silas S. Brown's upstream jianpu-ly text scores — typesettable as LilyPond), text jianpu (Fanqie / Shigeben, `.pu` `.fq` `.jps` `.txt`), MusicXML (`.xml` / `.musicxml`), ABC (`.abc`), Muse (`.jcx`), and recognition projects `.dolce` (see Recognition projects).",
-      "**Save** (top right) writes back in the original format (`.jpwabc` stays JP-Word compatible). **Save As** converts to 123, JPWABC, ABC, Fanqie or Shigeben text jianpu, jianpu-ly, or Muse jianpu (`.jcx`, opens in both old and new Muse versions) — before converting it lists anything the target format can't hold and asks you to confirm. **Export** produces PPTX, MIDI, MusicXML and jianpu-ly (`.jly`, ready to hand to upstream `jianpu-ly` for LilyPond), plus PNG and PDF in the Staff / Mixed views.",
+      "**Save** (top right) writes back in the original format (`.jpwabc` stays JP-Word compatible). **Save As** converts to 123, JPWABC, ABC, Fanqie or Shigeben text jianpu, jianpu-ly, or Muse jianpu (`.jcx`, opens in both old and new Muse versions) — before converting it lists anything the target format can't hold and asks you to confirm. **Export** produces the score as an image (PPTX in the Expanded view; elsewhere PNG for long-image paper, PDF for paged paper), MIDI, MusicXML and jianpu-ly (`.jly`, ready to hand to upstream `jianpu-ly` for LilyPond).",
       "The format drop-down in the source pane header switches a recognition result or a freshly opened file to another format for editing; switch back to “original” to restore it.",
       "**Desktop**: native open/save dialogs write straight to disk, and the last file reopens on startup. **Browser**: files are opened with the web file picker and saved as downloads.",
     ],
@@ -84,8 +84,8 @@ export const FEATURE_TOPICS_EN: { title: string; body: string[] }[] = [
   {
     title: "Export",
     body: [
-      "**Export** in the header. In jianpu views you can export **PPTX** (vector, one slide per page, from the Expanded view), **MIDI** (with repeats, dynamics and part volumes) and **MusicXML**.",
-      "In Staff / Mixed views you can export the current page as **PNG**, all pages as **PDF**, plus **MIDI** and **MusicXML**. Exports match the current preview (with or without the jianpu layer). To change the source format, use **Save As**.",
+      "**Export** in the header. The score is exported as laid out in the current view: the **Expanded** view gives **PPTX** (vector, one slide per page); **every other view** (jianpu Original, Staff / Mixed, the recognition proofing view) gives one whole **PNG** when the paper is Long image, or a **PDF** of all pages on paged paper. **MIDI** (with repeats, dynamics and part volumes) and **MusicXML** are also available.",
+      "Exports match the current preview (with or without the jianpu layer). In the recognition proofing view the export is the recognized, typeset score (jianpu per the Original / Expanded view, staff per the Staff / Mixed settings), not the source-image overlay. To change the source format, use **Save As**.",
     ],
   },
   {

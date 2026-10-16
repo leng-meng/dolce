@@ -9,7 +9,7 @@ import type { ElementId, ScoreDoc } from "../model/doc";
 import { applyBreaks } from "../model/breaks";
 import { locate } from "../model/edit";
 import { JpwFile, LayoutSection } from "../jpword/jpwfile";
-import { measureDocument, PaintResources, ScorePainter, type SyncPaintRequest } from "../layout/painter";
+import { measureDocument, PaintResources, ScorePainter, type StaffPaintRequest, type SyncPaintRequest } from "../layout/painter";
 import { computeStyle, sanitizeLayer, upsertRule, type StyleRule } from "../style/cascade";
 import type { Length } from "../style/units";
 import { NOTE_FONTS } from "../style/fonts";
@@ -938,6 +938,19 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     if (!src || !hasLines(src)) return null;
     if (this.docFormat === "jpwabc") return { view: "expanded", doc: src, style, breakDesc: this._breakDesc };
     return { view: "expanded", doc: this._expandedDoc(src), style };
+  }
+
+  /** 原样档的排版请求（导出 PNG/PDF 在别的档——识别模式、混排——另排一份用，`export.ts::originalPainter`）。没有文档时返回 null。 */
+  originalRequest(): SyncPaintRequest | null {
+    const style = this.styleOf("original");
+    if (this.docFormat === "jpwabc") return this._jpwDoc ? { view: "original", doc: this._jpwDoc, style, breakDesc: this._breakDesc } : null;
+    const doc = this.currentScoreDoc();
+    return doc ? { view: "original", doc, style } : null;
+  }
+
+  /** 原样档的纸是不是长图（导出给 PNG 还是 PDF 按它分）。 */
+  get jpLongImage(): boolean {
+    return resolvePaper(this.styleOf("original").page) === null;
   }
 
   /** 展开档排的那份文档：MusicXML 按声部面板换旋律声部与歌词来源（元素 id 不变）。 */
@@ -2551,22 +2564,27 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     return job;
   }
 
-  private async _layoutStaff(): Promise<void> {
-    const full = this.mixedDoc;
-    // 声部面板里藏起来的声部不排（会话内）；简谱层取的声部下标跟着往前挪
-    const doc = full && withVisibleParts(full, this.hiddenParts);
-    if (!doc) {
-      this._renderPagesWith(0, () => { throw new Error("没有五线谱页"); }, { resetPageIndex: true });
-      return;
-    }
-    const outcome = await this.painter.load({
+  /** 五线谱/混排档的排版请求（屏幕铺页与识别模式下导出 PNG/PDF 共用）。不给 `doc` 就取混排底本、剔掉藏起来的声部；没有底本返回 null。 */
+  staffRequest(doc = this.mixedDoc && withVisibleParts(this.mixedDoc, this.hiddenParts)): StaffPaintRequest | null {
+    if (!doc) return null;
+    return {
       view: this.mixedShowJianpuLayer ? "mixed" : "staff",
       doc,
       style: this.staffStyle(),
       page: this.staffPage,
       hideBarNumber: this.mixedHideBarNumber,
+      // 声部面板里藏起来的声部不排（会话内）；简谱层取的声部下标跟着往前挪
       jianpuPart: this.hiddenParts.has(this.melodyPart) ? 0 : this.melodyPart - [...this.hiddenParts].filter((i) => i < this.melodyPart).length,
-    });
+    };
+  }
+
+  private async _layoutStaff(): Promise<void> {
+    const req = this.staffRequest();
+    if (!req) {
+      this._renderPagesWith(0, () => { throw new Error("没有五线谱页"); }, { resetPageIndex: true });
+      return;
+    }
+    const outcome = await this.painter.load(req);
     // 排的时候又来了新请求（快速切档、改设置）：这份作废，由新的那份铺页
     if (outcome === "superseded" || this.mode !== "mixed") return;
     const painter = this.painter;

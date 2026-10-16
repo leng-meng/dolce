@@ -121,8 +121,8 @@ The interface is available in **English and Chinese**: it follows your browser l
   you are offered to restore it. With unsaved changes, opening another file, loading the sample, recognizing a new image
   or closing the window asks first.
 - **Export** depends on the view:
-  - Jianpu views: **vector PPTX**, **MIDI**, **MusicXML** and **jianpu-ly text** (`.jly`).
-  - Staff and mixed views: **PNG**, **PDF**, **MIDI** and **MusicXML**.
+  - Score image as laid out: **vector PPTX** in the Expanded view; every other view (jianpu Original, Staff / Mixed, recognition proofing) gives **PNG** on long-image paper or **PDF** on paged paper.
+  - Also **MIDI**, **MusicXML** and (outside Staff / Mixed) **jianpu-ly text** (`.jly`).
   - Exported MIDI carries the lyrics, verse by verse in singing order, so it can go straight into a
     singing-voice synthesizer (e.g. X Studio).
 

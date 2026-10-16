@@ -1,4 +1,4 @@
-// Export: PNG (rasterize page SVG), MIDI (SMF), PPTX, Mixed PDF.
+// Export: PNG (rasterize page SVG), PDF, MIDI (SMF), PPTX.
 import type { App } from "./app";
 import { toMidi } from "../score/midi";
 import { buildPptx } from "./pptx";
@@ -113,14 +113,6 @@ function baseName(app: App): string {
   return app.painter.title.split("\n")[0] || t("file.untitled");
 }
 
-export async function exportCurrentPagePng(app: App): Promise<void> {
-  const wrap = app.pageEls[app.pageIndex];
-  const svg = wrap?.querySelector("svg") as SVGSVGElement | null;
-  if (!svg) throw new Error(t("export.noSvg"));
-  const bytes = await svgToBytes(svg, 2, colorToCss(app.bgColor));
-  await saveBytes(bytes, t("export.pngName", { name: baseName(app), n: app.pageIndex + 1 }), "image/png");
-}
-
 export async function exportMidi(app: App): Promise<void> {
   const src = app.playable();
   if (!src) throw new Error(t("export.noLines"));
@@ -144,7 +136,8 @@ export async function exportPptx(app: App): Promise<void> {
  *  否则导出的投影片会带着原样档的字号与颜色。 */
 export function pptxPainter(app: App): ScorePainter {
   const cur = app.painter;
-  if (cur.renderer === "jianpu" && cur.jianpuView === "expanded") return cur;
+  // 识别模式里屏幕上那个排版器不随改动重排（谱面区是核对视图），只有简谱档的才能直接用
+  if (app.mode === "jp" && cur.renderer === "jianpu" && cur.jianpuView === "expanded") return cur;
   const req = app.expandedRequest();
   if (!req) throw new Error(t("export.noPuLines"));
   const p = new ScorePainter(cur.resources);
@@ -224,41 +217,83 @@ export async function exportPuMusicXml(app: App): Promise<void> {
   await saveBytes(new TextEncoder().encode(text), `${baseName(app)}.musicxml`, MUSICXML_MIME);
 }
 
-/** Export staff pages to a directly downloadable PDF. */
-export async function exportMixedPdf(app: App): Promise<void> {
-  const painter = app.mixedPainter;
-  if (!painter || app.mode !== "mixed") return;
+/** 五线谱这一路的会话：五线谱 / 混排档，或五线谱识别（`.musicxml`）的核对视图。导出图按五线谱排版出。 */
+const isStaffSession = (app: App): boolean => app.mode === "mixed" || (app.mode === "recognize" && app.docFormat === "musicxml");
+/** 简谱展开档（含简谱识别的核对视图停在展开档）：出 PPTX，不出 PNG/PDF。 */
+const isExpanded = (app: App): boolean => !isStaffSession(app) && app.layoutMode === "expanded";
+/** 当前那一档排出来是不是长图（不分页）：长图出一张 PNG，分页纸出 PDF。 */
+const isLongImage = (app: App): boolean => (isStaffSession(app) ? app.staffPage.heightPt === null : app.jpLongImage);
+
+/** 简谱原样档排版器。屏幕上已是原样档就直接用；识别模式（谱面区是核对视图、不随改动重排）与别的档另排一份。 */
+function originalPainter(app: App): ScorePainter {
+  const cur = app.painter;
+  if (app.mode === "jp" && cur.renderer === "jianpu" && cur.jianpuView === "original") return cur;
+  const req = app.originalRequest();
+  if (!req) throw new Error(t("export.noLines"));
+  const p = new ScorePainter(cur.resources);
+  p.loadSync(req);
+  return p;
+}
+
+/** 五线谱 / 混排排版器。混排档用屏幕上那个；五线谱识别的核对视图按混排档的设置另排一份。 */
+async function staffPainter(app: App): Promise<ScorePainter> {
+  if (app.mixedPainter) return app.mixedPainter;
+  const req = app.staffRequest();
+  if (!req) throw new Error(t("export.noLines"));
+  const p = new ScorePainter(app.painter.resources);
+  await p.load(req);
+  return p;
+}
+
+/** 按排版效果出图的那个排版器与文件名（不带扩展名）。 */
+async function layoutPainter(app: App): Promise<{ painter: ScorePainter; name: string }> {
+  const painter = isStaffSession(app) ? await staffPainter(app) : originalPainter(app);
+  if (painter.pageCount === 0) throw new Error(t("export.noSvg"));
+  return { painter, name: painter.title.split("\n")[0] || baseName(app) };
+}
+
+/** 长图：整张出 PNG（长图不分页，只有一页；万一多页就逐页各出一张）。 */
+export async function exportLayoutPng(app: App): Promise<void> {
+  const { painter, name } = await layoutPainter(app);
+  for (let i = 0; i < painter.pageCount; i++) {
+    const bytes = await svgToBytes(painter.renderPage(i), 2, colorToCss(app.bgColor));
+    const file = painter.pageCount === 1 ? `${name}.png` : t("export.pngName", { name, n: i + 1 });
+    await saveBytes(bytes, file, "image/png");
+  }
+}
+
+/** 分页纸：全部页出一份 PDF。桌面版走原生矢量（`export_pdf_cmd`），浏览器版逐页栅格化进 jsPDF。 */
+export async function exportLayoutPdf(app: App): Promise<void> {
+  const { painter, name } = await layoutPainter(app);
   const { w: wPt, h: hPt } = painter.pageSize(0);
 
   if (isTauriRuntime()) {
-    // Tauri path: serialize SVGs and invoke Rust export_pdf command
     const { invoke } = await import("@tauri-apps/api/core");
     const { save } = await import("@tauri-apps/plugin-dialog");
-    const title = painter.title || t("export.mixedName");
-    const outPath = await save({ defaultPath: `${title}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
+    const outPath = await save({ defaultPath: `${name}.pdf`, filters: [{ name: "PDF", extensions: ["pdf"] }] });
     if (!outPath) return;
     const pages: string[] = [];
     for (let i = 0; i < painter.pageCount; i++) {
+      const { w, h } = painter.pageSize(i);
       const svg = painter.renderPage(i);
-      svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-      svg.setAttribute("width", `${wPt}pt`);
-      svg.setAttribute("height", `${hPt}pt`);
+      svg.setAttribute("xmlns", SVG_NS);
+      svg.setAttribute("width", `${w}pt`);
+      svg.setAttribute("height", `${h}pt`);
       paintBg(svg, app.bgColor);
       pages.push(new XMLSerializer().serializeToString(svg));
     }
     await invoke("export_pdf_cmd", { pagesSvg: pages, widthPt: wPt, heightPt: hPt, outPath });
   } else {
     const { jsPDF } = await import("jspdf");
-    const orientation = wPt >= hPt ? "landscape" : "portrait";
-    const pdf = new jsPDF({ unit: "pt", format: [wPt, hPt], orientation, compress: true });
+    const orient = (w: number, h: number) => (w >= h ? "landscape" : "portrait");
+    const pdf = new jsPDF({ unit: "pt", format: [wPt, hPt], orientation: orient(wPt, hPt), compress: true });
     for (let i = 0; i < painter.pageCount; i++) {
-      const svg = painter.renderPage(i);
-      const png = await svgToBytes(svg, 2, colorToCss(app.bgColor));
-      if (i > 0) pdf.addPage([wPt, hPt], orientation);
-      pdf.addImage(png, "PNG", 0, 0, wPt, hPt, undefined, "FAST");
+      const { w, h } = painter.pageSize(i);
+      const png = await svgToBytes(painter.renderPage(i), 2, colorToCss(app.bgColor));
+      if (i > 0) pdf.addPage([w, h], orient(w, h));
+      pdf.addImage(png, "PNG", 0, 0, w, h, undefined, "FAST");
     }
-    const bytes = new Uint8Array(pdf.output("arraybuffer"));
-    await saveBytes(bytes, `${painter.title || t("export.staffName")}.pdf`, "application/pdf");
+    await saveBytes(new Uint8Array(pdf.output("arraybuffer")), `${name}.pdf`, "application/pdf");
   }
 }
 
@@ -282,19 +317,20 @@ const canJly = (app: App): boolean => !isMixed(app);
 
 /** 顺序即对话框里的顺序。**导出只出别的媒介**（图片、PPT、音频、给第三方软件的 MusicXML）；
  *  换源格式（123 / JPWABC / ABC / 文本谱）走「另存为」（`showSaveAsDialog`），
- *  `.musicxml` 转成简谱编辑在打开时选（`App._importBytes`）。 */
+ *  `.musicxml` 转成简谱编辑在打开时选（`App._importBytes`）。
+ *  **谱面出图按档分**：展开档只出 PPTX；其余各档（简谱原样档、五线谱 / 混排、识别模式）按排版效果出图，
+ *  长图出 PNG、分页纸出 PDF，二选一。识别模式出的是排版稿，不是核对视图那张叠加图。 */
 const EXPORT_ITEMS: readonly ExportItem[] = [
-  // 文本谱（非混排预览）：走 pu 自己的排版器与直出路径
-  { label: "PPTX", available: isPu, run: exportPptx },
+  { label: "PPTX", available: isExpanded, run: exportPptx },
+  { label: "PNG", available: (a) => !isExpanded(a) && isLongImage(a), run: exportLayoutPng },
+  { label: "PDF", available: (a) => !isExpanded(a) && !isLongImage(a), run: exportLayoutPdf },
+  // 文本谱（非混排预览）
   { label: "MIDI", available: isPu, run: exportMidi },
   { label: "MusicXML", available: isPu, run: exportPuMusicXml },
   // 混排（五线谱预览）
-  { label: "PNG", available: isMixed, run: exportCurrentPagePng },
-  { label: "PDF", available: isMixed, run: exportMixedPdf },
   { label: "MIDI", available: isMixed, run: exportMidi },
   { label: "MusicXML", available: isMixed, run: exportMusicXml },
   // 简谱
-  { label: "PPTX", available: isJp, run: exportPptx },
   { label: "MIDI", available: isJp, run: exportMidi },
   { label: "MusicXML", available: isJp, run: exportMusicXml },
   // jianpu-ly：上面三档之外，`isPu` 那一档（文本谱 / 123 / ABC / MusicXML）也要能导出，

@@ -501,8 +501,6 @@ export const zh = {
   "export.noLines": "这份谱里没有可导出的曲行",
   "export.noPuLines": "这份文本谱里没有可导出的曲行",
   "export.jpwUnreadable": "这份 .jpwabc 读不出来",
-  "export.mixedName": "混排",
-  "export.staffName": "五线谱",
   "export.currentFormat": "{format}（当前格式）",
   "export.title": "导出",
   "export.failed": "导出失败",
