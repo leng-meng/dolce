@@ -1569,6 +1569,81 @@ export function groupByLeftInk(
     });
 }
 
+/**
+ * **声部方括号**（合唱谱人声几行左边那个 `[`）：系统线左边一条**粗、直**的竖笔，从一行谱的顶线连到另一行的底线，两头带钩。
+ * 系统线（细）、钢琴花括号（弯，笔画中心左右摆）都不是。罩住两行以上谱的才收，写成 `PartBracket`（`score.ts::groupParts` 据此分组）。
+ *
+ * 逐行在谱行左缘外 `[left − PB_WIN, left − PB_GAP]` 那一小条里找最长的连续墨段：宽 `PB_MIN_W`~`PB_MAX_W` 格算这一行有粗笔；
+ * 纵向连着（断开不过 `PB_JOIN` 格）的成一段，段里墨段中心的横向跨度不过 `PB_STRAIGHT` 格才算直。
+ */
+export function findPartBrackets(
+  bin: Binary,
+  staves: { top: number; bottom: number; left: number }[],
+  unit: RasterUnit,
+): Rect[] {
+  if (staves.length < 2) return [];
+  const sp = unit.space;
+  const ss = [...staves].sort((a, b) => a.top - b.top);
+  const medLeft = ss.map((s) => s.left).sort((a, b) => a - b)[ss.length >> 1]!;
+  const y0 = Math.max(0, Math.round(ss[0]!.top)), y1 = Math.min(bin.h - 1, Math.round(ss[ss.length - 1]!.bottom));
+  /** 某一行左缘外那一条里最长墨段的 [左, 右]；没有合格的粗笔返回 null */
+  const runAt = (y: number): [number, number] | null => {
+    const near = ss.reduce((p, s) => (Math.abs((s.top + s.bottom) / 2 - y) < Math.abs((p.top + p.bottom) / 2 - y) ? s : p));
+    const left = Math.min(near.left, medLeft);
+    const xa = Math.max(0, Math.round(left - sp * PB_WIN)), xb = Math.min(bin.w - 1, Math.round(left - sp * PB_GAP));
+    let best: [number, number] | null = null;
+    for (let x = xa; x <= xb; x++) {
+      if (!bin.data[y * bin.w + x]) continue;
+      let e = x;
+      while (e + 1 <= xb && bin.data[y * bin.w + e + 1]) e++;
+      if (!best || e - x > best[1] - best[0]) best = [x, e];
+      x = e;
+    }
+    if (!best) return null;
+    const w = best[1] - best[0] + 1;
+    return w >= sp * PB_MIN_W && w <= sp * PB_MAX_W ? best : null;
+  };
+  const out: Rect[] = [];
+  let seg: { top: number; bottom: number; cs: number[]; l: number; r: number } | null = null;
+  let miss = 0;
+  const flush = () => {
+    if (!seg) return;
+    const cs = [...seg.cs].sort((a, b) => a - b);
+    // 两头的钩往右拐：中心跨度取中间九成
+    const lo = cs[Math.floor(cs.length * 0.05)]!, hi = cs[Math.floor(cs.length * 0.95)]!;
+    const inside = ss.filter((s) => (s.top + s.bottom) / 2 > seg!.top && (s.top + s.bottom) / 2 < seg!.bottom);
+    if (hi - lo <= sp * PB_STRAIGHT && inside.length >= 2 && seg.top <= inside[0]!.top + sp && seg.bottom >= inside[inside.length - 1]!.bottom - sp)
+      out.push({ x: seg.l, y: seg.top, w: seg.r - seg.l + 1, h: seg.bottom - seg.top });
+    seg = null;
+  };
+  for (let y = y0; y <= y1; y++) {
+    const r = runAt(y);
+    if (!r) {
+      if (seg && ++miss > sp * PB_JOIN) flush();
+      continue;
+    }
+    miss = 0;
+    if (!seg) seg = { top: y, bottom: y, cs: [], l: r[0], r: r[1] };
+    seg.bottom = y;
+    seg.cs.push((r[0] + r[1]) / 2);
+    seg.l = Math.min(seg.l, r[0]);
+    seg.r = Math.max(seg.r, r[1]);
+  }
+  flush();
+  return out;
+}
+
+/** 声部方括号的检测窗口：谱行左缘往左 `PB_WIN` 格到 `PB_GAP` 格（系统线贴着左缘，不进来） */
+const PB_WIN = 1.5;
+const PB_GAP = 0.15;
+/** 粗笔一行的墨宽（格）：细系统线、谱线左端不到这么宽；再宽的是花括号的肚子或别的块 */
+const PB_MIN_W = 0.3;
+const PB_MAX_W = 0.9;
+/** 纵向断开不过这么多格仍算一条 */
+const PB_JOIN = 0.3;
+/** 「直」：墨段中心横向跨度上限（格）。花括号一行谱高里就摆出一格多 */
+const PB_STRAIGHT = 0.25;
+
 /** 抹掉笔画之后剩下的墨——`findBlobs` 与 `findBraces` 都从它出发。
  *  **对外**：叠置空心和弦要在这张图上数孔（原图上符干会把内腔连出去）。 */
 export function blobImage(bin: Binary, prims: RasterPrims, unit: RasterUnit, onGrid?: (y: number) => boolean): Binary {

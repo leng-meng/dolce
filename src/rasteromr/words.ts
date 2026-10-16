@@ -338,6 +338,9 @@ const CHORD_PAGE_MIN = 3;
 const SHORT_RE = /^(S|A|T|B|SA|TB|ST|AB|Ch|Sw|Gt)\.?$/;
 /** 短标记的字高下限（格）。 */
 const SHORT_MIN_H = 1.3;
+/** 短标记离音头中心横向这么多格以内、纵向离头一根干长（`SHORT_STEM_DY` 格）以内，算压在干上 */
+const SHORT_STEM_DX = 1;
+const SHORT_STEM_DY = 3.5;
 /** 上下两行字叠成一条指示：左端对齐（格）、行距不过行高的这么多倍。 */
 const STACK_X = 1.5;
 const STACK_GAP = 0.6;
@@ -464,6 +467,9 @@ export function attachWordLines(
     // 只靠 `SHORT_RE` 进来的一两个字母（声部标记、排练号）要够大：排练号、分部标记是大字，一格来高的多是别的东西读成的
     //（宁静 p3 只剩一个字的歌词行「人.」读成 `A.`、谱表左缘的小号码读成 `A`，一页好几个）
     if (isWord && letters < 3 && box.h < sp * SHORT_MIN_H) continue;
+    // 它还不能落在某个音的符干那一列上（头左右 `SHORT_STEM_DX` 格、上下一根干长之内）：带尾的干顶读成 `T`
+    //（破碎 p5 m53 女低末一个八分音符，挂到女高歌词下面成了「T」）
+    if (isWord && letters < 3 && notes.some((n) => !n.rest && Math.abs(n.x - cx) < sp * SHORT_STEM_DX && cy > n.sym.box.top - sp * SHORT_STEM_DY && cy < n.sym.box.bottom + sp * SHORT_STEM_DY)) continue;
     // 定谱行：上下最近的那行（按谱表边到字心的距离比）
     let stf: Staff | undefined;
     let bd = sp * REACH;
@@ -489,7 +495,8 @@ export function attachWordLines(
       note.tempoSize = pg.inkTextSize?.(box, text) || box.h;
       words.push({ text, above, box, note });
     } else if (isWord && text) {
-      (note.words ??= []).push({ text, above, size: pg.inkTextSize?.(box, text) || box.h });
+      // 行底当基线（文字指示多是不带下伸笔的西文，墨迹底就在基线上）：写源谱版面时照原位放
+      (note.words ??= []).push({ text, above, size: pg.inkTextSize?.(box, text) || box.h, baseY: box.y + box.h });
       words.push({ text, above, box, note });
     }
   }

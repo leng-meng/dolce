@@ -24,7 +24,7 @@ import { headerCredits, type HeaderCredit, type WordLine } from "../omrkit/heade
 import { applyTuplet, attachDynamicTexts, attachNotations, attachWedges, findNotations, findTuplets, markLyricExtends } from "../staffomr/notations";
 import type { PObj, SPage, Staff, Sym, Tag } from "../staffomr/model";
 import { buildRasterPage, makeSymObj, makeTextObj, type RasterSym } from "./adapt";
-import { binSig, blobImage, extendVSegs, findBlobs, findBraces, findPrimitives, groupByLeftInk, ledgerGrid, joinVSegs, removeStaffLines, removeStaffLinesByRun, repairLineCuts, verticalStrokes, type BeamQuad, type LineSeg, type RasterPrims } from "./prims";
+import { binSig, blobImage, extendVSegs, findBlobs, findBraces, findPrimitives, groupByLeftInk, findPartBrackets, ledgerGrid, joinVSegs, removeStaffLines, removeStaffLinesByRun, repairLineCuts, verticalStrokes, type BeamQuad, type LineSeg, type RasterPrims } from "./prims";
 import { archCavity, stemWalledCavity, findRasterHeads, hollowHeadsByPitch, headsOnBareStems, headsBetweenStemPairs, probeBareStems, hollowHeadsFromCavities, hollowHeadsAlongStems, hollowHeadsFromHoles, hollowHeadsOnStemSeeds, reseatHollowHeads, stemOf, hollowHeadsOnLedgers, hollowSlit, inkColumn, judgeHeadBox, mergeHoles } from "./notehead";
 import { bootstrapClefs, matchTemplate, RasterGlyphLookup, type BootStaff } from "./rasterglyphs";
 import { sigDistance } from "../omrkit/glyphdict";
@@ -4185,6 +4185,7 @@ export async function recognizeRasterPage(
     syms,
     braces: findBraces(nl, prims, unit, staffLefts, groups.map((g) => ({ top: g.lines[0].y, bottom: g.lines[4].y }))).map((c) => c.bbox),
     sysBrackets: groupByLeftInk(raster.bin, groups.map((g) => ({ top: g.lines[0].y, bottom: g.lines[4].y, left: Math.max(...g.lines.map((l) => l.left)) })), unit),
+    partBrackets: findPartBrackets(raster.bin, groups.map((g) => ({ top: g.lines[0].y, bottom: g.lines[4].y, left: Math.max(...g.lines.map((l) => l.left)) })), unit),
   });
   pg.ptPerUnit = raster.imageRect.w / raster.bin.w;
   pg.originPt = { x: raster.imageRect.x, y: raster.imageRect.y };
@@ -5216,6 +5217,20 @@ export async function recognizeRasterPage(
     const twoVoices = opp(from) || opp(to);
     if (notes.some((n) => !n.rest && n.staff === from.staff && n.stemUp !== null && (!twoVoices || from.stemUp === null || n.stemUp === from.stemUp) && Math.abs(n.diatonic - from.diatonic) <= TIE_BETWEEN_STEPS && n.x > from.x + pad && n.x < to.x - pad)) sl.tie = false;
   }
+  // **弧止端不跨小节线**：弧的右端在本谱表一条小节线左边（离线 `SLUR_BAR_CLEAR` 格以上）、止端的音却在线右边——
+  // 弧端越过末音的头与干（十六分音群上的长弧常这样），`validateSlurNote` 把末音拒了，只剩线右边那个音（破碎 p7 m70→71 钢琴右手，
+  // 又跟 m71 起的那条撞在同一个音上）。止端退回线左边本谱表最右的音。
+  // 两端同音高的不动：跨小节线的延音线常在线上断成两截、只认出左半截（望十架 p4 m33→34 女高 C5），后面才判成延音线
+  for (const a of slurs) {
+    const n = a.to;
+    if (a.tie || !a.from || !n || a.from === n || n.staff !== a.from.staff || n.diatonic === a.from.diatonic) continue;
+    const bx = (ctx.get(n.staff)?.barXs ?? []).find((x) => x > a.from!.sym.px && x < n.sym.box.left && a.rx < x - unit.space * SLUR_BAR_CLEAR);
+    if (bx === undefined) continue;
+    const prev = notes
+      .filter((m) => m.staff === n.staff && !m.rest && !m.chordExtra && !m.grace && m.sym.px < bx && m.sym.px > a.from!.sym.px)
+      .reduce<StaffNote | undefined>((x, m) => (!x || m.sym.px > x.sym.px ? m : x), undefined);
+    if (prev) a.to = prev;
+  }
   // **前后两条圆滑线不共用一个音**：一条止在 n、下一条又从 n 起，而前一条的右端没越过 n 的音头中心——
   // 那是两条弧首尾相挨、右端搭到了下一条起点那个音上，止端退回 n 前面那个音（宁静 p3 m34 钢琴右手：止在 B4、C5 起下一条）
   for (const a of slurs) {
@@ -5246,7 +5261,7 @@ export async function recognizeRasterPage(
   // 弧号「页码.页内序号」（页码按 `pageSeq` 数）：只当配对的键用，跨页不能撞号
   let slurSeq = 0;
   markSlurNotes(slurs, opts.pageSeq !== undefined ? () => `${opts.pageSeq! + 1}.${++slurSeq}` : undefined);
-  for (const [a, b] of chordTies) (a.tieStart = true), (b.tieStop = true);
+  for (const [a, b, above] of chordTies) (a.tieStart = true), (a.tieAbove = above), (b.tieStop = true);
   markLyricExtends(notes);
 
   return {
@@ -5355,6 +5370,8 @@ const EIGHTH_REST_H_PIECES = 1.4;
 const EIGHTH_REST_FILL_PIECES = 0.25;
 /** 延音线中间夹着的音，离两端几个音级以内才算同一声部。 */
 const TIE_BETWEEN_STEPS = 5;
+/** 弧右端离小节线至少这么多格，才算「止在线左边」（`attachSlurs` 之后的跨小节线检查） */
+const SLUR_BAR_CLEAR = 0.3;
 
 /** 和弦对象记上墨迹量出来的字高（`PObj.textSize`）：`sizeDev` 是框高，判据在用，不动它 */
 function withTextSize(o: PObj, pg: SPage, t: { box: Rect; text: string }): PObj {

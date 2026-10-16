@@ -31,11 +31,12 @@ const CHORD_TIE_TWIN = 1.5;
 const CHORD_TIE_TWIN_LEN = 0.3;
 const CHORD_TIE_TWIN_R = 3;
 
-/** `inkCols(x0, x1, y0, y1)`：原图 [x0, x1) 列里，[y0, y1] 行（谱线行除外）有墨的列占几成。不给就不验 */
+/** `inkCols(x0, x1, y0, y1)`：原图 [x0, x1) 列里，[y0, y1] 行（谱线行除外）有墨的列占几成。不给就不验。
+ *  返回补出来的延音线两端与朝向：比认出那条弧挂的音高的朝上、低的朝下（和弦延音线的常规画法），同音级随那条弧 */
 export function tieChords(
   slurs: SlurArc[], notes: StaffNote[], sp: number,
   inkCols?: (x0: number, x1: number, y0: number, y1: number) => number,
-): [StaffNote, StaffNote][] {
+): [StaffNote, StaffNote, boolean][] {
   /** `outer`：-1 / 1 = 这个音是和弦里最上 / 最下那个、找到的那条在另一头：它的延音线画在和弦外侧，带子往外伸到 `CHORD_TIE_OUTER` 格
    *（望十架 p8 m60 两个全音符的和弦，上面的音延音线在上、下面的音在下） */
   const inked = (a: StaffNote, b: StaffNote, outer: number) => {
@@ -47,7 +48,7 @@ export function tieChords(
   };
   const column = (n: StaffNote): StaffNote[] =>
     notes.filter((m) => !m.rest && !m.grace && m.staff === n.staff && (m.group === n.group || Math.abs(m.x - n.x) < sp * 1.2));
-  const out: [StaffNote, StaffNote][] = [];
+  const out: [StaffNote, StaffNote, boolean][] = [];
   for (const sl of slurs) {
     const { from, to } = sl;
     if (!from || !to || from === to || from.staff !== to.staff || to.x <= from.x) continue;
@@ -104,7 +105,10 @@ export function tieChords(
     for (const d of common) {
       const a = A.find((n) => n.diatonic === d)!, b = B.find((n) => n.diatonic === d)!;
       const outer = sl.above ? (d === common[0] ? 1 : 0) : d === common[common.length - 1] ? -1 : 0;
-      if (a !== sl.from && (twin || inked(a, b, outer))) out.push([a, b]);
+      if (a !== sl.from && (twin || inked(a, b, outer))) {
+        const ref = sl.from!.diatonic;
+        out.push([a, b, d > ref ? true : d < ref ? false : sl.above]);
+      }
     }
   }
   return out;

@@ -751,7 +751,7 @@ export interface StaffNote {
   beam?: BeamState[];
   x: number;
   /** 挂在这个音符上的歌词，按段（verse）。 */
-  lyrics?: { verse: number; text: string; hyphen: boolean; cont: boolean; /** 这个字后面拖着延长线（一字多音，见 `markLyricExtends`）。 */ extend?: boolean; /** 字号（页面单位，见 `SPage.textEm`） */ size?: number; /** 这一行词印在谱表上方（`<lyric placement="above">`） */ above?: boolean }[];
+  lyrics?: { verse: number; text: string; hyphen: boolean; cont: boolean; /** 这个字后面拖着延长线（一字多音，见 `markLyricExtends`）。 */ extend?: boolean; /** 字号（页面单位，见 `SPage.textEm`） */ size?: number; /** 这一行词印在谱表上方（`<lyric placement="above">`） */ above?: boolean; /** 这一行词的基线（页面单位），写源谱版面时出成 `default-y` */ baseY?: number }[];
   /** 这些字的歌词延长线到这个音为止（`<extend type="stop"/>`）。记的是那个字本身，段号后来被重排也跟着走。 */
   lyricExtendStop?: { verse: number }[];
   /** 挂在这个音符上的和弦符号（归一后的原文，如 `Am`、`G/B`、`Dm7`）。 */
@@ -788,7 +788,7 @@ export interface StaffNote {
   /** 力度记号（`mp`/`f`…）。MusicXML 里出成 `<direction>`，排在这个音符之前。 */
   dynamic?: string;
   /** 印在这个音符处的文字指示（rit. / a tempo / cresc. / Fine…）：原文与在谱表上方还是下方。MusicXML 里出成 `<direction><words>`。 */
-  words?: { text: string; above: boolean; /** 字号（页面单位） */ size?: number }[];
+  words?: { text: string; above: boolean; /** 字号（页面单位） */ size?: number; /** 基线（页面单位），写源谱版面时出成 `default-y` */ baseY?: number }[];
   /** 节拍器记号：拍子单位（`quarter`）、每分钟拍数、`<per-minute>` 的原文（带「约」时 `c. 76`，否则省）。MusicXML 里出成 `<direction><metronome>`。 */
   metronome?: { unit: string; bpm: number; text?: string };
   /** 与节拍器印在同一条的速度文字（`Andante ♩ = c. 76` 的 `Andante`）：与节拍器写进**同一个** `<direction>`，不拆成两个对象。 */

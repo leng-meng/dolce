@@ -559,6 +559,8 @@ export interface LyricLine {
   staff: Staff;
   verse: number;
   top: number;
+  /** 行底（页面单位，各字墨迹下缘的最低处）：写源谱版面时折成歌词基线 `<lyric default-y>`。不设就不写 */
+  bottom?: number;
   syllables: Syllable[];
   /** 只挂这个声部的音（1 = 上声部，2 = 其余声部）；不设挂全行。位图路两声部一行谱、上下各印一行词时设（`splitVoiceLyrics`）。 */
   voice?: 1 | 2;
@@ -806,7 +808,7 @@ export function buildLyricLines(
     rs.sort((a, b) => a.top - b.top);
     rs.forEach((r, i) => {
       const syllables = dedupeSyllables(r.objs.flatMap((o) => splitSyllables(o, dict)).sort((a, b) => a.cx - b.cx));
-      if (syllables.length) out.push({ staff, verse: i + 1, top: r.top, syllables });
+      if (syllables.length) out.push({ staff, verse: i + 1, top: r.top, bottom: r.bottom, syllables });
     });
   }
   return out;
@@ -819,11 +821,14 @@ interface NoteLike {
   rest: boolean;
   x: number;
   voice?: number;
-  lyrics?: { verse: number; text: string; hyphen: boolean; cont: boolean; size?: number }[];
+  lyrics?: { verse: number; text: string; hyphen: boolean; cont: boolean; size?: number; baseY?: number }[];
   chord?: string;
   chordSize?: number;
   chordLater?: { text: string; frac: number; size?: number }[];
 }
+
+/** 汉字墨迹下缘比基线低多少（占行高）：常见黑体、宋体的方块字墨迹底约在基线下 0.1 em */
+const HAN_BASELINE_RISE = 0.1;
 
 /**
  * 歌词逐音节挂到音符上。
@@ -835,6 +840,9 @@ export function attachLyrics(notes: NoteLike[], lines: LyricLine[], sameCol = 0)
   for (const line of lines) {
     // 行顶高过谱表顶线：词印在谱表上方（望十架 p3 独唱 / 女低共用一行谱，独唱的词在谱表上方、女低的在下方）
     const above = line.top < line.staff.box.top;
+    // 汉字行的基线：墨迹下缘往上提 `HAN_BASELINE_RISE` 个行高（汉字墨迹略沉到基线下）；拉丁行有没有下伸笔说不准，不写
+    const han = line.bottom !== undefined && line.syllables.some((q) => /[\u3400-\u9fff]/.test(q.text));
+    const baseY = han ? line.bottom! - (line.bottom! - line.top) * HAN_BASELINE_RISE : undefined;
     const cand = notes.filter((n) => n.staff === line.staff && !n.rest && (!line.voice || (line.voice === 1) === (n.voice === 1))).sort((a, b) => a.x - b.x);
     if (!cand.length) continue;
     let ni = 0;
@@ -847,7 +855,7 @@ export function attachLyrics(notes: NoteLike[], lines: LyricLine[], sameCol = 0)
       for (let j = ni + 1; j < cand.length && cand[j].x - syl.cx <= Math.abs(cand[ni].x - syl.cx); j++)
         if (Math.abs(cand[j].x - syl.cx) < Math.abs(cand[ni].x - syl.cx)) ni = j;
       const n = cand[ni];
-      (n.lyrics ??= []).push({ verse: line.verse, text: syl.text, hyphen: syl.hyphen, cont, ...(syl.sizeDev > 0 ? { size: syl.sizeDev } : {}), ...(above ? { above } : {}) });
+      (n.lyrics ??= []).push({ verse: line.verse, text: syl.text, hyphen: syl.hyphen, cont, ...(syl.sizeDev > 0 ? { size: syl.sizeDev } : {}), ...(above ? { above } : {}), ...(baseY !== undefined ? { baseY } : {}) });
       cont = syl.hyphen;
       // 同一列（x 差不到 `sameCol`）的其余和弦成员一并跳过：一个和弦只挂一个音节。
       // 位图路才传（0.3 个线距）：只挪一个音，下一个音节常落到同一和弦的另一个成员上，

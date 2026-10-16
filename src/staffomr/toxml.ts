@@ -347,8 +347,10 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
         const metro = m ? `<direction-type><metronome><beat-unit>${m.unit}</beat-unit><per-minute>${escapeXml(m.text ?? String(m.bpm))}</per-minute></metronome></direction-type>` : "";
         body += `<direction placement="above">${words}${metro}${dirStaff}${m ? `<sound tempo="${m.bpm}"/>` : ""}</direction>`;
       }
-      for (const w of n.words ?? [])
-        body += `<direction placement="${w.above ? "above" : "below"}"><direction-type><words${fontAttr(textPt(n, w.size))}>${escapeXml(w.text)}</words></direction-type>${dirStaff}</direction>`;
+      for (const w of n.words ?? []) {
+        const wy = withSourceLayout && w.baseY !== undefined ? ` default-y="${staffY(n.staff, n.sym.box.left, w.baseY)}"` : "";
+        body += `<direction placement="${w.above ? "above" : "below"}"><direction-type><words${wy}${fontAttr(textPt(n, w.size))}>${escapeXml(w.text)}</words></direction-type>${dirStaff}</direction>`;
+      }
       if (n.dynamic) body += dynamicXml(n, dirStaff);
       // 松叶：**止排在起之前**——同一个音符上前一条松叶收尾、下一条起头是常事，
       // 反过来写会让两条重叠（MusicXML 里同号的 wedge 不能套嵌）。
@@ -437,7 +439,7 @@ function noteXmlRaw(n: StaffNote, dur: number, staffNo = 0, withVoice = false, v
   const stem = n.stemUp === null ? "" : `<stem${tip}>${n.stemUp ? "up" : "down"}</stem>`;
   // `<lyric>` 是 `<note>` 的最后一批子元素，排在 `<stem>`/`<accidental>` 之后
   // 一字多音收尾的那个音：只出一个带 `<extend type="stop"/>` 的空 `<lyric>`（延长线画到这里）
-  const lyric = (n.lyrics ?? []).map((l) => lyricXml(l)).join("") +
+  const lyric = (n.lyrics ?? []).map((l) => lyricXml(l, withSourceLayout && l.baseY !== undefined && n.staff ? staffY(n.staff, n.sym.box.left, l.baseY) : undefined)).join("") +
     (n.lyricExtendStop ?? []).map((l) => `<lyric number="${l.verse}"><extend type="stop"/></lyric>`).join("");
   // `<notations>` 排在 `<lyric>` 之前（MusicXML 的子元素顺序）
   const nots: string[] = [];
@@ -644,14 +646,15 @@ export function renumberSlurs(body: string, sysOfBar?: number[], crossTies = fal
   //（行尾的延音线头常只有半格多宽、贴着谱线，行首那截又常与圆滑线起笔粘在一起）
   /** 补到别的音上的延音线：插入点（原文位置）→ 文本 */
   const inserts: { pos: number; text: string }[] = [];
-  const tieInto = (n: { at: number; seg: string }, type: string) => {
+  const tieInto = (n: { at: number; seg: string }, type: string, above: boolean) => {
     const d = n.seg.indexOf("</duration>");
     if (d < 0) return false;
     inserts.push({ pos: n.at + d + 11, text: `<tie type="${type}"/>` });
     const nt = n.seg.indexOf("<notations>");
     const ly = n.seg.indexOf("<lyric");
-    if (nt >= 0) inserts.push({ pos: n.at + nt + 11, text: `<tied type="${type}"/>` });
-    else inserts.push({ pos: n.at + (ly >= 0 ? ly : n.seg.length), text: `<notations><tied type="${type}"/></notations>` });
+    const tied = `<tied type="${type}"${type === "start" ? ` orientation="${above ? "over" : "under"}"` : ""}/>`;
+    if (nt >= 0) inserts.push({ pos: n.at + nt + 11, text: tied });
+    else inserts.push({ pos: n.at + (ly >= 0 ? ly : n.seg.length), text: `<notations>${tied}</notations>` });
     return true;
   };
   if (crossTies && sysOfBar) {
@@ -672,7 +675,7 @@ export function renumberSlurs(body: string, sysOfBar?: number[], crossTies = fal
         if (k >= 0) target = notesIn(...barRange(k)).filter((n) => plain(n.seg) && voiceOf(n.seg) === v).pop();
       }
       if (!target || pitchOf(target.seg) !== p || target.seg.includes('<tie type="' + (t.type === "start" ? "stop" : "start"))) continue;
-      if (!tieInto(target, t.type === "start" ? "stop" : "start")) continue;
+      if (!tieInto(target, t.type === "start" ? "stop" : "start", t.above)) continue;
       orphan.delete(t.arc);
       tieArcs.add(t.arc);
     }
@@ -706,7 +709,9 @@ export function renumberSlurs(body: string, sysOfBar?: number[], crossTies = fal
       while (k >= 0 && !/^<note[ >]/.test(out.slice(k, k + 6))) k = out.lastIndexOf("<note", k - 1);
       const d = out.indexOf("</duration>", k);
       if (d >= 0) out = out.slice(0, d + 11) + `<tie type="${t.type}"/>` + out.slice(d + 11);
-      out += `<tied type="${t.type}"/>`;
+      // 弧的上下方照抄成延音线的朝向（读入端照 `orientation` 定方向，不写就由排版去猜）
+      const ori = t.type === "start" ? ` orientation="${t.above ? "over" : "under"}"` : "";
+      out += `<tied type="${t.type}"${ori}/>`;
       continue;
     }
     let n = num.get(key);
@@ -725,9 +730,10 @@ export function renumberSlurs(body: string, sysOfBar?: number[], crossTies = fal
   return out.replace(/<notations><\/notations>/g, "");
 }
 
-function lyricXml(l: { verse: number; text: string; hyphen: boolean; cont: boolean; extend?: boolean; above?: boolean }): string {
+/** `y`：写源谱版面时这一行词的基线（tenths，相对谱表顶线），原图上量的 */
+function lyricXml(l: { verse: number; text: string; hyphen: boolean; cont: boolean; extend?: boolean; above?: boolean }, y?: number): string {
   const syllabic = l.cont ? (l.hyphen ? "middle" : "end") : l.hyphen ? "begin" : "single";
-  return `<lyric number="${l.verse}"${l.above ? ' placement="above"' : ""}><syllabic>${syllabic}</syllabic><text>${escapeXml(l.text)}</text>${l.extend ? '<extend type="start"/>' : ""}</lyric>`;
+  return `<lyric number="${l.verse}"${y !== undefined ? ` default-y="${y}"` : ""}${l.above ? ' placement="above"' : ""}><syllabic>${syllabic}</syllabic><text>${escapeXml(l.text)}</text>${l.extend ? '<extend type="start"/>' : ""}</lyric>`;
 }
 
 function accidentalName(alter: number): string {

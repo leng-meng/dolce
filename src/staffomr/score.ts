@@ -487,32 +487,43 @@ function finishScore(systems: StaffScore["systems"], scoreStaves: ScoreStaff[], 
 }
 
 /**
- * 方括号（`PartBracket`）→ 声部分组。逐系统看括号纵向罩住哪几个声部在本系统的**全部**谱行，
- * 连着两个以上的记一组；同一组声部只记一次（首个认出的系统为准）。
+ * 方括号（`PartBracket`：矢量路的括号路径、位图路 `findPartBrackets` 认出的粗直竖笔）→ 声部分组。逐系统看括号纵向罩住哪几个声部在本系统的**全部**谱行，
+ * 连着两个以上的记一组。各系统罩住的声部常不同（破碎：前半首女高女低两行、49 小节起女高女低男声三行另成声部），
+ * 与已有的组相交或相接的**并成一组**（取并集）；渲染端逐系统只括本系统可见的那几行。
  * 小节线是否贯穿：组里相邻两个声部之间的空白有没有小节线穿过（合唱谱人声行之间要写歌词，小节线多半逐行断开）。
  */
 function groupParts(systems: StaffScore["systems"], parts: Part[]): PartGroup[] {
   const out: PartGroup[] = [];
+  /** 每组在哪几个系统上见过括号 */
+  const seen = new Map<PartGroup, Set<number>>();
   systems.forEach(({ page }, si) => {
     const sp = page.normalStaffSpace || page.space;
-    for (const o of page.objs) {
-      if (!o.hasTag("PartBracket")) continue;
+    for (const { box } of page.objs.filter((o) => o.hasTag("PartBracket"))) {
       const inside: number[] = [];
       parts.forEach((part, pi) => {
         const sts = part.scoreStaves.map((ss) => ss.staves[si]).filter((st): st is Staff => !!st);
-        if (sts.length && sts.every((st) => st.cy > o.box.top && st.cy < o.box.bottom)) inside.push(pi);
+        if (sts.length && sts.every((st) => st.cy > box.top && st.cy < box.bottom)) inside.push(pi);
       });
       if (inside.length < 2 || inside[inside.length - 1] - inside[0] !== inside.length - 1) continue;
       const first = inside[0];
       const last = inside[inside.length - 1];
-      if (out.some((g) => !(last < g.first || first > g.last))) continue;
+      // 同一系统里相接的两组是印着的两个括号（两个合唱团），不并；跨系统相接的才并
+      const hit = out.find((g) => !(last < g.first || first > g.last) || (!seen.get(g)?.has(si) && (last === g.first - 1 || first === g.last + 1)));
+      if (hit) {
+        hit.first = Math.min(hit.first, first);
+        hit.last = Math.max(hit.last, last);
+        seen.get(hit)!.add(si);
+        continue;
+      }
       const rows = inside.flatMap((pi) => parts[pi].scoreStaves.map((ss) => ss.staves[si]).filter((st): st is Staff => !!st)).sort((a, b) => a.box.top - b.box.top);
       const bars = page.segsWithTag("BarLine");
       const barline = rows.length > 1 && rows.slice(1).every((b, k) => {
         const a = rows[k];
         return bars.some((s) => s.top <= a.box.bottom + sp * 0.5 && s.bottom >= b.box.top - sp * 0.5);
       });
-      out.push({ symbol: "bracket", first, last, barline });
+      const g: PartGroup = { symbol: "bracket", first, last, barline };
+      out.push(g);
+      seen.set(g, new Set([si]));
     }
   });
   return out.sort((a, b) => a.first - b.first);

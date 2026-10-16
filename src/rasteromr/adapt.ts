@@ -155,6 +155,8 @@ export interface AdaptInput {
   braces?: Rect[];
   /** 系统括号（罩住整个系统的那个），打 `SysBracket`——`makeSystems` 分系统用。 */
   sysBrackets?: Rect[];
+  /** 声部方括号（人声几行左边那个），打 `PartBracket`——`groupParts` 分组用（与矢量路同一个标签）。 */
+  partBrackets?: Rect[];
 }
 
 /**
@@ -216,6 +218,12 @@ export function buildRasterPage(inp: AdaptInput): SPage {
     pg.objs.push(o);
   }
   for (const b of inp.sysBrackets ?? []) pg.objs.push(makeSysBracketObj(id++, b));
+  for (const b of inp.partBrackets ?? []) {
+    const o = new PObj(id, fakePath(id, b.x, b.y, b.w, b.h, 1), null);
+    id++;
+    o.addTag("PartBracket");
+    pg.objs.push(o);
+  }
   for (const s of inp.syms ?? []) {
     const { obj, sym } = makeSymObj(id++, s, inp.unit.height);
     pg.objs.push(obj);
