@@ -279,6 +279,7 @@ export class OmrController implements FormatSource {
     const g = ++this.gen;
     const prev = this.lastInputs;
     const ok = await this.recognizeFilesInner(files, g);
+    if (!ok && g === this.gen) this.endPending(false);
     // 改过原图列表重识别没成：谱面还是上一次的结果，原图列表也退回去（存项目、重开补对照要的是那一份）。
     // 没有会话（起始页第一次识别失败）就留着新的，好给「调整原图后重试」
     if (!ok && g === this.gen && this.sessionKind !== null) this.lastInputs = prev;
@@ -420,6 +421,7 @@ export class OmrController implements FormatSource {
     else this.host.adoptText(s.docFormat, s.text, null);
     this.staffEmitted = s.emitted;
     this.sessionKind = s.kind;
+    this.fromProject = true;
     this.host.setContextControl(this.kindField(), true);
     this.syncPagesBtn();
     if ((s.kind === "staff" || s.kind === "vector") && this.lastInputs.length) {
@@ -431,9 +433,13 @@ export class OmrController implements FormatSource {
     }
   }
 
+  /** 这个会话是重开的项目（`restore`），对照数据要从原图补；识别出来的会话为 false */
+  private fromProject = false;
+
   /** 五线谱项目重开后第一次进对照：从原图重跑识别补回逐页位图与音符坐标（不动原文）。 */
   private ensureStaffResult(): Promise<boolean> {
-    if (this.staffResult || !this.lastInputs.length) return Promise.resolve(this.staffResult !== null);
+    // 只补重开的项目：识别流程里结果还没落地（矢量路落谱面与渲对照底图之间）并排就开着，别当成缺数据再跑一遍识别
+    if (this.staffResult || !this.lastInputs.length || !this.fromProject) return Promise.resolve(this.staffResult !== null);
     this.ensuring ??= this.loadStaffResult().then((ok) => {
       this.staffLoadFailed = !ok;
       return ok;
@@ -562,11 +568,16 @@ export class OmrController implements FormatSource {
   /** 识别途中：并排面板先放原图（不带框），谱面区每页一张「识别中」占位，识别完换成结果 */
   private pending: { g: number; side: boolean; pages: SVGTextElement[] } | null = null;
 
-  /** 位图五线谱开始识别：能看的先给——原图（并排，按用户的核对方式）与逐页的识别进度占位。识别模式（核对视图）里不动 */
+  /** 开始识别（位图五线谱 / 矢量 PDF / 简谱，判完路就调）：能看的先给——原图（并排，按用户的核对方式）与逐页的识别进度占位。
+   *  同一次识别只铺一次（矢量路没认出音、改走位图路时不重铺）；识别模式（核对视图）里不动 */
   private async showPending(files: readonly RecogInput[], g: number): Promise<void> {
-    if (this.host.mode === "recognize") return;
+    if (this.host.mode === "recognize" || this.pending?.g === g) return;
     this.pending = { g, side: this.side, pages: [] };
     this.onEarlyView?.();
+    // 代码区还是上一份文档（开始页进来是示例谱）：识别期间盖住，别让人以为那就是结果
+    const code = document.getElementById("code-pane");
+    code?.classList.add("omr-pending");
+    code?.setAttribute("data-pending", t("omr.codePending"));
     if ((this.compare ?? "side") === "side") {
       this.side = true;
       this.syncSide(null);
@@ -611,11 +622,12 @@ export class OmrController implements FormatSource {
     });
   }
 
-  /** 识别结束：成功的接着进结果（`enterAfterRecognize` 会重摆并排）；没成的把并排开关还原、谱面按原文重排 */
+  /** 识别结束：成功的接着进结果（`enterAfterRecognize` 会重摆并排）；没成的（`recognizeFiles` 收尾）把并排开关还原、谱面按原文重排 */
   private endPending(ok: boolean): void {
     const pend = this.pending;
     if (!pend) return;
     this.pending = null;
+    document.getElementById("code-pane")?.classList.remove("omr-pending");
     if (ok) return;
     this.side = pend.side;
     this.syncSide(null);
@@ -801,13 +813,15 @@ export class OmrController implements FormatSource {
         .map(([oid, b]) => ({ id: byOmr.get(oid)!, x: b.box.left, y: b.box.top, w: b.box.right - b.box.left, h: b.box.bottom - b.box.top })), views[i]));
     }
     if (!this.bin || !this.score) return [];
+    const bin = this.bin;
     const map = this.idMapOf(doc);
     const flat = this.score.rows.flatMap((r) => r.nums);
     const boxes = map ? map.toId.flatMap((id, i) => {
       const b = flat[i]?.bbox;
       return id !== undefined && b ? [{ id, x: b.x, y: b.y, w: b.w, h: b.h }] : [];
     }) : [];
-    return [page(this.bin, boxes)];
+    // 简谱的位图就是整张原图（PDF 是第一页整页）等比缩放来的、没纠斜：原图铺满位图范围就对得上
+    return [page(bin, boxes, this.wholePageView(0, 1, bin))];
   }
 
   /** 原图各份的原样底图（`renderPdfPages`），按输入列表缓存：开始识别时就画起来（`prerenderOriginals`），不等识别。
@@ -869,6 +883,15 @@ export class OmrController implements FormatSource {
       }
     }
     return out;
+  }
+
+  /** 第 `si` 份原图第 `pn` 页**整页**铺满位图 `bin`（简谱：位图就是整页缩放来的）；画不出为 null */
+  private async wholePageView(si: number, pn: number, bin: Binary): Promise<PageView> {
+    const src = this.prerenderOriginals(this.lastInputs).sources[si];
+    const got = src ? await src.catch(() => null) : null;
+    if (got === null) return null;
+    const url = typeof got === "string" ? got : (await (got[pn - 1]?.rendered ?? Promise.resolve(null)))?.url;
+    return url ? { url, x: 0, y: 0, w: bin.w, h: bin.h } : null;
   }
 
   /** 并排原图各页的整页底图：原样底图（`prerenderOriginals`）按识别位图摆好（`placePageView`）。逐页一个 promise，画好一页先给一页；
@@ -980,10 +1003,12 @@ export class OmrController implements FormatSource {
   /** 简谱识别（`recognizeFiles` 判完了走这里）。 */
   private async recognizeJianpu(picked: { bytes: Uint8Array; mime?: string }, g: number): Promise<boolean> {
     this.host.setStatus(t("omr.running"));
+    void this.showPending([this.lastInputs[0] ?? picked], g);
     try {
       const t0 = performance.now();
       const { bin, score } = await recognizeMusicppDetailed(picked.bytes, picked.mime);
       if (g !== this.gen) return false;
+      this.endPending(true);
       this.emit(score, bin);
       this.host.setContextControl(this.kindField(), true);
       await this.enterAfterRecognize("original"); // 简谱进原样档，对照方式按用户上次的选择（没选过就并排）
@@ -1034,8 +1059,13 @@ export class OmrController implements FormatSource {
       return false;
     }
     if (!ok || g !== this.gen) return false;
+    void this.showPending(this.lastInputs, g);
     const res = await recognizeStaffPdf(doc, {
-      onProgress: (done, total) => g === this.gen && this.host.setStatus(t("omr.staffProgress", { done, total })),
+      onProgress: (done, total) => {
+        if (g !== this.gen) return;
+        this.host.setStatus(t("omr.staffProgress", { done, total }));
+        this.markPendingDone(done);
+      },
       noteIds: true,
     });
     if (g !== this.gen) return true; // 过时：不落地，也不让调用方再按简谱试
@@ -1045,6 +1075,7 @@ export class OmrController implements FormatSource {
     }
     // 五线谱只出 MusicXML，且只进混排视图（理由见 OmrHost.adoptStaffXml）。
     const inputs = this.lastInputs;
+    this.endPending(true);
     this.clear();
     this.lastInputs = inputs;
     this.sessionKind = "vector";
@@ -2077,6 +2108,7 @@ export class OmrController implements FormatSource {
   /** 清掉本次 OMR 的识别叠加产物并禁用识别按钮；若正处识别模式则退回简谱模式。 */
   clear(): void {
     this.gen++;
+    this.fromProject = false;
     this.bin = null;
     this.score = null;
     this.beatMarks = [];

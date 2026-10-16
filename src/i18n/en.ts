@@ -891,6 +891,7 @@ export const en: Record<MsgKey, string> = {
   "omr.loadingImgPages": "Loading comparison data from the source images… {done}/{total} pages",
   "omr.pagePending": "Recognizing page {n}…",
   "omr.pageDone": "Page {n} recognized, assembling the score…",
+  "omr.codePending": "The recognized source will appear here when recognition finishes",
   "omr.doubts": "{n} doubtful",
   "omr.doubtAt": "Doubtful {i} / {n}: ",
   "omr.restLabel": "rest",

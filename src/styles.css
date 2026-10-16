@@ -551,7 +551,11 @@ button:focus-visible, select:focus-visible {
 .omr-side { position: absolute; left: 0; bottom: 0; width: 45%; overflow: auto; z-index: 15; background: var(--canvas); border-right: 1px solid var(--border, #ddd); padding: 8px; box-sizing: border-box; }
 .omr-side[hidden] { display: none; }
 .omr-side-page { width: 100%; height: auto; display: block; margin-bottom: 8px; background: #fff; }
-/* 位图五线谱识别途中谱面区的逐页占位（omrctl.ts::showPending） */
+/* 识别途中代码区还是上一份文档：盖住，换成一句说明（omrctl.ts::showPending） */
+#code-pane.omr-pending { position: relative; }
+#code-pane.omr-pending > * { visibility: hidden; }
+#code-pane.omr-pending::after { content: attr(data-pending); position: absolute; inset: 0; display: grid; place-items: center; padding: 24px; text-align: center; color: var(--text-secondary); font-size: 12px; }
+/* 识别途中谱面区的逐页占位（omrctl.ts::showPending） */
 .omr-pending-page { width: 100%; height: 100%; display: block; background: #fff; }
 .omr-pending-page text { fill: #888; }
 .omr-pending-page text.done { fill: #2e7d32; }

@@ -890,6 +890,7 @@ export const zh = {
   "omr.loadingImgPages": "正在从原图载入对照数据… {done}/{total} 页",
   "omr.pagePending": "第 {n} 页识别中…",
   "omr.pageDone": "第 {n} 页已识别，等整曲合成…",
+  "omr.codePending": "识别完成后这里显示识别结果的源码",
   "omr.doubts": "{n} 处可疑",
   "omr.doubtAt": "第 {i} / {n} 处可疑：",
   "omr.restLabel": "休",

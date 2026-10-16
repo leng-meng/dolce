@@ -21,7 +21,8 @@ export { isStaffPdf, type StaffPdfResult } from "./song";
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export async function openStaffPdf(bytes: Uint8Array, extra: Record<string, unknown> = {}): Promise<{ pdf: any; OPS: OpsEnum }> {
-  return openPdf(bytes, { disableFontFace: true, ...extra });
+  // `fontExtraProperties`：字体真名（`musicFamily` 认音乐字体靠它，不给只有 g_d0_f1 这种内部名，`isStaffPdf` 一律判否）。同 Node 回归的开法
+  return openPdf(bytes, { disableFontFace: true, fontExtraProperties: true, ...extra });
 }
 
 /**

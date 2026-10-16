@@ -209,12 +209,16 @@ export async function recognizeRasterPdfs(
 /** 并排原图整页画布的像素上限（WebKit 单张画布约 16.7M 像素封顶，留余量）。 */
 const PAGE_VIEW_MAX_PX = 12e6;
 
-/** 原样画好的一页 PDF（`renderPdfPages`）：整页 PNG，连同谱图（页上最大那张图）在页面上的变换与页面范围，摆放时用（`placePageView`）。 */
+/** 原样画好的一页 PDF（`renderPdfPages`）：整页 PNG，连同谱图（页上最大那张图）在页面上的变换与页面范围，摆放时用（`placePageView`）。
+ *  页上没有图（矢量谱、文字页）或谱图带旋转/错切的，`ctm` 为 null：整页照画，只是不能按位图路的框摆。 */
 export interface RenderedPage {
   url: string;
-  ctm: number[];
+  ctm: number[] | null;
   view: number[];
 }
+
+/** 页上没有谱图时画整页的倍数（同矢量路渲对照底图）。 */
+const PAGE_VIEW_PLAIN_SCALE = 2;
 
 /** `renderPdfPages` 的一页：页面大小（PDF 点，先给，好铺白纸占位）与画好的整页（画好前是挂着的 promise）。 */
 export interface PendingPage {
@@ -226,7 +230,7 @@ export interface PendingPage {
 /**
  * 并排原图的底图：原样画出 PDF 各页（页眉的小图块、文字层、页边都在）。**不等识别**：开始识别、打开项目时就画，
  * 文档只开一次；外层 promise 在量完各页大小时给出，各页按页序一页页画，画好一页先给一页。
- * 找不到谱图、谱图带旋转/错切的页给 null（调用方照旧画位图）。图片输入不走这里，调用方直接画原图。
+ * 画不出来的页给 null。图片输入不走这里，调用方直接画原图。
  */
 export async function renderPdfPages(pdfBytes: Uint8Array): Promise<PendingPage[]> {
   const { pdf, OPS } = await openRasterPdf(pdfBytes); // 图对象要带 `data`（同取图），不然认不出谱图
@@ -251,12 +255,11 @@ async function renderOne(pdf: any, OPS: any, pn: number): Promise<RenderedPage |
   const page = await pdf.getPage(pn);
   try {
     const found = await largestPageImageAt(page, OPS, (o) => (o.data && o.width && o.height ? o.width * o.height : null));
-    if (!found) return null;
-    const [a, b, c, d] = found.ctm;
-    if (b || c || a <= 0 || d <= 0) return null;
+    const [a, b, c, d] = found?.ctm ?? [0, 0, 0, 0];
+    const ctm = found && !b && !c && a > 0 && d > 0 ? [...found.ctm] : null;
     const [x0, y0, x1, y1] = page.view as number[];
     // 按谱图的原分辨率画（像素/点 = 图宽 / 图在页面上的宽），太大的降下来
-    const r = Math.min(found.obj.width / a, Math.sqrt(PAGE_VIEW_MAX_PX / ((x1 - x0) * (y1 - y0))));
+    const r = Math.min(ctm && found ? found.obj.width / a : PAGE_VIEW_PLAIN_SCALE, Math.sqrt(PAGE_VIEW_MAX_PX / ((x1 - x0) * (y1 - y0))));
     const vp = page.getViewport({ scale: r });
     const cv = document.createElement("canvas");
     cv.width = Math.round(vp.width);
@@ -268,7 +271,7 @@ async function renderOne(pdf: any, OPS: any, pn: number): Promise<RenderedPage |
     await page.render({ canvasContext: ctx, viewport: vp }).promise;
     // toBlob 异步编码、不堵主线程（整页几百万像素，toDataURL 要卡一两百毫秒）
     const blob = await new Promise<Blob | null>((res) => cv.toBlob(res, "image/png"));
-    return blob ? { url: URL.createObjectURL(blob), ctm: [...found.ctm], view: [x0, y0, x1, y1] } : null;
+    return blob ? { url: URL.createObjectURL(blob), ctm, view: [x0, y0, x1, y1] } : null;
   } finally {
     page.cleanup?.();
   }
@@ -279,7 +282,8 @@ async function renderOne(pdf: any, OPS: any, pn: number): Promise<RenderedPage |
  *（横竖各按位图宽高 / 谱图宽高），返回整页图在**位图坐标**里的位置（`x`、`y` 为负 = 页面在位图左上方伸出去的那一截）。
  * 不跟取图的纠斜、推平：干净版与照片没动过图，框是准的；纠过斜、推平过的扫描件框与原图差几个像素（斜率上限 0.015）。
  */
-export function placePageView(r: RenderedPage, bin: { w: number; h: number }): { url: string; x: number; y: number; w: number; h: number } {
+export function placePageView(r: RenderedPage, bin: { w: number; h: number }): { url: string; x: number; y: number; w: number; h: number } | null {
+  if (!r.ctm) return null;
   const [a, , , d, e, f] = r.ctm;
   const [x0, y0, x1, y1] = r.view;
   const sx = bin.w / a;
