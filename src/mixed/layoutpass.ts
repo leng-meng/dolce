@@ -149,7 +149,7 @@ const AUTO_ACC_CLEAR = 4;
  * 量法：把这一拍位的和弦先放在 x = 0，照 `autoPlaceNotes` 同一套（`applyFlipOffset` + `NoteEntry.layout`）排一遍临时记号；
  * 真正落位时 `autoPlaceNotes` 会按最终 x 再排。
  */
-function entryReach(score: StaffLayout, mi: number): Map<string, { left: number; right: number; ink: number }> {
+function entryReach(score: StaffLayout, mi: number, byStaff?: Map<string, { offset: Fraction; left: number; ink: number }[]>): Map<string, { left: number; right: number; ink: number }> {
   const meta = score.options.meta;
   const out = new Map<string, { left: number; right: number; ink: number }>();
   for (const part of score.parts) {
@@ -177,6 +177,14 @@ function entryReach(score: StaffLayout, mi: number): Map<string, { left: number;
       const key = ent.offset.toString();
       const cur = out.get(key);
       out.set(key, { left: Math.min(cur?.left ?? 0, left), right: Math.max(cur?.right ?? 0, right), ink: Math.max(cur?.ink ?? 0, ink, right) });
+      if (byStaff) {
+        const sk = `${part.pid}:${ent.subStaff}`;
+        const list = byStaff.get(sk) ?? [];
+        const same = list.find((e) => !e.offset.compareTo(ent.offset));
+        if (same) (same.left = Math.min(same.left, left)), (same.ink = Math.max(same.ink, ink, right));
+        else list.push({ offset: ent.offset, left, ink: Math.max(ink, right) });
+        byStaff.set(sk, list);
+      }
     }
   }
   return out;
@@ -287,7 +295,9 @@ function autoMeasureSlots(score: StaffLayout, mi: number): Slot[] {
     if (e) minHarm(e.offset.toString(), h.w + AUTO_HARMONY_SPACE);
   }
   const slots: Slot[] = [];
-  const reach = entryReach(score, mi);
+  /** 各谱表（声部:谱表）逐拍位的墨迹：压缩的最小宽按同一谱表相邻两个音算（左手的附点不该撑宽右手的十六分音符槽） */
+  const inkByStaff = new Map<string, { offset: Fraction; left: number; ink: number }[]>();
+  const reach = entryReach(score, mi, inkByStaff);
   /** 拍位上的音往左伸出去的那截（临时记号、左翻符头），带上离前面东西的净空；没有就是 0 */
   const leadAt = (key: string): number => {
     const l = -(reach.get(key)?.left ?? 0);
@@ -338,37 +348,53 @@ function autoMeasureSlots(score: StaffLayout, mi: number): Slot[] {
     const slot = Math.max(autoSlotWidth(e.dur), text, ink) + gracesAfter(k);
     const harm = harmAt.get(key) ?? 0;
     const tail = lyricTail.get(key);
-    // 压缩的最小宽按墨迹算：本拍位墨迹右缘（含符尾）+ 下一个音往左伸出那截（临时记号离前面的符干留 `accClear`；没有临时记号留 `clear`）。
-    // 小节末一个音同样要放下它的墨迹（八分音符的符尾），不然压紧时符尾贴到小节线上
-    const next = entries[k + 1];
-    const reachK = reach.get(key);
-    const nextLeft = next ? -(reach.get(next.offset.toString())?.left ?? 0) : 0;
-    // 临时记号画在 `xpos − 1`（`render.ts`），伸出那截再多一个单位
-    const inkMin = (accClear: number, clear: number) => (reachK ? reachK.ink + (nextLeft > 0 ? nextLeft + 1 + accClear : clear) : 0);
-    const min = Math.min(slot, Math.max(SQUEEZE_MIN_SLOT, harm, tail === undefined ? 0 : tail + AUTO_LYRIC_SPACE, ink, inkMin(ACC_STEM_CLEAR, INK_CLEAR)) + gracesAfter(k));
-    const hard = Math.min(min, Math.max(HARD_MIN_SLOT, harm, tail === undefined ? 0 : tail + HARD_LYRIC_SPACE, inkMin(ACC_STEM_CLEAR, INK_CLEAR)) + gracesAfter(k));
-    const tight = Math.min(hard, Math.max(TIGHT_MIN_SLOT, harm, tail ?? 0, inkMin(TIGHT_ACC_CLEAR, TIGHT_INK_CLEAR)) + gracesAfter(k));
+    // 墨迹（符头、附点、符尾、临时记号）在下面按各谱表相邻两个音另算（`inkByStaff`）
+    const min = Math.min(slot, Math.max(SQUEEZE_MIN_SLOT, harm, tail === undefined ? 0 : tail + AUTO_LYRIC_SPACE) + gracesAfter(k));
+    const hard = Math.min(min, Math.max(HARD_MIN_SLOT, harm, tail === undefined ? 0 : tail + HARD_LYRIC_SPACE) + gracesAfter(k));
+    const tight = Math.min(hard, Math.max(TIGHT_MIN_SLOT, harm, tail ?? 0) + gracesAfter(k));
     slots.push({ offset: e.offset, nat, slot, min, hard, tight });
     nat += slot;
+  }
+  // **墨迹按各谱表相邻两个音算**：本音墨迹右缘（符头、附点、不在杠里的朝上符尾）+ 下一个音往左伸出那截
+  //（临时记号离前面的符干留 `ACC_STEM_CLEAR`、最紧一档 `TIGHT_ACC_CLEAR`；没有临时记号留 `INK_CLEAR`），摊到两音之间的各槽上。
+  // 从前按拍位跨谱表合起来算在本拍位的槽上：左手附点四分的附点、单独八分音符的符尾把右手同一拍的十六分音符槽撑宽，伴奏一宽一窄（破碎 m84）。
+  // 小节末一个音同样要放下它的墨迹（符尾），不然压紧时符尾贴到小节线上。临时记号画在 `xpos − 1`（`render.ts`），伸出那截再多一个单位
+  const spreadOver = (ia: number, ib: number, need: { min: number; hard: number; tight: number }) => {
+    const span = slots.slice(ia, ib);
+    if (!span.length) return;
+    const natSum = span.reduce((x, sl) => x + sl.slot, 0) || 1;
+    const raise = (key: "min" | "hard" | "tight", want: number, cap: (sl: Slot) => number) => {
+      const have = span.reduce((x, sl) => x + sl[key], 0);
+      if (have >= want) return;
+      for (const sl of span) sl[key] = Math.min(cap(sl), sl[key] + ((want - have) * sl.slot) / natSum);
+    };
+    raise("min", need.min, (sl) => sl.slot);
+    raise("hard", need.hard, (sl) => sl.min);
+    raise("tight", need.tight, (sl) => sl.hard);
+  };
+  for (const list of inkByStaff.values()) {
+    list.sort((a, b) => a.offset.compareTo(b.offset));
+    list.forEach((a, n) => {
+      const b = list[n + 1];
+      const ia = slots.findIndex((sl) => !sl.offset.compareTo(a.offset));
+      const ib = b ? slots.findIndex((sl) => !sl.offset.compareTo(b.offset)) : slots.length;
+      if (ia < 0 || ib <= ia) return;
+      const lead = b && b.left < 0 ? -b.left + 1 : 0;
+      spreadOver(ia, ib, {
+        min: a.ink + (lead ? lead + ACC_STEM_CLEAR : INK_CLEAR),
+        hard: a.ink + (lead ? lead + ACC_STEM_CLEAR : INK_CLEAR),
+        tight: a.ink + (lead ? lead + TIGHT_ACC_CLEAR : TIGHT_INK_CLEAR),
+      });
+    });
   }
   // 歌词的中心距折到两字之间的各槽上：不够的差额补在前一个字那个槽的 `min` 上（不超过它的自然宽，超出的部分本来就放不下）
   for (const pr of lyricPairs) {
     const ia = slots.findIndex((sl) => !sl.offset.compareTo(pr.a));
     const ib = slots.findIndex((sl) => !sl.offset.compareTo(pr.b));
     if (ia < 0 || ib <= ia) continue;
-    let sum = 0, sumHard = 0, sumTight = 0;
-    for (let i = ia; i < ib; i++) (sum += slots[i]!.min), (sumHard += slots[i]!.hard), (sumTight += slots[i]!.tight);
     // 差额按各槽自然宽的比例摊到两字之间的每个槽上：全补在前一个字的槽上，一个八分音符的字跨两个十六分音符槽时
     // 伴奏的十六分音符就一宽一窄（用户：钢琴伴奏排得不匀）
-    const span = slots.slice(ia, ib);
-    const natSum = span.reduce((x, sl) => x + sl.slot, 0) || 1;
-    const spread = (need: number, have: number, key: "min" | "hard" | "tight", cap: (sl: Slot) => number) => {
-      if (have >= need) return;
-      for (const sl of span) sl[key] = Math.min(cap(sl), sl[key] + ((need - have) * sl.slot) / natSum);
-    };
-    spread(pr.need, sum, "min", (sl) => sl.slot);
-    spread(pr.hard, sumHard, "hard", (sl) => sl.min);
-    spread(pr.tight, sumTight, "tight", (sl) => sl.hard);
+    spreadOver(ia, ib, { min: pr.need, hard: pr.hard, tight: pr.tight });
   }
   cache[mi] = slots;
   return slots;
