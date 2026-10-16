@@ -175,7 +175,8 @@ function timelinePartOf(
     const entries: ChordEntry[] = [];
     for (const el of m.elements) {
       if (el.kind !== "chord") continue;
-      const onset = pos.get(el.voice) ?? 0;
+      // `<forward>` 空出的拍子只记在 `onset` 上（不是隐形休止），不认它后面的音会往前挤
+      const onset = el.onset ?? pos.get(el.voice) ?? 0;
       if (el.grace) continue;
       if (el.placeholder) {
         // 不占时值的占位（`Chord.placeholder`）：自己那一拍不算，身上的增时线延的是前一个音
