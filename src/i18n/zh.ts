@@ -888,6 +888,8 @@ export const zh = {
   "omr.loadFailed": "载入对照数据失败：{error}",
   "omr.loadingImg": "正在从原图载入对照数据…",
   "omr.loadingImgPages": "正在从原图载入对照数据… {done}/{total} 页",
+  "omr.pagePending": "第 {n} 页识别中…",
+  "omr.pageDone": "第 {n} 页已识别，等整曲合成…",
   "omr.doubts": "{n} 处可疑",
   "omr.doubtAt": "第 {i} / {n} 处可疑：",
   "omr.restLabel": "休",

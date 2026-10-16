@@ -216,19 +216,31 @@ export interface RenderedPage {
   view: number[];
 }
 
+/** `renderPdfPages` 的一页：页面大小（PDF 点，先给，好铺白纸占位）与画好的整页（画好前是挂着的 promise）。 */
+export interface PendingPage {
+  w: number;
+  h: number;
+  rendered: Promise<RenderedPage | null>;
+}
+
 /**
- * 并排原图的底图：原样画出 PDF 各页（页眉的小图块、文字层、页边都在）。**不等识别**：开始识别时就画，
- * 文档只开一次、按页序一页页画；外层 promise 在知道页数时给出，各页各一个 promise，画好一页先给一页。
+ * 并排原图的底图：原样画出 PDF 各页（页眉的小图块、文字层、页边都在）。**不等识别**：开始识别、打开项目时就画，
+ * 文档只开一次；外层 promise 在量完各页大小时给出，各页按页序一页页画，画好一页先给一页。
  * 找不到谱图、谱图带旋转/错切的页给 null（调用方照旧画位图）。图片输入不走这里，调用方直接画原图。
  */
-export async function renderPdfPages(pdfBytes: Uint8Array): Promise<Promise<RenderedPage | null>[]> {
+export async function renderPdfPages(pdfBytes: Uint8Array): Promise<PendingPage[]> {
   const { pdf, OPS } = await openRasterPdf(pdfBytes); // 图对象要带 `data`（同取图），不然认不出谱图
   const n = pdf.numPages as number;
+  const sizes: { w: number; h: number }[] = [];
+  for (let pn = 1; pn <= n; pn++) {
+    const [x0, y0, x1, y1] = (await pdf.getPage(pn)).view as number[];
+    sizes.push({ w: x1 - x0, h: y1 - y0 });
+  }
   let prev: Promise<unknown> = Promise.resolve();
-  const pages = Array.from({ length: n }, (_, k) => {
-    const p = prev.then(() => renderOne(pdf, OPS, k + 1)).catch(() => null);
-    prev = p;
-    return p;
+  const pages = sizes.map((sz, k) => {
+    const rendered = prev.then(() => renderOne(pdf, OPS, k + 1)).catch(() => null);
+    prev = rendered;
+    return { ...sz, rendered };
   });
   void prev.finally(() => pdf.destroy?.());
   return pages;

@@ -188,18 +188,30 @@ async function boot() {
     mobileCodeBtn.setAttribute("aria-pressed", String(showCode));
     mobileScoreBtn.setAttribute("aria-pressed", String(!showCode));
   };
-  const recognizeFromPicker = () => void pickRecognitionFile(app, {
-    onPicked: () => { setStartFeedback(""); setRecognitionBusy(true); },
-    onDone: (success) => {
-      setRecognitionBusy(false);
-      if (success) {
-        setMobileView("score");
-        revealWorkspace();
-      } else if (appRoot.classList.contains("is-starting")) {
-        setStartFeedback(app.status || t("start.recognizeFailed"));
-      }
-    },
-  });
+  // 识别起止：先挂整块遮罩；位图五线谱一开始就能给原图与逐页进度（`omrctl.ts::showPending`），那时撤掉遮罩、离开开始页。
+  // 从开始页进来的没识别成：退回开始页说明原因（工作区里那时铺的是占位，`endPending` 已还原）
+  let fromStart = false;
+  app.omr.onEarlyView = () => {
+    setRecognitionBusy(false);
+    setMobileView("score");
+    revealWorkspace();
+  };
+  const recognitionStart = () => {
+    fromStart = appRoot.classList.contains("is-starting");
+    setStartFeedback("");
+    setRecognitionBusy(true);
+  };
+  const recognitionDone = (success: boolean) => {
+    setRecognitionBusy(false);
+    if (success) {
+      setMobileView("score");
+      revealWorkspace();
+    } else if (fromStart) {
+      showStartScreen();
+      setStartFeedback(app.status || t("start.recognizeFailed"));
+    }
+  };
+  const recognizeFromPicker = () => void pickRecognitionFile(app, { onPicked: recognitionStart, onDone: recognitionDone });
 
   // toolbar
   const on = (id: string, fn: () => void) =>
@@ -338,16 +350,8 @@ async function boot() {
 
   await wireDragDrop(app, workspace, {
     onOpened: revealWorkspace,
-    onRecognitionStart: () => { setStartFeedback(""); setRecognitionBusy(true); },
-    onRecognitionDone: (success) => {
-      setRecognitionBusy(false);
-      if (success) {
-        setMobileView("score");
-        revealWorkspace();
-      } else if (appRoot.classList.contains("is-starting")) {
-        setStartFeedback(app.status || t("start.recognizeFailed"));
-      }
-    },
+    onRecognitionStart: recognitionStart,
+    onRecognitionDone: recognitionDone,
   });
 
   // 关页 / 关窗前有没存的内容先拦一下（草稿照存，真关了下次还能恢复）。
