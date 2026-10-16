@@ -20,7 +20,7 @@ import type { Region } from "../style/ss";
 import { MixedOptions, type StaffLayout, type Sys } from "../mixed/model";
 import { layoutStaff } from "../mixed/layout";
 import { layoutStaffPages, PAGE_HEIGHT_FALLBACK } from "../mixed/staffpages";
-import type { StaffSystemData } from "../mixed/prims";
+import type { StaffChordData, StaffSystemData } from "../mixed/prims";
 import { layoutJianpu, type JianpuLayout } from "./jianpu/compose";
 import { clearSongBreaks } from "../model/breaks";
 import type { PlacedPage } from "./jianpu/place";
@@ -28,6 +28,9 @@ import type { JianpuGrid } from "./jianpu/metrics";
 import { ScoreIndex, type Hit } from "./scoreindex";
 import { Playhead, spanIn, svgBox } from "./playhead";
 import type { IdentityKind } from "./identity";
+
+/** 五线谱播放线的宽（tenths，线距 10）：两个符头宽上下，各音一样宽 */
+const PLAYHEAD_W = 24;
 
 // ---------------------------------------------------------------- 请求与资源
 
@@ -392,7 +395,8 @@ export class ScorePainter {
       if (!hit || !sys) return null;
       const sysEl = this.nodeMap.get(sys);
       const band = sys.data as StaffSystemData;
-      this.playhead.move(this.nodeMap.get(hit.item), sysEl ? spanIn(sysEl, band.top, band.bottom) : null);
+      const head = hit.item.data as StaffChordData | null;
+      this.playhead.move(this.nodeMap.get(hit.item), sysEl ? spanIn(sysEl, band.top, band.bottom) : null, head ? { cx: head.cx, w: PLAYHEAD_W } : undefined);
       return hit.page;
     }
     const hit = this.index.note(id, pass, occ);

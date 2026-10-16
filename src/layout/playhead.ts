@@ -22,15 +22,16 @@ export class Playhead {
     this.spans = null;
   }
 
-  /** 横向取音 `noteEl` 的包围盒，纵向取 `span`（`noteEl` 所在 svg 的用户坐标）。缺哪样都撤掉。 */
-  move(noteEl?: SVGGraphicsElement, span?: Span | null): void {
+  /** 横向取音 `noteEl` 的包围盒，纵向取 `span`（`noteEl` 所在 svg 的用户坐标）。缺哪样都撤掉。
+   *  给了 `fixed`（`noteEl` 自己坐标系里的中心 x 与宽）就按它居中定宽：五线谱一音一宽，不随符尾、错开的头撑宽。 */
+  move(noteEl?: SVGGraphicsElement, span?: Span | null, fixed?: { cx: number; w: number }): void {
     const svg = noteEl?.ownerSVGElement;
-    const box = noteEl && span ? svgBox(noteEl) : null;
+    const box = noteEl && span ? (fixed ? fixedBox(noteEl, fixed.cx, fixed.w) : svgBox(noteEl)) : null;
     if (!noteEl || !svg || !span || !box) {
       this.rect?.remove();
       return;
     }
-    const pad = 4;
+    const pad = fixed ? 0 : 4;
     const x0 = box.x0 - pad;
     const x1 = box.x1 + pad;
     const y0 = span.y0 - pad * 2;
@@ -81,6 +82,17 @@ export function svgBox(el: SVGGraphicsElement): { x0: number; x1: number; y0: nu
   const xs = [m.a * b.x + m.c * b.y + m.e, m.a * (b.x + b.width) + m.c * (b.y + b.height) + m.e];
   const ys = [m.b * b.x + m.d * b.y + m.f, m.b * (b.x + b.width) + m.d * (b.y + b.height) + m.f];
   return { x0: Math.min(...xs), x1: Math.max(...xs), y0: Math.min(...ys), y1: Math.max(...ys) };
+}
+
+/** `el` 坐标系里以 `cx` 为中心、宽 `w` 的横向范围 → 它所在 svg 的用户坐标（竖向不用，给 0）。 */
+function fixedBox(el: SVGGraphicsElement, cx: number, w: number): { x0: number; x1: number; y0: number; y1: number } | null {
+  const svgCtm = el.ownerSVGElement?.getScreenCTM();
+  const ctm = el.getScreenCTM();
+  if (!svgCtm || !ctm) return null;
+  const m = svgCtm.inverse().multiply(ctm);
+  const xa = m.a * (cx - w / 2) + m.e;
+  const xb = m.a * (cx + w / 2) + m.e;
+  return { x0: Math.min(xa, xb), x1: Math.max(xa, xb), y0: 0, y1: 0 };
 }
 
 /** `el` 坐标系里的竖向范围 [top, bottom] → 它所在 svg 的用户坐标。 */

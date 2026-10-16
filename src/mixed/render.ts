@@ -51,7 +51,7 @@ import { BarlineGlyph, type BarlineSpec } from "../engrave/barline";
 import { TupletGlyph } from "../engrave/tuplet";
 import { hairpinPath } from "../engrave/hairpin";
 import { chordTextSegs, harmonyWidth, layoutHarmonySegs } from "../engrave/chord";
-import { addLine, addSmufl, addSmuflScaled, chordGroup, STAFF_SYSTEM, translated, type StaffSystemData } from "./prims";
+import { addLine, addSmufl, addSmuflScaled, chordGroup, STAFF_SYSTEM, translated, type StaffChordData, type StaffSystemData } from "./prims";
 import type { ItemIdentity } from "../layout/identity";
 import { drawJianpuOverlay } from "./jianpuoverlay";
 
@@ -94,14 +94,19 @@ export function drawNotesNormal(
     const code = ch.sym();
     if (!code) continue;
     let cg: Group | null = null;
+    /** 符头中心（`StaffChordData`），画完符头才知道；之后才建的组（只有符干的）建时带上 */
+    let head: StaffChordData | null = null;
     const chordGrp = (): Group => {
       if (!cg) {
         cg = chordGroup(ch.src.id);
+        cg.data = head;
         container.add(cg);
       }
       return cg;
     };
 
+    let headL = Infinity;
+    let headR = -Infinity;
     for (const n of ch.notes) {
       if (n.staff !== subStaff) continue;
       if (!n.visible) continue;
@@ -132,6 +137,8 @@ export function drawNotesNormal(
       } else {
         addSmufl(chordGrp(), code, x, y, fs);
       }
+      headL = Math.min(headL, x);
+      headR = Math.max(headR, x + smuflWidth(meta, code) * scale);
       // 倚音不进 NoteEntry（不参与同拍对齐），加线在这里按它自己的小号符头补画——
       // 否则 `{5,,}` 这种落到谱表外的倚音悬在半空
       if (ch.grace && !ch.rest) {
@@ -143,6 +150,17 @@ export function drawNotesNormal(
         }
       }
     }
+
+    // 跨谱表的和弦，这一行谱只画符干、没有符头：按别的谱行上的符头取（横坐标与谱行无关）
+    if (!(headR > headL)) {
+      for (const n of ch.notes) {
+        if (!n.visible || ch.measureRest || n.x < 0) continue;
+        headL = Math.min(headL, n.x);
+        headR = Math.max(headR, n.x + smuflWidth(meta, code));
+      }
+    }
+    if (headR > headL) head = { cx: (headL + headR) / 2 };
+    if (cg && head) (cg as Group).data = head;
 
     // stem and flag (skip rests, whole notes, half notes with beams)
     if (ch.rest) continue;

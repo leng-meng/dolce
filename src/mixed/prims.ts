@@ -16,6 +16,12 @@ export interface StaffSystemData {
   readonly bottom: number;
 }
 
+/** 和弦组的 `data`：符头（休止符）那一列的中心 x，和弦组坐标（tenths）。播放线按它居中、定宽（`layout/playhead.ts`），
+ *  不随符尾、二度错开的头、整小节休止撑宽。 */
+export interface StaffChordData {
+  readonly cx: number;
+}
+
 /** 和弦 `id` 的组（见 `STAFF_CHORD`）。 */
 export function chordGroup(id: ElementId): Group {
   const g = new Group();
