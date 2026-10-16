@@ -620,6 +620,9 @@ function partStaffOffset(sys: Sys, p: PartLayout, staff: number): number {
 // 跨系统截断：musicpp（render.cpp:2196）仅在 start/end 同属本 system 时绘制松叶，
 // wedge 跨换行就整条丢弃。这里主动 diverge——把松叶在每个相交 system 内裁到系统
 // 左右边界，端点高度按 tick 线性插值，使断开的渐强/渐弱线在两个系统上各画一段。
+/** 源谱版面档：松叶止端离小节线至少留的空（tenths） */
+const WEDGE_BAR_CLEAR = 3;
+
 function drawWedge(container: Group, obj: Wedge, sys: Sys): void {
   const ypos = partStaffOffset(sys, obj.part, obj.staff) + obj.ypos;
   const mifL = obj.startMeasure;
@@ -637,9 +640,11 @@ function drawWedge(container: Group, obj: Wedge, sys: Sys): void {
   const xL = startInSys
     ? mifL.getEntPos(obj.startTick.minus(mifL.offset)) + mifL.xpos() + (dx ? obj.dxLeft : 0)
     : firstMif.getEntPos(new Fraction(0));
-  const xR = endInSys
+  let xR = endInSys
     ? mifR.getEntPos(obj.endTick.minus(mifR.offset)) + mifR.xpos() + (dx ? obj.dxRight : 0)
     : sys.width();
+  // 源谱版面档的 `relative-x` 是原图上的间距，重排紧了会把止端推过小节线、伸出系统（破碎 m80 钢琴右移 50）：收在止端那个小节里
+  if (dx && endInSys) xR = Math.min(xR, mifR.xpos() + mifR.width - WEDGE_BAR_CLEAR);
 
   const h = obj.spread / 2;
   // 真实端点：渐强尖端在 start（高 0）、宽口在 end（高 h），渐弱相反。

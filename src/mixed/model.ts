@@ -905,7 +905,8 @@ export class NoteEntry {
     this.acc = new AccidentalLayout(meta);
   }
 
-  layout(meta: MetaData, sibelius: boolean): void {
+  /** `stemClear`：符干朝下（干贴在符头左缘、正在临时记号右边）的和弦，临时记号离干至少再让这么多；0 = 照原 C++ 工程只让符头 */
+  layout(meta: MetaData, sibelius: boolean, stemClear = 0): void {
     this.dot = new DotLayout();
     this.leger = new LegerLayout();
     this.acc = new AccidentalLayout(meta);
@@ -924,6 +925,13 @@ export class NoteEntry {
         this.acc.addNote(line, left, n.acc, n.parenthesesAcc, 1);
       } else {
         this.acc.addNoteBound(line, left);
+      }
+    }
+    if (stemClear > 0) {
+      for (const ch of new Set(this.notes.map((n) => n.chord))) {
+        if (ch.rest || ch.stemUp || fGe(ch.noteType, new Fraction(4)) || !ch.notes.some((n) => n.acc !== "")) continue;
+        const ys = ch.notes.map((n) => n.cy());
+        this.acc.bound.push({ x: ch.stemX() - stemClear, top: Math.min(...ys) - 5, bottom: Math.max(ch.tailY(false), ...ys) });
       }
     }
     this.dot.update(meta);
@@ -1463,12 +1471,18 @@ export class BeamGroup {
     const up = first.stemUp;
     const x1 = first.stemX(), y1 = first.tailY(false), x2 = last.stemX(), y2 = last.tailY(false);
     const beamAt = (x: number) => (x2 !== x1 ? y1 + ((y2 - y1) * (x - x1)) / (x2 - x1) : y1);
-    for (let k = 1; k < this.chords.length - 1; k++) {
-      const ch = this.chords[k]!;
-      if (!ch.rest || ch.notes.length !== 1) continue;
+    // 杠底下的休止：读入时休止不带 `<beam>`、不进组，按本小节同声部同谱表、拍位落在组首尾之间的找
+    const md = first.measure;
+    const rests = md.chords.filter(
+      (ch) => ch.rest && !ch.grace && ch.voice === first.voice && ch.notes.length === 1 && ch.notes[0]!.staff === staff &&
+        ch.offset.compareTo(first.offset) > 0 && ch.offset.compareTo(last.offset) < 0,
+    );
+    for (const ch of rests) {
       const nt = ch.notes[0]!;
       const sym = ch.sym();
-      const levels = Math.max(1, this.chords[k - 1]!.beams.length, this.chords[k + 1]!.beams.length);
+      const prev = [...real].reverse().find((g) => g.offset.compareTo(ch.offset) < 0);
+      const next = real.find((g) => g.offset.compareTo(ch.offset) > 0);
+      const levels = Math.max(1, prev?.beams.length ?? 1, next?.beams.length ?? 1);
       const yb = beamAt(nt.x + smuflWidth(meta, sym) / 2);
       const inner = up ? yb + (levels - 1) * 8 + 5 + REST_BEAM_CLEAR : yb - (levels - 1) * 8 - 5 - REST_BEAM_CLEAR;
       // 字形上下沿（本坐标 y 向下）：基线在 cy
@@ -1477,6 +1491,7 @@ export class BeamGroup {
       for (let i = 0; i < REST_BEAM_STEPS && (up ? top() < inner : bottom() > inner); i++) nt.writtenPitch += up ? -2 : 2;
     }
   }
+
 
   /** 方向定好之后（或音符 x 变了）重排：休止（不画符干）跟本组首个实音，再标 `doubleDir`、按斜率算各符干长。 */
   refresh(): void {
