@@ -315,8 +315,44 @@ export function resolveSlurRefits(refits: SlurRefit[]): void {
   }
 }
 
-export function detectSlurs(bin: Binary, comps: Component[], rows: StaffRow[], numH: number): SlurRefit[] {
+/**
+ * **中间断开的长弧**：扫描把一条弧从拱顶上断成两截（青年诗歌 5《第一声呼求》一房 `6 7̲ 1̲̇`，字号 39：
+ * 左截 83×19 只有左脚、右端平着停在顶上；右截 36×28 只有右脚、脚底还踩着 1̇ 的点，缝 3px）。
+ * 左截按两端只罩到 `6 7`，右截太窄太高过不了扁平度门，整条弧少罩一个音。
+ * 判据：两截顶边同高（差 ≤max(2, 0.1 字号)）、首尾相对（缝 ≤max(3, 0.25 字号)，三连音括线的缺口嵌着数字、
+ * 要宽出半个字号）、各自是细线（墨/宽 ≤0.25 字号）、够得上弧高（≤1.05 字号），且**断口两侧都停在顶上**
+ * ——左截最右两列、右截最左两列的墨都不低于顶边 0.25 字号；两条各自完整的相邻弧在那里是脚，垂到音符头顶。
+ * 合成一块交给后面的弧判据（带不带点照样过：点只撑高一侧，扁平度、弧带都还在门内）。
+ */
+function joinBrokenArcs(bin: Binary, comps: Component[], numH: number): Component[] {
+  const lowAt = (b: Rect, x: number) => { let y = rbottom(b) - 1; while (y >= b.y && !bin.data[y * bin.w + x]) y--; return y; };
+  const piece = (c: Component) => c.bbox.w >= numH * 0.5 && c.bbox.h >= numH * 0.3 && c.bbox.h <= numH * 1.05 &&
+    c.area / c.bbox.w <= numH * 0.25;
+  const endsHigh = (b: Rect, xs: number[]) => xs.every((x) => lowAt(b, x) - b.y <= numH * 0.25);
+  const cands = comps.filter(piece);
+  const used = new Set<Component>();
+  const joined: Component[] = [];
+  let nextId = 5_900_000;
+  for (const l of cands) {
+    if (used.has(l)) continue;
+    const lb = l.bbox;
+    if (!endsHigh(lb, [rright(lb) - 1, rright(lb) - 2])) continue;
+    const r = cands.find((q) => q !== l && !used.has(q) && q.bbox.x - rright(lb) >= 0 &&
+      q.bbox.x - rright(lb) <= Math.max(3, numH * 0.25) && Math.abs(q.bbox.y - lb.y) <= Math.max(2, numH * 0.1) &&
+      endsHigh(q.bbox, [q.bbox.x, q.bbox.x + 1]));
+    if (!r) continue;
+    used.add(l); used.add(r);
+    const x0 = lb.x, y0 = Math.min(lb.y, r.bbox.y);
+    const bb = { x: x0, y: y0, w: rright(r.bbox) - x0, h: Math.max(rbottom(lb), rbottom(r.bbox)) - y0 };
+    probe("arc.joinBroken");
+    joined.push({ id: nextId++, area: l.area + r.area, bbox: bb, cx: rcx(bb), cy: rcy(bb) });
+  }
+  return joined.length ? [...comps.filter((c) => !used.has(c)), ...joined] : comps;
+}
+
+export function detectSlurs(bin: Binary, comps0: Component[], rows: StaffRow[], numH: number): SlurRefit[] {
   const refits: SlurRefit[] = [];
+  const comps = joinBrokenArcs(bin, comps0, numH);
   const arcsOf = (row: StaffRow): Component[] => {
     // 用数字顶边的**中位数**（而非 min）作行顶基准：个别音符 bbox 顶边偏高（拆块/噪声）
     // 会把 min 拉到弧线高度，导致「弧底贴行顶」的判据误杀真弧（实测行4 三条弧全漏即此因）。
