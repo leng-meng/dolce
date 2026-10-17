@@ -45,16 +45,82 @@ const BAR_H = 1.15;
 /** 上下两块间隙 ≤ 字高 × 此值就并进同一带（谱行与其弧线、八度点隔得很近）。 */
 const MERGE_GAP = 0.12;
 
-/** 二值图 + 原图 → 版面。`rgba` 只用来取纸色。 */
-export function analyzePage(bin: Binary, rgba: Uint8ClampedArray): PageLayout {
+/** 一页的显著连通块（去掉碰纸边的与斑点）与正文字高。 */
+export interface PageComps {
+  w: number;
+  h: number;
+  charH: number;
+  comps: Component[];
+}
+
+export function pageComps(bin: Binary): PageComps {
   const { w, h } = bin;
-  const comps = connectedComponents(bin, 4).filter((c) => !touchesEdge(c.bbox, w, h));
-  const charH = estimateCharH(comps, h);
-  const sig = comps.filter((c) => significant(c.bbox, charH));
-  const bands = buildBands(sig, charH);
+  const all = connectedComponents(bin, 4).filter((c) => !touchesEdge(c.bbox, w, h));
+  const charH = estimateCharH(all, h);
+  return { w, h, charH, comps: all.filter((c) => significant(c.bbox, charH)) };
+}
+
+/** 版面：`drop` 里的块（已认出的页码）不进带。`rgba` 只用来取纸色。 */
+export function analyzePage(pc: PageComps, bin: Binary, rgba: Uint8ClampedArray, drop: ReadonlySet<Component> = new Set()): PageLayout {
+  const { w, h, charH } = pc;
+  // 孤立的小污点自成一带（矮于半个字高、窄于一个字宽）：不算内容，否则会顶替页脚成为「最下一带」、还把空白拼进曲子
+  const bands = buildBands(pc.comps.filter((c) => !drop.has(c)), charH)
+    .filter((b) => b.y1 - b.y0 >= charH * 0.45 || b.x1 - b.x0 >= charH);
   const textHs = bands.filter((b) => !b.bars && !b.flat && b.sqH > 0 && b.tall < 2).map((b) => b.sqH);
   const textH = Math.max(charH, textHs.length ? quantile(textHs, 0.9) : 0);
   return { w, h, charH, textH, bands, paper: paperColor(bin, rgba) };
+}
+
+/**
+ * 页码候选：页面下 25% 里的「词」（同排、横向间隙 ≤ 1 字高的块并成一词），要
+ * 不高（≤ 1.8 字高）、不宽（≤ 7 字高）、有够高的块、同排左右 2.5 字高内没有别的块（页码常与末行歌词同排、在最右）、
+ * 下面没有内容（矮于 0.6 字高的污点不算，它们自己也当不了页码）。最靠下的排前。真假由逐字认数定。
+ */
+export function footerWords(pc: PageComps): Component[][] {
+  const { h, charH } = pc;
+  const low = pc.comps.filter((c) => c.bbox.y >= h * 0.75).sort((a, b) => a.bbox.x - b.bbox.x);
+  // 按整词外框判同排；再把上下只差几个像素、合起来仍是页码大小的两词并上
+  //（「–」在数字中腰，断成两截的「2」上半截与它不重叠；合起来太高的不并，免得粘上紧挨着的末行）
+  const words: { g: Component[]; box: Rect }[] = [];
+  for (const c of low) {
+    const w = words.find(({ box }) => c.bbox.y < box.y + box.h && c.bbox.y + c.bbox.h > box.y && c.bbox.x - (box.x + box.w) <= charH);
+    if (w) { w.g.push(c); w.box = boxOf(w.g); } else words.push({ g: [c], box: c.bbox });
+  }
+  for (let merged = true; merged;) {
+    merged = false;
+    for (let a = 0; a < words.length && !merged; a++) {
+      for (let b = a + 1; b < words.length && !merged; b++) {
+        const A = words[a].box, B = words[b].box;
+        const gx = Math.max(A.x, B.x) - Math.min(A.x + A.w, B.x + B.w), gy = Math.max(A.y, B.y) - Math.min(A.y + A.h, B.y + B.h);
+        if (gx > charH || gy > charH * 0.2) continue;
+        const g = [...words[a].g, ...words[b].g], box = boxOf(g);
+        if (box.h > charH * 1.8 || box.w > charH * 7) continue;
+        words[a] = { g, box };
+        words.splice(b, 1);
+        merged = true;
+      }
+    }
+  }
+  const out: { g: Component[]; box: Rect }[] = [];
+  for (const { g, box } of words) {
+    if (box.h > charH * 1.8 || box.w > charH * 7) continue;
+    if (!g.some((c) => c.bbox.h >= charH * 0.6)) continue; // 有字（数字粘连成宽块、断成几截都可能，交给认数那步）
+    const inG = new Set(g);
+    const others = pc.comps.filter((c) => !inG.has(c));
+    const sideBy = others.some((c) => overlapsY(c.bbox, box)
+      && Math.max(box.x - (c.bbox.x + c.bbox.w), c.bbox.x - (box.x + box.w)) < charH * 2.5);
+    const below = others.some((c) => c.bbox.y >= box.y + box.h && (c.bbox.h >= charH * 0.6 || c.bbox.w >= charH));
+    if (!sideBy && !below) out.push({ g, box });
+  }
+  return out.sort((a, b) => b.box.y + b.box.h - (a.box.y + a.box.h)).map((o) => o.g);
+}
+
+const overlapsY = (a: Rect, b: Rect) => Math.min(a.y + a.h, b.y + b.h) - Math.max(a.y, b.y) > Math.min(a.h, b.h) * 0.3;
+
+export function boxOf(g: readonly Component[]): Rect {
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const { bbox: b } of g) { x0 = Math.min(x0, b.x); y0 = Math.min(y0, b.y); x1 = Math.max(x1, b.x + b.w); y1 = Math.max(y1, b.y + b.h); }
+  return { x: x0, y: y0, w: x1 - x0, h: y1 - y0 };
 }
 
 function touchesEdge(b: Rect, w: number, h: number): boolean {
@@ -131,14 +197,6 @@ function paperColor(bin: Binary, rgba: Uint8ClampedArray): [number, number, numb
     }
   }
   return [Math.round(median(r, 255)), Math.round(median(g, 255)), Math.round(median(b, 255))];
-}
-
-/** 页脚候选：最下一带，落在页面下 18%、窄（< 页宽 25%）、不高（≤ 1.6 字高）、没有小节线。 */
-export function footerCandidate(p: PageLayout): Band | null {
-  const b = p.bands[p.bands.length - 1];
-  if (!b) return null;
-  if (b.y0 < p.h * 0.82 || b.x1 - b.x0 > p.w * 0.25 || b.y1 - b.y0 > p.charH * 1.6 || b.bars) return null;
-  return b;
 }
 
 /**

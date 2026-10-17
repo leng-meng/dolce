@@ -19,6 +19,8 @@ export interface TitleHit {
   title: string;
   /** 标题行上印的曲号（OCR）。 */
   number?: number;
+  /** 整行 OCR 里曲号首末两字的横坐标（逐字重认用）。 */
+  numberSpan?: [number, number];
 }
 
 /** 第一遍扫描每页得到的信息（不留像素）。 */
@@ -27,8 +29,8 @@ export interface PageInfo {
   layout: PageLayout;
   /** 印的页码（页脚 OCR）。 */
   printed?: number;
-  /** 页脚带（已从正文剔除）。 */
-  footer?: Band;
+  /** 页码的墨迹框（已从正文剔除；与正文同排时输出图上要涂掉）。 */
+  footer?: Rect;
   /** 正文带（去页脚）。 */
   body: Band[];
   titles: TitleHit[];
@@ -88,4 +90,6 @@ export interface Layout {
   height: number;
   paper: [number, number, number];
   parts: Placement[];
+  /** 拷进来的源图里夹带的页码，画布坐标，涂纸色。 */
+  erase: Rect[];
 }

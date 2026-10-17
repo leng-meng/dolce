@@ -30,8 +30,11 @@ export interface PlanOptions {
 export async function planBook(src: PageSource, ocr: OcrBackend, opts: PlanOptions = {}): Promise<BookPlan> {
   const pages: PageInfo[] = [];
   const forced = opts.tocPages ? new Set(opts.tocPages) : null;
+  let last: number | undefined;
   for (let i = 0; i < src.count; i++) {
-    pages.push(await scanPage(i, await src.page(i), ocr, forced ? forced.has(i) : undefined));
+    const p = await scanPage(i, await src.page(i), ocr, forced ? forced.has(i) : undefined, last !== undefined ? last + 1 : undefined);
+    pages.push(p);
+    last = p.printed ?? (last !== undefined ? last + 1 : undefined);
     opts.onProgress?.(i + 1, src.count);
   }
   const region = findRegion(pages);
@@ -112,6 +115,15 @@ export function checkAgainstToc(plan: BookPlan, names: readonly string[], srcNam
     for (const [n, tp, ap] of pageMismatch) L.push(`  ${n}：目录 ${tp}，实际 ${ap}`);
   }
   if (noTitle.length) L.push(`没认出曲名：${noTitle.map((k) => names[k]).join("、")}`);
+  const noFooter: number[] = [];
+  for (let i = region.first; i <= region.last; i++) if (plan.pages[i].printed === undefined) noFooter.push(i);
+  const badFooter: number[] = [];
+  for (let i = region.first; i <= region.last; i++) {
+    const p = plan.pages[i].printed;
+    if (region.offset !== undefined && p !== undefined && p !== i - region.offset) badFooter.push(i);
+  }
+  if (badFooter.length) L.push(`页码与前后不连贯（可能把别的数当成页码、或真页码没去掉）：${badFooter.map((i) => `${srcName(i)} 读作 ${plan.pages[i].printed}`).join("、")}`);
+  if (noFooter.length) L.push(`没认出页码的页（页码可能留在图里，请抽查）：${noFooter.map(srcName).join("、")}`);
   if (plan.orphans.length) L.push(`第一个标题之前、未归属的页：${plan.orphans.map(srcName).join("、")}`);
   if (toc.dropped.length) L.push(`剔除的目录条目：${toc.dropped.map((e) => `${e.text} ${e.number}/${e.page}`).join("；")}`);
   const withIssues = songs.map((s, k) => ({ s, k })).filter(({ s }) => s.issues.length);

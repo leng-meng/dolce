@@ -1,5 +1,6 @@
 // 歌本切分 · 整本规划（纯计算，不碰像素）：印页码 → 歌谱区、目录投票、标题配号、分段、系统间距与边距、每首的摆放。
 import { median, quantile } from "../../omrkit/geom";
+import type { Rect } from "../../omrkit/types";
 import { isMusicBand, type Band } from "./layout";
 import type { Layout, Margins, PageInfo, Piece, Placement, SongPlan, TitleHit, TocEntry } from "./types";
 
@@ -231,6 +232,7 @@ export function layoutSong(song: SongPlan, pages: readonly PageInfo[], m: Margin
   for (const pc of song.pieces) width = Math.max(width, typeX(pages[pc.page]).x1 - pc.typeX);
   width = m.left + Math.max(m.typeW, width) + m.right;
   const parts: Placement[] = [];
+  const erase: Rect[] = [];
   let y = m.top;
   song.pieces.forEach((pc, k) => {
     const p = pages[pc.page];
@@ -239,17 +241,25 @@ export function layoutSong(song: SongPlan, pages: readonly PageInfo[], m: Margin
     const padB = Math.min(Math.round(p.layout.charH * 0.3), below);
     const sx = Math.max(0, pc.typeX - m.left), sx1 = Math.min(p.layout.w, pc.typeX - m.left + width);
     const sy = pc.y0 - padT, sy1 = pc.y1 + padB;
-    parts.push({ page: pc.page, src: { x: sx, y: sy, w: sx1 - sx, h: sy1 - sy }, dx: sx - (pc.typeX - m.left), dy: y - padT });
+    const src = { x: sx, y: sy, w: sx1 - sx, h: sy1 - sy };
+    const dx = sx - (pc.typeX - m.left), dy = y - padT;
+    parts.push({ page: pc.page, src, dx, dy });
+    // 拷进来的范围里夹着页码（与末行同排、或贴得很近）→ 画布上涂纸色
+    const f = p.footer;
+    if (f && f.x < src.x + src.w && f.x + f.w > src.x && f.y < src.y + src.h && f.y + f.h > src.y) {
+      const d = Math.round(p.layout.charH * 0.15);
+      erase.push({ x: f.x - d - src.x + dx, y: f.y - d - src.y + dy, w: f.w + 2 * d, h: f.h + 2 * d });
+    }
     y += pc.y1 - pc.y0;
     if (k < song.pieces.length - 1) y += song.seamGap;
   });
   const paper = song.pieces.length ? pages[song.pieces[0].page].layout.paper : [255, 255, 255] as [number, number, number];
-  return { width, height: y + m.bottom, paper, parts };
+  return { width, height: y + m.bottom, paper, parts, erase };
 }
 
-/** 段上下可多拷的源图高度：到相邻、不属于本段的带（或页脚、纸边）空白的一半。 */
+/** 段上下可多拷的源图高度：到相邻、不属于本段的带（或纸边）空白的一半。页码另行涂掉。 */
 function room(p: PageInfo, pc: Piece): { above: number; below: number } {
-  const bands = p.footer ? [...p.body, p.footer] : p.body;
+  const bands = p.body;
   let above = pc.y0, below = p.layout.h - pc.y1;
   for (const b of bands) {
     if (b.y1 <= pc.y0) above = Math.min(above, Math.floor((pc.y0 - b.y1) / 2));

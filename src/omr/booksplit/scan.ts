@@ -3,7 +3,8 @@ import type { OcrBackend } from "../../omrkit/ocr";
 import type { Binary, Rect } from "../../omrkit/types";
 import type { RgbaImage } from "../../omrkit/decode";
 import { otsu, rgbaToBinary, toGray } from "../../omrkit/preprocess";
-import { analyzePage, footerCandidate, isMusicBand, isTitleCandidate, type Band, type PageLayout } from "./layout";
+import { analyzePage, boxOf, footerWords, isMusicBand, isTitleCandidate, pageComps, type Band, type PageComps, type PageLayout } from "./layout";
+import type { Component } from "../../omrkit/types";
 import type { PageInfo, TitleHit, TocEntry } from "./types";
 
 type OcrLine = { text: string; bbox: Rect; chars?: { text: string; cx: number; x1?: number }[] };
@@ -12,24 +13,32 @@ const CJK = /[㐀-鿿豈-﫿]/;
 const PAGE_NO_RE = /^[-–—_~·.\s]*(\d{1,4})[-–—_~·.\s]*$/;
 
 /** `toc`：true = 当目录页整页 OCR，false = 不当，undefined = 按版面自动认。 */
-export async function scanPage(index: number, img: RgbaImage, ocr: OcrBackend, toc?: boolean): Promise<PageInfo> {
+/** `expect`：按上一页推的本页页码（上一页 + 1）。页码区常有折痕、污点也读得出数，候选里有等于它的就取它。 */
+export async function scanPage(index: number, img: RgbaImage, ocr: OcrBackend, toc?: boolean, expect?: number): Promise<PageInfo> {
   const bin = pageBinary(img);
-  const layout = analyzePage(bin, img.data);
-  const info: PageInfo = { index, layout, body: layout.bands, titles: [], toc: [] };
   if (!ocr.recognizeRegion) throw new Error("OCR 后端不支持整片识别（需要 PaddleOCR 检测模型）");
-
-  const foot = footerCandidate(layout);
-  const printed = foot ? await readPageNumber(bin, foot, layout, ocr) : undefined;
-  if (foot && printed !== undefined) {
-    info.printed = printed;
-    info.footer = foot;
-    info.body = layout.bands.slice(0, -1);
+  const pc = pageComps(bin);
+  // 页码先在连通块上找出来剔掉，再分带：页码常紧贴末行、甚至与末行歌词同排，按带找会被并进正文
+  let footer: { n: number; comps: Component[] } | undefined;
+  for (const g of footerWords(pc)) { // 最靠下的在前
+    const n = await readPageNumber(bin, g, pc, ocr);
+    if (n === undefined) continue;
+    if (!footer) footer = { n, comps: g };
+    if (expect === undefined) break;
+    if (n === expect) { footer = { n, comps: g }; break; }
   }
+  const layout = analyzePage(pc, bin, img.data, new Set(footer?.comps ?? []));
+  const info: PageInfo = { index, layout, body: layout.bands, titles: [], toc: [] };
+  if (footer) { info.printed = footer.n; info.footer = boxOf(footer.comps); }
 
   for (const b of info.body) {
     if (!isTitleCandidate(b, layout)) continue;
-    const hit = parseTitle(await ocr.recognizeRegion(bin, pad(b, layout, layout.charH * 0.3)), b, layout);
-    if (hit) info.titles.push(hit);
+    const hit = parseTitle(await ocr.recognizeRegion(bin, pad(b, layout, layout.charH * 0.3)), b, layout, (r) => inkHeight(bin, r));
+    if (!hit) continue;
+    // 曲号以带两端的数字块逐字认为准（整行 OCR 常把曲号与调号读成一串「1151=C」、或把粗体数字读错）
+    const n = await edgeNumber(bin, b, layout.charH, ocr, hit.numberSpan);
+    if (n !== undefined) hit.number = n;
+    info.titles.push(hit);
   }
 
   if (toc ?? looksLikeToc(info.body, layout.h)) info.toc = parseToc(await ocr.recognizeRegion(bin, fullRect(bin)));
@@ -38,24 +47,61 @@ export async function scanPage(index: number, img: RgbaImage, ocr: OcrBackend, t
 }
 
 /**
- * 页脚页码：带里够高的块按横向重叠并成字，逐字按 0–9 认（「– 4 –」这种单字整片检测常读丢）；
- * 有字认不出再退整片 OCR。返回 undefined = 不是页码。
+ * 曲号按字形逐字认：带内块按横向间隙 ≤ 0.7 字高并成「词」，看最左、最右两个词——整词的字（块按横向重叠并成字）
+ * 全像数字（够高、不宽）且不超过 4 个，才逐字按 0–9 认。「1=C」里有「=」、出处「1-5」里有「-」，整词就不算。
+ * 两端都像曲号时取离整行 OCR 读到曲号的位置近的那个，没读到取左边。整行 OCR 常把曲号与调号读成一串（「1151=C」）、
+ * 把出处粘上（「1-5 469」读成「5469」）、或把左边调号的「1」当曲号；逐字认的就是那几个块，读多读少都不会。
  */
-async function readPageNumber(bin: Binary, foot: Band, p: PageLayout, ocr: OcrBackend): Promise<number | undefined> {
-  const cells: Rect[] = [];
-  for (const r of [...foot.boxes].sort((a, b) => a.x - b.x)) {
-    if (r.h < p.charH * 0.45 || r.w > r.h * 1.5) continue; // 横杠、斑点
-    const last = cells[cells.length - 1];
+async function edgeNumber(bin: Binary, b: Band, charH: number, ocr: OcrBackend, span?: [number, number]): Promise<number | undefined> {
+  if (!ocr.recognizeNumerals || !b.boxes.length) return undefined;
+  const words: Rect[][] = [];
+  for (const r of [...b.boxes].sort((p, q) => p.x - q.x)) {
+    const w = words[words.length - 1];
+    if (w && r.x - Math.max(...w.map((q) => q.x + q.w)) <= charH * 0.7) w.push(r); else words.push([r]);
+  }
+  const cands: { n: number; x: number }[] = [];
+  for (const w of words.length > 1 ? [words[0], words[words.length - 1]] : words) {
+    const cells: Rect[] = [];
+    for (const r of w) {
+      const last = cells[cells.length - 1];
+      if (last && r.x < last.x + last.w) {
+        const x = Math.min(last.x, r.x), y = Math.min(last.y, r.y);
+        cells[cells.length - 1] = { x, y, w: Math.max(last.x + last.w, r.x + r.w) - x, h: Math.max(last.y + last.h, r.y + r.h) - y };
+      } else cells.push({ ...r });
+    }
+    if (!cells.length || cells.length > 4) continue;
+    if (!cells.every((c) => c.h >= charH * 0.8 && c.h <= charH * 2 && c.w <= c.h * 0.9)) continue;
+    const ds = await ocr.recognizeNumerals(bin, cells);
+    if (ds.every((d) => d !== undefined) && ds[0] !== 0) cands.push({ n: Number(ds.join("")), x: cells[0].x });
+  }
+  if (cands.length < 2 || !span) return cands[0]?.n;
+  return cands.reduce((a, c) => (Math.abs(c.x - span[0]) < Math.abs(a.x - span[0]) ? c : a)).n;
+}
+
+/**
+ * 页码：词里的块按横向重叠并成字（断笔并回），够高的逐字按 0–9 认（「– 4 –」这种整片检测常读丢）；
+ * 有字认不出、或两字粘成一块时退整片 OCR。返回 undefined = 不是页码。
+ */
+async function readPageNumber(bin: Binary, g: readonly Component[], pc: PageComps, ocr: OcrBackend): Promise<number | undefined> {
+  // 先把横向重叠的块并成字（断笔的「2」是上下两截），再丢掉横杠
+  const merged: Rect[] = [];
+  for (const { bbox: r } of [...g].sort((a, b) => a.bbox.x - b.bbox.x)) {
+    const last = merged[merged.length - 1];
     if (last && r.x < last.x + last.w) {
       const x = Math.min(last.x, r.x), y = Math.min(last.y, r.y);
-      cells[cells.length - 1] = { x, y, w: Math.max(last.x + last.w, r.x + r.w) - x, h: Math.max(last.y + last.h, r.y + r.h) - y };
-    } else cells.push(r);
+      merged[merged.length - 1] = { x, y, w: Math.max(last.x + last.w, r.x + r.w) - x, h: Math.max(last.y + last.h, r.y + r.h) - y };
+    } else merged.push({ ...r });
   }
-  if (cells.length && cells.length <= 4 && ocr.recognizeNumerals) {
+  const cells = merged.filter((r) => r.h >= pc.charH * 0.6);
+  if (!cells.length || cells.length > 4) return undefined;
+  // 两个数字粘成一块（「44」）逐字认不了，交给整片 OCR
+  if (ocr.recognizeNumerals && cells.every((c) => c.w <= c.h * 0.95)) {
     const ds = await ocr.recognizeNumerals(bin, cells);
     if (ds.every((d) => d !== undefined)) return Number(ds.join(""));
   }
-  const lines = await ocr.recognizeRegion!(bin, pad(foot, p, p.charH * 0.4));
+  const b = boxOf(g), d = Math.round(pc.charH * 0.4);
+  const x = Math.max(0, b.x - d), y = Math.max(0, b.y - d);
+  const lines = await ocr.recognizeRegion!(bin, { x, y, w: Math.min(pc.w, b.x + b.w + d) - x, h: Math.min(pc.h, b.y + b.h + d) - y });
   const m = PAGE_NO_RE.exec(lines.map((l) => l.text).join(""));
   return m ? Number(m[1]) : undefined;
 }
@@ -70,6 +116,18 @@ export function pageBinary(img: RgbaImage): Binary {
   const { thr } = otsu(gray);
   for (let i = 0; i < gray.length; i++) if (gray[i] > thr) bin.data[i] = 0;
   return bin;
+}
+
+/** 框里墨迹的纵向实高（有 ≥ 2 个墨点的首行到末行）。 */
+function inkHeight(bin: Binary, r: Rect): number {
+  let y0 = -1, y1 = -1;
+  const x0 = Math.max(0, Math.round(r.x)), x1 = Math.min(bin.w, Math.round(r.x + r.w));
+  for (let y = Math.max(0, Math.round(r.y)); y < Math.min(bin.h, Math.round(r.y + r.h)); y++) {
+    let n = 0;
+    for (let x = x0; x < x1 && n < 2; x++) n += bin.data[y * bin.w + x];
+    if (n >= 2) { if (y0 < 0) y0 = y; y1 = y; }
+  }
+  return y0 < 0 ? 0 : y1 - y0 + 1;
 }
 
 function pad(b: Band, p: PageLayout, d: number): Rect {
@@ -92,32 +150,40 @@ const CJK_RUN = /[\u3400-\u9fff\uf900-\ufaff·、，！？]+/g;
 /**
  * 标题带的 OCR → 曲名 + 曲号。带里读出调号（`1=`），或大字比本页字行高出 15% 且读得到曲号，才算标题
  * （有的本子某首歌词字号比别的大，光凭字大会把歌词行认成标题；段号「1.」不算曲号）。
- * 曲名：与最高那框等高、横排相挨的各框里各取最长一段汉字拼起来（「圣　哉」检测常切成两框），字间空格去掉；
+ * 曲名：与最高那框（按墨迹实高）等高、横排相挨的各框里各取最长一段汉字拼起来（「圣　哉」检测常切成两框），
+ *   字间空格与同一字形的重读去掉；
  * 曲号：不属于调号、拍号（`4/4`）、出处（`诗67篇`、`33:8`）的独立整数里最靠两端的那个；
  * 曲号紧挨调号读成一串（「115 1=C」→「1151=C」）时去掉末位的 1。
  */
-export function parseTitle(lines: OcrLine[], band: Band, p: PageLayout): TitleHit | null {
+export function parseTitle(
+  lines: OcrLine[], band: Band, p: PageLayout, inkH: (r: Rect) => number = (r) => r.h,
+): TitleHit | null {
   const cjkLines = lines.filter((l) => CJK.test(l.text));
   if (!cjkLines.length) return null;
   // 调号常被检测切成几框（「1=」「E」），按横向次序拼起来再认
   const hasKey = KEY_RE.test([...lines].sort((a, b) => a.bbox.x - b.bbox.x).map((l) => l.text).join(" "));
-  const main = cjkLines.reduce((a, b) => (b.bbox.h > a.bbox.h ? b : a));
+  // 字高按框里墨迹的实际高度比：检测框高带着外扩的边，旁边小一号的分类字（「教会」）框高也差不多
+  const ink = new Map(cjkLines.map((l) => [l, inkH(l.bbox)]));
+  const main = cjkLines.reduce((a, b) => (ink.get(b)! > ink.get(a)! ? b : a));
+  const mainH = ink.get(main)!;
+  // 单字框按墨高判不准（「二」「一」「心」本身就扁），退回比检测框高
+  const sameSize = (l: OcrLine) => (l.text.replace(/[^\u3400-\u9fff\uf900-\ufaff]/g, "").length >= 2
+    ? ink.get(l)! >= mainH * 0.88 : l.bbox.h >= main.bbox.h * 0.85);
   // 与最高框等高、同一横排、且一框挨一框（间隙 ≤ 2.2 字高，「悔　　改」这种疏排标题字距近两字）的才拼：隔得远的同号字多是旁边的分类、出处（「悔改」「爱主」）
   const peers = cjkLines
-    .filter((l) => l.bbox.h >= main.bbox.h * 0.85 && overlapY(l.bbox, main.bbox) >= Math.min(l.bbox.h, main.bbox.h) * 0.5)
+    .filter((l) => sameSize(l) && overlapY(l.bbox, main.bbox) >= Math.min(l.bbox.h, main.bbox.h) * 0.5)
     .sort((a, b) => a.bbox.x - b.bbox.x);
   const at = peers.indexOf(main);
   let lo = at, hi = at;
   const near = (a: Rect, b: Rect) => b.x - (a.x + a.w) <= main.bbox.h * 2.2;
   while (lo > 0 && near(peers[lo - 1].bbox, peers[lo].bbox)) lo--;
   while (hi < peers.length - 1 && near(peers[hi].bbox, peers[hi + 1].bbox)) hi++;
-  const parts = peers.slice(lo, hi + 1);
-  const title = parts.map((l) => {
-    const runs = (l.text.replace(/\s+/g, "").match(CJK_RUN) ?? []).filter((r) => CJK.test(r));
+  const title = peers.slice(lo, hi + 1).map((l) => {
+    const runs = (dedupeChars(l).replace(/\s+/g, "").match(CJK_RUN) ?? []).filter((r) => CJK.test(r));
     return runs.reduce((a, b) => (b.length > a.length ? b : a), "").replace(/^[·、，]+|[·、，]+$/g, "");
   }).join("");
 
-  const nums: { v: number; x: number }[] = [];
+  const nums: { v: number; x: number; x0: number; x1: number }[] = [];
   for (const l of lines) {
     const t = l.text;
     const re = /\d+/g;
@@ -134,20 +200,41 @@ export function parseTitle(lines: OcrLine[], band: Band, p: PageLayout): TitleHi
       const v = Number(digits);
       if (!(v >= 1 && v <= 9999)) continue;
       const ch = l.chars;
-      const x = ch && ch.length === t.length ? ch[m.index].cx : l.bbox.x + ((m.index + digits.length / 2) / Math.max(1, t.length)) * l.bbox.w;
-      nums.push({ v, x });
+      const at = (k: number) => (ch && ch.length === t.length ? ch[k].cx : l.bbox.x + ((k + 0.5) / Math.max(1, t.length)) * l.bbox.w);
+      const x0 = at(m.index), x1 = at(m.index + digits.length - 1);
+      nums.push({ v, x: x0, x0, x1 });
     }
   }
   // 最靠左（在曲名左边）或最靠右（在曲名右边）的数；两边都有取离带边更近的
   const mid = main.bbox.x + main.bbox.w / 2;
   const left = nums.filter((n) => n.x < mid).sort((a, b) => a.x - b.x)[0];
   const right = nums.filter((n) => n.x >= mid).sort((a, b) => b.x - a.x)[0];
-  let number: number | undefined;
-  if (left && right) number = left.x - band.x0 <= band.x1 - right.x ? left.v : right.v;
-  else number = (left ?? right)?.v;
+  const pick = left && right ? (left.x - band.x0 <= band.x1 - right.x ? left : right) : left ?? right;
+  const number = pick?.v;
   // 没读出调号的，要字比本页字行大、且读得到曲号才算（防大字号歌词行）
   if (!hasKey && (band.bigH < p.textH * 1.15 || number === undefined)) return null;
-  return { band, title, number };
+  return { band, title, number, numberSpan: pick ? [pick.x0, pick.x1] : undefined };
+}
+
+/**
+ * 一个字被识别读成两个（CTC 在一个宽字形里前后两段各出一类：「我们神」读成「我们门神」）：
+ * 相邻两字横坐标之差不到本框汉字字距中位的 0.35 倍，后一个是同一个字形的重读，去掉。
+ */
+function dedupeChars(l: OcrLine): string {
+  const ch = l.chars;
+  if (!ch || ch.length !== l.text.length) return l.text;
+  const steps: number[] = [];
+  for (let k = 1; k < ch.length; k++) if (CJK.test(ch[k].text) && CJK.test(ch[k - 1].text)) steps.push(ch[k].cx - ch[k - 1].cx);
+  steps.sort((a, b) => a - b);
+  const pitch = steps.length >= 2 ? steps[steps.length >> 1] : 0;
+  if (!pitch) return l.text;
+  let out = "", prev = -Infinity;
+  for (const c of ch) {
+    if (CJK.test(c.text) && c.cx - prev < pitch * 0.35) continue;
+    out += c.text;
+    if (CJK.test(c.text)) prev = c.cx;
+  }
+  return out;
 }
 
 function overlapY(a: Rect, b: Rect): number {

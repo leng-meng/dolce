@@ -37,6 +37,12 @@ async function renderLayout(cache: PageCache, l: Layout, quality: number): Promi
     inputs.push({ input: buf, raw: { width: w, height: h, channels: 4 }, left: part.dx + (x0 - part.src.x), top: part.dy + (y0 - part.src.y) });
   }
   const [r, g, b] = l.paper;
+  for (const e of l.erase) {
+    const x = Math.max(0, Math.round(e.x)), y = Math.max(0, Math.round(e.y));
+    const w = Math.min(l.width, Math.round(e.x + e.w)) - x, h = Math.min(l.height, Math.round(e.y + e.h)) - y;
+    if (w <= 0 || h <= 0) continue;
+    inputs.push({ input: { create: { width: w, height: h, channels: 3, background: { r, g, b } } }, left: x, top: y });
+  }
   return sharp({ create: { width: l.width, height: l.height, channels: 3, background: { r, g, b } } })
     .composite(inputs).jpeg({ quality }).toBuffer();
 }
