@@ -3,6 +3,7 @@ import type { OcrBackend } from "../../omrkit/ocr";
 import type { Binary, Rect } from "../../omrkit/types";
 import type { RgbaImage } from "../../omrkit/decode";
 import { otsu, rgbaToBinary, toGray } from "../../omrkit/preprocess";
+import { surfaceFromInk } from "../../omrkit/surface";
 import { analyzePage, boxOf, footerWords, isMusicBand, isTitleCandidate, pageComps, type Band, type PageComps, type PageLayout } from "./layout";
 import type { Component } from "../../omrkit/types";
 import type { PageInfo, TitleHit, TocEntry } from "./types";
@@ -35,6 +36,10 @@ export async function scanPage(index: number, img: RgbaImage, ocr: OcrBackend, t
     if (!isTitleCandidate(b, layout)) continue;
     const hit = parseTitle(await ocr.recognizeRegion(bin, pad(b, layout, layout.charH * 0.3)), b, layout, (r) => inkHeight(bin, r));
     if (!hit) continue;
+    if (hit.titleBox) {
+      const t = await rereadTitle(bin, hit.titleBox, ocr);
+      if (t && t.length >= [...hit.title].filter((c) => CJK.test(c)).length) hit.title = t;
+    }
     // 曲号以带两端的数字块逐字认为准（整行 OCR 常把曲号与调号读成一串「1151=C」、或把粗体数字读错）
     const n = await edgeNumber(bin, b, layout.charH, ocr, hit.numberSpan);
     if (n !== undefined) hit.number = n;
@@ -166,9 +171,11 @@ export function parseTitle(
   const ink = new Map(cjkLines.map((l) => [l, inkH(l.bbox)]));
   const main = cjkLines.reduce((a, b) => (ink.get(b)! > ink.get(a)! ? b : a));
   const mainH = ink.get(main)!;
-  // 单字框按墨高判不准（「二」「一」「心」本身就扁），退回比检测框高
+  // 单字框（含「诗103:11」这类出处只有一个汉字的框）放宽到墨高 0.75 倍并要求与最高框中线对齐：
+  // 「二」「心」本身扁（实测 0.76、0.87），出处小一号（0.63–0.69）
   const sameSize = (l: OcrLine) => (l.text.replace(/[^\u3400-\u9fff\uf900-\ufaff]/g, "").length >= 2
-    ? ink.get(l)! >= mainH * 0.88 : l.bbox.h >= main.bbox.h * 0.85);
+    ? ink.get(l)! >= mainH * 0.88
+    : ink.get(l)! >= mainH * 0.75 && Math.abs(l.bbox.y + l.bbox.h / 2 - (main.bbox.y + main.bbox.h / 2)) <= main.bbox.h * 0.25);
   // 与最高框等高、同一横排、且一框挨一框（间隙 ≤ 2.2 字高，「悔　　改」这种疏排标题字距近两字）的才拼：隔得远的同号字多是旁边的分类、出处（「悔改」「爱主」）
   const peers = cjkLines
     .filter((l) => sameSize(l) && overlapY(l.bbox, main.bbox) >= Math.min(l.bbox.h, main.bbox.h) * 0.5)
@@ -178,7 +185,8 @@ export function parseTitle(
   const near = (a: Rect, b: Rect) => b.x - (a.x + a.w) <= main.bbox.h * 2.2;
   while (lo > 0 && near(peers[lo - 1].bbox, peers[lo].bbox)) lo--;
   while (hi < peers.length - 1 && near(peers[hi].bbox, peers[hi + 1].bbox)) hi++;
-  const title = peers.slice(lo, hi + 1).map((l) => {
+  const parts = peers.slice(lo, hi + 1);
+  const title = parts.map((l) => {
     const runs = (dedupeChars(l).replace(/\s+/g, "").match(CJK_RUN) ?? []).filter((r) => CJK.test(r));
     return runs.reduce((a, b) => (b.length > a.length ? b : a), "").replace(/^[·、，]+|[·、，]+$/g, "");
   }).join("");
@@ -213,7 +221,15 @@ export function parseTitle(
   const number = pick?.v;
   // 没读出调号的，要字比本页字行大、且读得到曲号才算（防大字号歌词行）
   if (!hasKey && (band.bigH < p.textH * 1.15 || number === undefined)) return null;
-  return { band, title, number, numberSpan: pick ? [pick.x0, pick.x1] : undefined };
+  // 整段重认的范围：往左并上拍号（含「/」或「=」的框）之后、紧挨着曲名的框——疏排的「二」会被单独读成「1」、不算汉字
+  const fence = Math.max(-Infinity, ...lines.filter((l) => /[=＝/／]/.test(l.text)).map((l) => l.bbox.x + l.bbox.w));
+  const extra = lines.filter((l) => !parts.includes(l) && l.bbox.x >= fence && l.bbox.x + l.bbox.w <= parts[0].bbox.x
+    && l.bbox.h >= main.bbox.h * 0.6 && overlapY(l.bbox, main.bbox) >= Math.min(l.bbox.h, main.bbox.h) * 0.5)
+    .sort((a, b) => b.bbox.x - a.bbox.x);
+  const all = [...parts];
+  for (const l of extra) if (all[0].bbox.x - (l.bbox.x + l.bbox.w) <= main.bbox.h * 2.2) all.unshift(l);
+  const box = all.length > 1 ? unionBox(all.map((l) => l.bbox)) : undefined;
+  return { band, title, number, numberSpan: pick ? [pick.x0, pick.x1] : undefined, titleBox: box };
 }
 
 /**
@@ -235,6 +251,26 @@ function dedupeChars(l: OcrLine): string {
     if (CJK.test(c.text)) prev = c.cx;
   }
   return out;
+}
+
+function unionBox(rs: readonly Rect[]): Rect {
+  const x = Math.min(...rs.map((r) => r.x)), y = Math.min(...rs.map((r) => r.y));
+  return { x, y, w: Math.max(...rs.map((r) => r.x + r.w)) - x, h: Math.max(...rs.map((r) => r.y + r.h)) - y };
+}
+
+/**
+ * 疏排标题（「二　十　心」）检测切成一字一框，框又裁得紧，单字识别很差（「二」读成「IL」、「十」读成「士」）。
+ * 把曲名整段（首框到末框）裁成一条、四周垫白再识别一次；读出的汉字不少于原来的字数就用它。
+ */
+async function rereadTitle(bin: Binary, box: Rect, ocr: OcrBackend): Promise<string | null> {
+  if (!ocr.recognizeTexts) return null;
+  const x0 = Math.max(0, Math.round(box.x)), y0 = Math.max(0, Math.round(box.y));
+  const w = Math.min(bin.w, Math.round(box.x + box.w)) - x0, h = Math.min(bin.h, Math.round(box.y + box.h)) - y0;
+  if (w <= 0 || h <= 0) return null;
+  const ink = new Uint8Array(w * h);
+  for (let y = 0; y < h; y++) ink.set(bin.data.subarray((y0 + y) * bin.w + x0, (y0 + y) * bin.w + x0 + w), y * w);
+  const [t] = await ocr.recognizeTexts([surfaceFromInk(w, h, ink, Math.round(h * 0.25))]);
+  return t ? (t.match(/[\u3400-\u9fff\uf900-\ufaff]/g) ?? []).join("") : null;
 }
 
 function overlapY(a: Rect, b: Rect): number {

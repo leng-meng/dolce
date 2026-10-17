@@ -1,6 +1,11 @@
 // Node 侧取 PDF 每页的**源图**：只认页面里内嵌的最大位图，按它的原生像素给出，不渲染、不重采样。
 // 扫描本 PDF 每页就是一张 JPEG，这样取出来与原扫描图同尺寸；矢量 PDF（没有内嵌位图）直接报错。
-// pdf.js 用 legacy 构建（Node 没有 DOM / OffscreenCanvas），图对象回来是 `{width, height, kind, data}`。
+// pdf.js 用 legacy 构建（Node 没有 DOM / OffscreenCanvas），图对象回来是 `{width, height, kind, data, ref}`。
+//
+// 图是 JPEG（DCTDecode）时，按 `ref` 的对象号到文件里取**原样的 JPEG 字节**交给注入的解码器（Node 侧是 sharp），
+// 不用 pdf.js 自带的 JPEG 解码：两者 IDCT/上采样不同，解出的像素差一两个灰度，识别判据是按 libjpeg 的像素标定的
+// （见 decode.node.ts），实测《哈利路亚》有曲名因此两路读得不同。取不到（对象流里、带别的滤镜、CMYK、带蒙版、
+// 尺寸对不上）就退回 pdf.js 解出的像素。
 import { largestPageImageAt } from "./pdf";
 import type { RgbaImage } from "./decode";
 
@@ -14,11 +19,13 @@ export interface PdfPages {
   close(): Promise<void>;
 }
 
-export async function openPdfPages(bytes: Uint8Array): Promise<PdfPages> {
+/** `decodeJpeg`：JPEG 字节 → RGBA（与页图同一个解码器）。不给则一律用 pdf.js 解出的像素。 */
+export async function openPdfPages(bytes: Uint8Array, decodeJpeg?: (jpeg: Uint8Array) => Promise<RgbaImage>): Promise<PdfPages> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const pdfjs: any = await import("pdfjs-dist/legacy/build/pdf.mjs");
+  const raw = decodeJpeg ? rawJpegs(bytes) : null;
   const task = pdfjs.getDocument({
-    data: bytes, isEvalSupported: false, isOffscreenCanvasSupported: false, isImageDecoderSupported: false,
+    data: decodeJpeg ? bytes.slice() : bytes, isEvalSupported: false, isOffscreenCanvasSupported: false, isImageDecoderSupported: false,
     disableFontFace: true, verbosity: 0,
   });
   const doc = await task.promise;
@@ -29,12 +36,57 @@ export async function openPdfPages(bytes: Uint8Array): Promise<PdfPages> {
       try {
         const hit = await largestPageImageAt(page, pdfjs.OPS, (o) => (o?.data && o.width && o.height ? o.width * o.height : null));
         if (!hit) throw new Error(`PDF 第 ${i + 1} 页没有内嵌图片（矢量 PDF 请先导出为图片）`);
+        const jpeg = raw?.(hit.obj.ref, hit.obj.width, hit.obj.height);
+        if (jpeg && decodeJpeg) {
+          const img = await decodeJpeg(jpeg).catch(() => null);
+          if (img && img.width === hit.obj.width && img.height === hit.obj.height) return orient(img, hit.ctm);
+        }
         return orient(toRgba(hit.obj), hit.ctm);
       } finally {
         page.cleanup();
       }
     },
     async close() { await task.destroy(); },
+  };
+}
+
+/**
+ * 按对象号取图像 XObject 的原样 JPEG 字节。先扫一遍全文件记下每个「N G obj」的位置（增量更新取最后一次），
+ * 用时校验：字典是 `/Subtype /Image`、滤镜只有 `/DCTDecode`、宽高对得上、不是 CMYK、没有反相 Decode 与蒙版，
+ * 流长取直接写的 /Length（间接引用就到该对象里读），流以 FFD8 开头。不合条件返回 null。
+ */
+function rawJpegs(bytes: Uint8Array): (ref: unknown, w: number, h: number) => Uint8Array | null {
+  const text = new TextDecoder("latin1").decode(bytes);
+  const at = new Map<number, number>();
+  const re = /(?:^|[\r\n\s])(\d+)\s+\d+\s+obj\b/g;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text))) at.set(Number(m[1]), m.index + m[0].length);
+  const intObj = (n: number): number | null => {
+    const o = at.get(n);
+    const v = o === undefined ? null : /^\s*(\d+)\s/.exec(text.slice(o, o + 40));
+    return v ? Number(v[1]) : null;
+  };
+  return (ref, w, h) => {
+    const n = typeof ref === "string" ? /^(\d+)R/.exec(ref) : null;
+    const o = n ? at.get(Number(n[1])) : undefined;
+    if (o === undefined) return null;
+    const s0 = text.indexOf("stream", o);
+    if (s0 < 0 || s0 - o > 4096) return null;
+    const dict = text.slice(o, s0);
+    if (!/\/Subtype\s*\/Image/.test(dict) || /\/(?:SMask|Mask)\b/.test(dict) || /DeviceCMYK/.test(dict)) return null;
+    const filt = /\/Filter\s*(\[[^\]]*\]|\/\w+)/.exec(dict)?.[1].replace(/[[\]\s]/g, "");
+    if (filt !== "/DCTDecode") return null;
+    if (Number(/\/Width\s+(\d+)/.exec(dict)?.[1]) !== w || Number(/\/Height\s+(\d+)/.exec(dict)?.[1]) !== h) return null;
+    const dec = /\/Decode\s*\[([^\]]*)\]/.exec(dict)?.[1].trim().split(/\s+/).map(Number);
+    if (dec && dec.some((v, k) => v !== (k % 2 ? 1 : 0))) return null;
+    const lm = /\/Length\s+(\d+)(\s+\d+\s+R)?/.exec(dict);
+    if (!lm) return null;
+    const len = lm[2] ? intObj(Number(lm[1])) : Number(lm[1]);
+    let start = s0 + 6;
+    if (text[start] === "\r") start++;
+    if (text[start] === "\n") start++;
+    if (!len || start + len > bytes.length || bytes[start] !== 0xff || bytes[start + 1] !== 0xd8) return null;
+    return bytes.subarray(start, start + len);
   };
 }
 

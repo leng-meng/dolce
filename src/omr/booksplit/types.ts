@@ -21,6 +21,8 @@ export interface TitleHit {
   number?: number;
   /** 整行 OCR 里曲号首末两字的横坐标（逐字重认用）。 */
   numberSpan?: [number, number];
+  /** 曲名由几框拼成时的整段外框（整段重认用）。 */
+  titleBox?: Rect;
 }
 
 /** 第一遍扫描每页得到的信息（不留像素）。 */

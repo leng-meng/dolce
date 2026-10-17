@@ -1,7 +1,7 @@
 // 歌本切分 · Node 侧页面来源：PDF（取每页内嵌源图）或页图文件夹（按文件名自然序），都给原分辨率 RGBA。
 import { readFile, readdir, stat } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
-import sharp from "sharp";
+import sharp, { type Sharp } from "sharp";
 import { isPdf } from "../../omrkit/pdf";
 import { openPdfPages } from "../../omrkit/pdf.node";
 import type { RgbaImage } from "../../omrkit/decode";
@@ -13,7 +13,8 @@ export async function openBookSource(path: string): Promise<PageSource> {
   if ((await stat(path)).isDirectory()) return folderSource(path);
   const bytes = new Uint8Array(await readFile(path));
   if (!isPdf(bytes)) throw new Error(`${path} 既不是 PDF 也不是文件夹`);
-  const pdf = await openPdfPages(bytes);
+  // 内嵌 JPEG 原样交给 sharp 解，与页图同一套解码（见 omrkit/pdf.node.ts）
+  const pdf = await openPdfPages(bytes, (jpeg) => decodeImage(sharp(Buffer.from(jpeg.buffer, jpeg.byteOffset, jpeg.byteLength))));
   const stem = basename(path, extname(path));
   return {
     count: pdf.count,
@@ -38,6 +39,10 @@ async function folderSource(dir: string): Promise<PageSource> {
 
 async function decodeFile(path: string): Promise<RgbaImage> {
   // rotate()：按 EXIF 方向摆正（手机拍的页图常带方向标记）
-  const { data, info } = await sharp(path).rotate().ensureAlpha().raw().toBuffer({ resolveWithObject: true });
+  return decodeImage(sharp(path).rotate());
+}
+
+async function decodeImage(img: Sharp): Promise<RgbaImage> {
+  const { data, info } = await img.ensureAlpha().raw().toBuffer({ resolveWithObject: true });
   return { data: new Uint8ClampedArray(data.buffer, data.byteOffset, data.length), width: info.width, height: info.height };
 }
