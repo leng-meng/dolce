@@ -575,6 +575,10 @@ export class OmrController implements FormatSource {
     if (this.pending?.g === g) return;
     this.pending = { g, side: this.side, pages: [] };
     this.onEarlyView?.();
+    // 上一份文档留下的状态栏说明、试听、可疑项计数当场撤掉（各路判完再换成自己的进度）
+    this.host.stopPlayback();
+    this.host.setStatus(t("omr.running"));
+    this.syncDoubtEl(0);
     // 旧谱面、旧原图当场清掉（占位与原图等量完页数再铺）
     this.host.clearPages();
     this.sideEl?.replaceChildren();
@@ -637,6 +641,8 @@ export class OmrController implements FormatSource {
     this.side = pend.side;
     this.syncSide(null);
     this.host.reload(this.host.getText());
+    const score = this.shown?.score ?? this.score;
+    if (score) this.syncDoubtEl(doubtItems(score, this.shown?.lyricFixes ?? []).length);
   }
 
   // ---------------- 识别完进哪儿 ----------------

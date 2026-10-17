@@ -158,7 +158,12 @@ async function boot() {
     app.markClean(); // 示例谱不算没存的内容
     revealWorkspace();
   };
-  const setRecognitionBusy = (busy: boolean) => { recognitionProgress.hidden = !busy; };
+  const recognitionDetail = document.getElementById("recognition-progress-detail");
+  const setRecognitionBusy = (busy: boolean) => {
+    recognitionProgress.hidden = !busy;
+    // 副标题识别途中被逐页进度改写过（`omrctl.ts::progress`）：再开一次时还原，别挂着上一次的「第几页」
+    if (busy && recognitionDetail) recognitionDetail.textContent = t("start.progress.sub");
+  };
   const setStartFeedback = (message: string) => {
     startFeedback.textContent = message;
     startFeedback.hidden = !message;
