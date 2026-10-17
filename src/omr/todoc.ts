@@ -449,7 +449,8 @@ function measuresOfRows(rows: readonly StaffRow[], score: RecognizedScore, ids: 
     }
     const endingStop = [...notes].reverse().find((n) => n.endingStop !== undefined)?.endingStop;
     const repeatBackward = notes.some((n) => n.repeatBackward);
-    const jump = notes.find((n) => n.jumpMark)?.jumpMark;
+    const jumps = [...new Set(notes.flatMap((n) => n.jumpMarks ?? []))];
+    const jump = jumps.length > 0;
     // 普通小节线也要显式写出：`.jpwabc` 写出端按右线出 `|`，没有就把相邻小节并成一个。
     // 曲末那小节图上没收线的不补（遵图片小节线）。
     const closed = idx < allMeasures.length - 1 || !openTail;
@@ -457,18 +458,20 @@ function measuresOfRows(rows: readonly StaffRow[], score: RecognizedScore, ids: 
       const b: Barline = { location: "right" };
       // 反复线与终止线不叠（终止线由 StaffRow.finalBarline 另管）
       if (repeatBackward) { b.style = "light-heavy"; b.repeat = "backward"; }
-      // 按位置认的终止线又挂着 D.C./D.S.：曲终在别处（Fine），这道是复纵线
-      else if (endingStop === undefined && endStyleIdx.has(idx)) b.style = thinEndIdx.has(idx) && (jump === "D.C." || jump === "D.S.") ? "light-light" : "light-heavy";
+      // 按位置认的终止线又挂着 D.C./D.S.：曲终在别处（Fine），这道是复纵线；Fine 也印在这里的，曲终就在此，仍是终止线
+      // 二房收在全曲末小节（青年诗歌 5《第一声呼求》`[2 … | 1̇ – – ‖`）：房尾不挡终止线
+      else if ((endingStop === undefined || idx === allMeasures.length - 1) && endStyleIdx.has(idx)) b.style = thinEndIdx.has(idx) && jumps.some((j) => j === "D.C." || j === "D.S.") && !jumps.includes("Fine") ? "light-light" : "light-heavy";
       // 复纵线与房尾**可以同时出现**（76《天上有粮》一房末就是 `[1 … ||`，图上没画反复冒号），
       // 故不像终止线那样给 endingStop 让位。
-      else if (doubleIdx.has(idx)) b.style = "light-light";
+      // 下一小节以反复起始 `‖:` 开头：那对粗细线就是反复线本身（青年诗歌 5《第一声呼求》`5 ‖: 3̇`），不另记复纵线
+      else if (doubleIdx.has(idx) && !allMeasures[idx + 1]?.some((n) => n.repeatForward)) b.style = "light-light";
       else if (closed) b.style = "regular";
       if (endingStop !== undefined) b.ending = endingOf(endingStop, "stop");
       // 跳转记号（D.C./D.S./Fine/To Coda）：识别时锚在本小节某音符上，记在小节末
-      if (jump) {
-        const name = JUMP_ORNAMENT[jump];
-        if (name) b.ornaments = [{ name, level: 0 }];
-        else b.annotation = jump;
+      for (const j of jumps) {
+        const name = JUMP_ORNAMENT[j];
+        if (name) (b.ornaments ??= []).push({ name, level: 0 });
+        else b.annotation = b.annotation ? `${b.annotation} ${j}` : j;
       }
       barlines.push(b);
     }

@@ -57,6 +57,55 @@ function resolveDashLike(cls: Classified, rowCores: DigitCore[], numH: number): 
 
 /** 各音在 buildJpNums 里收下的八度点（上/下），供 resolvePairOctaveDots 按声部组复核 */
 const octDotsOf = new WeakMap<JpNum, { up: Rect[]; down: Rect[]; nearDown: Rect[] }>();
+// 高音点粘在弧上（dotInkAbove 量到的那段墨的上下沿），由 promoteGluedUpDots 整页裁决
+const gluedUp = new WeakMap<JpNum, { top: number; bottom: number }>();
+
+/** 粘弧墨段的下半截像不像点：各行中心不漂（≤max(2, 0.1 字号)）、底下不收成尖（最底两行宽的那行 ≥ 最宽行的一半）。
+ *  斜着落下来的弧脚（青年诗歌 6《我们同来在一起》`6 6̲ 3̲⌒3` 的弧落在 3 头上）每行都右移一截、末端只剩一两个像素。 */
+function roundFoot(bin: Binary, d: Rect, blob: { top: number; bottom: number }, numH: number): boolean {
+  const cx = Math.round(rcx(d)), half = Math.max(1, Math.round(numH * 0.12));
+  const ink = (x: number, y: number) => x >= 0 && x < bin.w && y >= 0 && y < bin.h && bin.data[y * bin.w + x] === 1;
+  // 自底往上逐行取墨段，跟下面那行不相交就停：弧脚落在点的斜上方、并不相连（青年诗歌 5 `(1̇ 7)`），那截不算点
+  const runs: Array<[number, number]> = [];
+  for (let y = blob.bottom; y >= Math.max(blob.top, Math.round(blob.bottom - numH * 0.3)); y--) {
+    let seed = -1;
+    for (let k = 0; k <= half && seed < 0; k++) seed = ink(cx - k, y) ? cx - k : ink(cx + k, y) ? cx + k : -1;
+    if (seed < 0) break;
+    let l = seed, r = seed;
+    while (ink(l - 1, y) && seed - l < numH) l--;
+    while (ink(r + 1, y) && r - seed < numH) r++;
+    const below = runs[0];
+    if (below && (r < below[0] - 1 || l > below[1] + 1)) break;
+    runs.unshift([l, r]);
+  }
+  if (runs.length < 2) return false;
+  const cs = runs.map(([l, r]) => (l + r) / 2), ws = runs.map(([l, r]) => r - l + 1);
+  // 圆点最底一行也只剩两三个像素（9 宽的点底下 3），看最底两行
+  return Math.max(...cs) - Math.min(...cs) <= Math.max(2, numH * 0.1) && Math.max(ws[ws.length - 1]!, ws[ws.length - 2]!) >= Math.max(...ws) * 0.5;
+}
+
+/** 粘在弧上的高音点**离数字顶的距离**与本页认出来的高音点一致（差不过 0.08 字号）才采纳：高音点离数字多远是印刷定的，
+ *  弧端翘下来碰巧停在那个高度的少。青年诗歌 5《第一声呼求》弧几乎都从高音点上起落、页又不算干净（splitArcEndDots 不开），
+ *  十几个高音点都粘在弧端；三连音括线两端也一样。全页认出的单个高音点不到三个不判。 */
+export function promoteGluedUpDots(bin: Binary, rows: readonly StaffRow[], numH: number): void {
+  const gaps: number[] = [];
+  for (const r of rows) for (const n of r.nums) {
+    const od = octDotsOf.get(n);
+    if (od?.up.length === 1 && !n.doubt?.includes("oct.oddShape")) gaps.push(n.bbox.y - rbottom(od.up[0]!));
+  }
+  if (gaps.length < 3) return;
+  const g = median(gaps), tol = Math.max(2, numH * 0.08);
+  for (const r of rows) for (const n of r.nums) {
+    const blob = gluedUp.get(n);
+    // 延长记号 ⌒· 的点也在弧下、正对音符（16《爱心的功课》末行 `6̂ 7̂`）
+    if (!blob || n.octave !== 0 || n.fermata || Math.abs(n.bbox.y - (blob.bottom + 1) - g) > tol) continue;
+    if (!roundFoot(bin, n.bbox, blob, numH)) continue;
+    probe("oct.gluedUp");
+    n.octave = 1;
+    n.doubt = n.doubt?.filter((x) => x !== "oct.inkAbove");
+    if (!n.doubt?.length) delete n.doubt;
+  }
+}
 
 /** 四声部谱两声部一组（S/A、T/B）上下挨着，夹在两组数字之间的一颗点，要么是上声部的低音点、要么是下声部的高音点，
  *  逐音按窗口收常被两边各收一次（上声部「数字 → 减时线 → 点」离得反而远，按「归更近的」也抢不回去）：
@@ -490,8 +539,10 @@ export function buildJpNums(
     // 收下的八度点形状不像点（不实、或一边长出一截）：小尖角、重音记号、字的笔画也会过尺寸与居中两道门
     if ([...upDots, ...downDots].some((kb) => inkFill(bin, kb) < 0.55 || Math.max(kb.w, kb.h) > Math.min(kb.w, kb.h) * 1.7)) doubts.push("oct.oddShape");
     // 高音点跟圆滑线的端头粘成了一块（剥弧时点被一起带走、没进点候选）：数字正上方紧挨着的那段墨像一个点
-    if (!upDots.length && dotInkAbove(bin, d, numH)) doubts.push("oct.inkAbove");
+    const glued = !upDots.length ? dotInkAbove(bin, d, numH) : null;
+    if (glued) doubts.push("oct.inkAbove");
     const jn: JpNum = { digit, bbox: d, dot, octave, div, augment, augmentRects, ...(doubts.length ? { doubt: doubts } : {}) };
+    if (glued && !downDots.length) gluedUp.set(jn, glued);
     octDotsOf.set(jn, { up: upDots, down: downDots, nearDown });
     out.push(jn);
   }
@@ -510,7 +561,7 @@ export function buildJpNums(
  *  · 两旁有墨（点粘在弧上）：中间那段墨的高度至少是两旁弧身粗细的 1.8 倍、且不小于 0.2 字号——点就是弧上局部鼓起的一块；
  *    最下面三成那几行横向宽 0.18~0.5 字号（陡的弧尾竖着量也长，但每行横着只有一笔粗）。
  *  · 两旁没墨（孤立的块）：高 0.12~0.45 字号、宽不过 0.45 字号、最短边不小于 0.17 字号、实心（墨占六成以上）。 */
-function dotInkAbove(bin: Binary, d: Rect, numH: number): boolean {
+function dotInkAbove(bin: Binary, d: Rect, numH: number): { top: number; bottom: number } | null {
   const cx = Math.round(rcx(d));
   const half = Math.max(1, Math.round(numH * 0.12));
   const ink = (x: number, y: number): boolean => x >= 0 && x < bin.w && y >= 0 && y < bin.h && bin.data[y * bin.w + x] === 1;
@@ -521,11 +572,11 @@ function dotInkAbove(bin: Binary, d: Rect, numH: number): boolean {
   const top = Math.max(0, Math.round(d.y - numH * 0.8));
   let y = Math.round(d.y) - 1;
   while (y >= top && !rowHas(y)) y--;
-  if (y < top) return false;
+  if (y < top) return null;
   const bottom = y;
   while (y >= 0 && rowHas(y)) y--;
   const h = bottom - y;
-  if (h > numH * 0.6) return false;
+  if (h > numH * 0.6) return null;
   // 两旁（中间窗口外、0.8 字号内）各列在这一带的墨厚：中位数当弧身粗细
   const side: number[] = [];
   for (let x = cx - Math.round(numH * 0.8); x <= cx + Math.round(numH * 0.8); x++) {
@@ -537,7 +588,7 @@ function dotInkAbove(bin: Binary, d: Rect, numH: number): boolean {
   if (side.length >= numH * 0.3) {
     side.sort((a, b) => a - b);
     const stroke = side[side.length >> 1]!;
-    if (h < Math.max(numH * 0.2, stroke * 1.8)) return false;
+    if (h < Math.max(numH * 0.2, stroke * 1.8)) return null;
     // 较陡的弧尾竖着量也长，但每一行横着只有一笔粗；点在最下面几行横向有一定宽度
     let widest = 0;
     for (let yy = bottom - Math.max(1, Math.round(h * 0.3)); yy <= bottom; yy++) {
@@ -549,9 +600,9 @@ function dotInkAbove(bin: Binary, d: Rect, numH: number): boolean {
         widest = Math.max(widest, r - l + 1);
       }
     }
-    return widest >= numH * 0.18 && widest <= numH * 0.5;
+    return widest >= numH * 0.18 && widest <= numH * 0.5 ? { top: y + 1, bottom } : null;
   }
-  if (h < numH * 0.12 || h > numH * 0.45) return false;
+  if (h < numH * 0.12 || h > numH * 0.45) return null;
   let l = cx, r = cx;
   const colHas = (x: number): boolean => {
     for (let yy = y + 1; yy <= bottom; yy++) if (ink(x, yy)) return true;
@@ -560,7 +611,7 @@ function dotInkAbove(bin: Binary, d: Rect, numH: number): boolean {
   while (colHas(l - 1) && cx - l < numH) l--;
   while (colHas(r + 1) && r - cx < numH) r++;
   const w = r - l + 1;
-  return w <= numH * 0.45 && Math.min(w, h) >= Math.max(2, numH * 0.17) && inkFill(bin, { x: l, y: y + 1, w, h }) >= 0.6;
+  return w <= numH * 0.45 && Math.min(w, h) >= Math.max(2, numH * 0.17) && inkFill(bin, { x: l, y: y + 1, w, h }) >= 0.6 ? { top: y + 1, bottom } : null;
 }
 
 /** **补判减时线**：按横线块数出 0 条的音符，直接到像素里量。块分类那条路靠连通域，线跟数字、低音点、连接墨粘成一块时

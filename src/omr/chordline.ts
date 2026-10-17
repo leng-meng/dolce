@@ -19,13 +19,29 @@ export type ChordCand = { tok: string; x: number; bbox: Rect };
 export function chordCandidates(
   rawText: string, srcX: (charIndex: number) => number, mkBbox: (x0: number, x1: number) => Rect,
 ): ChordCand[] {
-  return splitChordTokens(blankNonChord(rawText), srcX)
+  return splitChordTokens(blankNonChord(blankAltChords(splitFarJump(rawText, srcX, mkBbox(0, 1).h))), srcX)
     .map(({ tok, index }) => {
       const x0 = srcX(index), x1 = srcX(index + tok.length);
       return { tok: normalizeChord(tok), x: x0, bbox: mkBbox(x0, Math.max(x1, x0 + 1)) };
     })
     // 归一后仍须是合法根音开头（可带前置升降号，`chordTextSegs`/`harmonyXml` 的最低要求），否则下游只能整段原样排字。
     .filter((c) => /^[#b]?[A-G]/.test(c.tok));
+}
+
+/** 紧跟在和弦后面、括号里的**备选和弦**（青年诗歌 5《第一声呼求》`C(A)` `G7(E7)` `Am(F#m)`：页眉 `C/A4/4`，括号里是移到 A 调的
+ *  另一套）：不抹的话切成两个和弦，备选那个挂到下一个音上。只留主编配（与页眉取 `C/A` 的 C 同一口径），抹成等长空格保住下标。 */
+const blankAltChords = (s: string): string =>
+  s.replace(/(?<=[A-Za-z0-9#♯♭])[(（]\s*[#♯b♭]?[A-G][^()（）]*[)）]/g, (m) => " ".repeat(m.length));
+
+/** 读成 `D·S·` 的两个字母在源图上隔得远（三个字高以上）：不是跳转记号，是和弦 D 与远处的 segno `·S·`
+ *  被 rec 压成了一条（青年诗歌 4《陪我生活》第 2 谱行 `A7 A7 D … ·S·`）。整串当 D.S. 抹掉就丢了 D——
+ *  这里只把 D 之后的那截抹成等长空格，D 留给切词。真 `D.S.` 两字母挨着，不受影响。 */
+function splitFarJump(s: string, srcX: (charIndex: number) => number, h: number): string {
+  if (!(h > 0)) return s;
+  return s.replace(/D(\s*[.,·]\s*[CS]\s*[.,·]?)/g, (m, tail: string, at: number) => {
+    const k = at + 1 + tail.search(/[CS]/);
+    return srcX(k) - srcX(at) > h * 3 ? "D" + " ".repeat(tail.length) : m;
+  });
 }
 
 /** 把一批带源图 x 的和弦落到某谱行的音符上（含拍内偏移）。

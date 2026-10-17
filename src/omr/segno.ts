@@ -26,7 +26,7 @@ function segnoBody(k: Component, numH: number): boolean {
 /** 斜笔两侧的两颗点：都落在主体 bbox 略微放大的范围内，且分处主体中心的**对角两侧**。
  *  点从**全图连通块**里找，不走 dots 通道——那两颗点不在音符上下，归类时压根没进点通道
  *  （76《天上有粮》实测两颗 7×7、8×7 的小块只在 comps 里）。 */
-function hasTwoDots(body: Component, comps: Component[], numH: number): boolean {
+function hasTwoDots(body: Component, comps: Component[], numH: number): "diag" | "side" | null {
   const b = body.bbox;
   const pad = numH * 0.2;
   const near = comps.filter((d) => {
@@ -36,17 +36,27 @@ function hasTwoDots(body: Component, comps: Component[], numH: number): boolean 
     return rcx(d.bbox) >= b.x - pad && rcx(d.bbox) <= rright(b) + pad &&
       rcy(d.bbox) >= b.y - pad && rcy(d.bbox) <= rbottom(b) + pad;
   });
-  if (near.length < 2) return false;
   const cy = rcy(b);
+  // 另一种印法 `·S·`：直立的 S 不带斜笔，两颗点**左右夹着**、齐在半高（青年诗歌 4《陪我生活》）。
+  // 一左一右都在主体框外、纵向离中心不到三成字高才算——和弦字母旁的标点凑不出左右对称的一对。
+  // 点离 S 比斜笔那种远（实测隔开 0.35 字号），横向另放宽到 0.7 字号找。
+  const side = comps.filter((d) => {
+    if (d === body) return false;
+    const s = Math.max(d.bbox.w, d.bbox.h);
+    return s >= numH * 0.08 && s <= numH * 0.3 && Math.abs(rcy(d.bbox) - cy) <= b.h * 0.3;
+  });
+  if (side.some((d) => rright(d.bbox) <= b.x && rright(d.bbox) >= b.x - numH * 0.7) &&
+    side.some((d) => d.bbox.x >= rright(b) && d.bbox.x <= rright(b) + numH * 0.7)) return "side";
+  if (near.length < 2) return null;
   // 一颗在中心之上、一颗在中心之下，且横向也分开（斜笔把它们分到两边）。
   const above = near.filter((d) => rcy(d.bbox) < cy);
   const below = near.filter((d) => rcy(d.bbox) > cy);
-  if (!above.length || !below.length) return false;
+  if (!above.length || !below.length) return null;
   // 「对角」按**横向**为主：两颗点分居斜笔两侧，横向拉开得明显（76 实测中心差 25px / 字号 44），
   // 纵向只差半颗点（实测 8.5px = 0.19 字号），门槛卡在 0.2 字号就整个漏掉。
   return above.some((a) => below.some((z) =>
     Math.abs(rcx(a.bbox) - rcx(z.bbox)) >= numH * 0.2 &&
-    Math.abs(rcy(a.bbox) - rcy(z.bbox)) >= numH * 0.1));
+    Math.abs(rcy(a.bbox) - rcy(z.bbox)) >= numH * 0.1)) ? "diag" : null;
 }
 
 /** 找 segno 并锚到下方最近的音符（`JpNum.segno`）。`comps` 是全图连通块。 */
@@ -55,11 +65,13 @@ export function detectSegno(comps: Component[], rows: StaffRow[], numH: number):
     if (!row.nums.length) continue;
     const rowTop = Math.min(...row.nums.map((n) => n.bbox.y));
     // 上方带：音符顶之上 0.2~2.8 字号。再往上就进了上一行的歌词带。
-    const y0 = rowTop - numH * 2.8, y1 = rowTop - numH * 0.2;
+    // `·S·` 那种印在和弦行同高（《陪我生活》顶到 3.8 字号）：放到 4 字号，但超出 2.8 的只认左右夹点那一形。
+    const y0 = rowTop - numH * 4, y1 = rowTop - numH * 0.2, yDiag = rowTop - numH * 2.8;
     for (const k of comps) {
       if (rbottom(k.bbox) > y1 || k.bbox.y < y0) continue;
       if (!segnoBody(k, numH)) continue;
-      if (!hasTwoDots(k, comps, numH)) continue;
+      const form = hasTwoDots(k, comps, numH);
+      if (!form || (form === "diag" && k.bbox.y < yDiag)) continue;
       // 锚到正下方最近的音符：segno 印在小节起头上方，那一小节的左线就是跳转落点。
       const cx = rcx(k.bbox);
       let best: (typeof row.nums)[number] | undefined;

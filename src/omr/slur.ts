@@ -190,26 +190,71 @@ export function tupletCandidates(bin: Binary, comps: Component[], rows: StaffRow
     const rowTop = median(row.nums.map((n) => n.bbox.y));
     const above = comps.filter((c) => rbottom(c.bbox) <= rowTop + numH * 0.1 &&
       rbottom(c.bbox) >= rowTop - numH * 2.2);
-    for (const num of above) {
+    // 数字与一侧括线粘成了一块（青年诗歌 5《第一声呼求》前奏 `⌒3⌒`：3 的中腰正接着右半括线，69×37、字号 39）：
+    // 按列把数字切出来——块里顶头比括线高出 0.1 字号以上、贴着块的一端、宽 0.25~0.8 字号的那几列是数字，其余是括线。
+    const fused: Array<{ num: Rect; arc: Component }> = [];
+    for (const c of above) {
+      const b = c.bbox;
+      if (b.w < numH || b.h > numH * 1.1) continue;
+      const tops: number[] = [];
+      for (let x = b.x; x < rright(b); x++) {
+        let t = -1;
+        for (let y = b.y; y < rbottom(b) && t < 0; y++) if (bin.data[y * bin.w + x]) t = y;
+        tops.push(t);
+      }
+      const arcTop = median(tops.filter((t) => t >= 0));
+      const high = tops.map((t) => t >= 0 && t < arcTop - numH * 0.1);
+      for (const fromLeft of [true, false]) {
+        const at = (i: number) => high[fromLeft ? i : b.w - 1 - i]!;
+        let i = 0;
+        while (i < b.w && !at(i)) i++;
+        const st = i;
+        while (i < b.w && at(i)) i++;
+        if (st > numH * 0.15 || i - st < numH * 0.25 || i - st > numH * 0.8 || b.w - i < numH * 0.5) continue;
+        const [n0, n1] = fromLeft ? [st, i] : [b.w - i, b.w - st];
+        const box = (x0: number, x1: number): Rect | null => {
+          let ya = Infinity, yb = -1, xa = Infinity, xb = -1;
+          for (let x = x0; x < x1; x++) for (let y = 0; y < b.h; y++) if (bin.data[(b.y + y) * bin.w + b.x + x]) {
+            ya = Math.min(ya, y); yb = Math.max(yb, y); xa = Math.min(xa, x); xb = Math.max(xb, x);
+          }
+          return yb < 0 ? null : { x: b.x + xa, y: b.y + ya, w: xb - xa + 1, h: yb - ya + 1 };
+        };
+        // 数字只取括线**以上**到数字底：数字格里正下方另有别的音的高音点（不同块）时别罩进来——取到第一行空行为止
+        const num = box(n0, n1), rest = fromLeft ? box(n1, b.w) : box(0, n0);
+        if (!num || !rest) continue;
+        let yEnd = num.y;
+        while (yEnd < rbottom(num)) {
+          let any = false;
+          for (let x = num.x; x < rright(num) && !any; x++) any = bin.data[yEnd * bin.w + x] === 1;
+          if (!any) break;
+          yEnd++;
+        }
+        fused.push({ num: { ...num, h: yEnd - num.y }, arc: { id: c.id, bbox: rest, area: rest.w * rest.h, cx: rcx(rest), cy: rcy(rest) } });
+      }
+    }
+    for (const num of [...above, ...fused.map((f) => ({ bbox: f.num, fusedArc: f.arc }))] as Array<{ bbox: Rect; fusedArc?: Component }>) {
       const nb = num.bbox;
       if (nb.h < numH * 0.35 || nb.h > numH * 0.8) continue;
       const r = nb.w / nb.h;
       if (r < 0.4 || r > 1.3) continue;
       if (inkFill(nb) < 0.35) continue;                       // 实心笔画（弧是细线）
-      // 左右两段细弧：与数字纵向重叠、横向紧挨着。
-      const arcAt = (side: -1 | 1) => above.find((c) => {
+      // 左右两段细弧：与数字纵向重叠、横向紧挨着。粘着数字的那一侧就是块里切下的那段。
+      const pool = num.fusedArc ? [...above.filter((c) => c.id !== num.fusedArc!.id), num.fusedArc] : above;
+      const arcAt = (side: -1 | 1) => pool.find((c) => {
         const b = c.bbox;
         if (b === nb || b.w < numH * 0.5 || b.h > numH * 0.9) return false;
         const gap = side < 0 ? nb.x - rright(b) : b.x - rright(nb);
         if (gap < -numH * 0.15 || gap > numH * 0.6) return false;
         if (rbottom(b) < nb.y || b.y > rbottom(nb)) return false;   // 纵向不重叠
-        // 方括号式「┌3┐」（1218 746）的钩比细弧墨多：实测 0.39、0.42，宽 0.6 字号上下
-        return inkFill(b) <= 0.5;
+        // 方括号式「┌3┐」（1218 746）的钩比细弧墨多：实测 0.39、0.42，宽 0.6 字号上下。
+        // 平顶括线拆剩的一截直线（青年诗歌 5 前奏第二组：弧尾连着点被 splitArcTail 切走，剩 37×5 的实心横段）够扁也算
+        return inkFill(b) <= 0.5 || b.h <= numH * 0.2;
       });
       const left = arcAt(-1), right = arcAt(1);
       if (!left || !right) continue;
       const x0 = Math.min(left.bbox.x, nb.x), x1 = Math.max(rright(right.bbox), rright(nb));
-      const notes = row.nums.filter((n) => between(rcx(n.bbox), x0 - numH * 0.5, x1 + numH * 0.5));
+      // 括线罩着的音在数字以下：括线自己被收成了「音」的（半截括线连着端点的高音点，读成 7）不算
+      const notes = row.nums.filter((n) => between(rcx(n.bbox), x0 - numH * 0.5, x1 + numH * 0.5) && rcy(n.bbox) > rbottom(nb));
       if (notes.length < 2) continue;
       out.push({ numeral: nb, arcs: [left, right], notes });
     }

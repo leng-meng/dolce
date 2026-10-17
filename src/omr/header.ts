@@ -147,7 +147,8 @@ function parseMeta(lines: HLine[]): MetaInfo {
       // 升降号在音名右上角的（`E♭ 3/4`，det 读成 "Eb3/4"）一并认下：这一路本就靠「右边紧跟着
       // 一个合法拍号」定位，音名与拍号之间夹的那一个字符只可能是升降号（5《我今来就你》）。
       // 小调印成和弦名式的 `Em 4/4`（青年诗歌 2《真爱》，det 读成 "Em4/4"）：音名后多一个 `m`，调号退到关系大调
-      const m = t.match(/(?:^|[^A-Za-z])([A-G])([b#♭♯]?)(m?)(\d{1,2})[/／](\d{1,2})(?![0-9])/);
+      // 斜杠后跟着备选调的（青年诗歌 5《第一声呼求》`C/A4/4`，和弦也印成 `C(A)` 两套）：取斜杠前那个主调
+      const m = t.match(/(?:^|[^A-Za-z])([A-G])([b#♭♯]?)(m?)(?:[/／][b#♭♯]?[A-G][b#♭♯]?m?)?(\d{1,2})[/／](\d{1,2})(?![0-9])/);
       if (!m || !(m[1] in NAT_FIFTHS)) continue;
       if (!validBeats(Number(m[4])) || !validBeatType(Number(m[5]))) continue;
       const f0 = m[2] ? toFifths(m[1], m[2]) : NAT_FIFTHS[m[1]];
@@ -471,6 +472,8 @@ function splitInlineKey(lines: HLine[]): HLine[] {
 export async function recognizeHeader(
   bin: Binary, comps: Component[], firstStaffTopY: number, numH: number, ocr: OcrBackend,
   geoMeters?: { beats: number; beatType: number; bbox: Rect }[],
+  /** 页眉 ROI 以外、也属页眉的框（与首谱行同排的调号拍号，见 jianpu.ts「页眉调号与前奏同排」）：只走 det 那条路。 */
+  extra: Rect[] = [],
 ): Promise<HeaderInfo> {
   const out: HeaderInfo = { credits: [], regions: [] };
   if (!ocr.recognizeTexts || firstStaffTopY < numH) return out;
@@ -481,6 +484,11 @@ export async function recognizeHeader(
   // 可用 (globalThis).__headerDet=false 关闭以做 A/B。
   if (ocr.recognizeRegion && (globalThis as { __headerDet?: boolean }).__headerDet !== false) {
     const dets = await ocr.recognizeRegion(bin, { x: 0, y: 0, w: bin.w, h: Math.round(firstStaffTopY - numH * 0.1) });
+    for (const r of extra) {
+      const pad = numH * 0.3;
+      dets.push(...await ocr.recognizeRegion(bin, { x: Math.max(0, Math.round(r.x - pad)), y: Math.max(0, Math.round(r.y - pad)),
+        w: Math.round(r.w + pad * 2), h: Math.round(r.h + pad * 2) }));
+    }
     if (dets.length) {
       const lines: HLine[] = splitInlineKey(dets.map((d) => ({ text: d.text, charH: d.bbox.h, cx: d.bbox.x + d.bbox.w / 2, cy: d.bbox.y + d.bbox.h / 2, n: 1, bbox: d.bbox, chars: d.chars })));
       if ((globalThis as { __omrDebug?: boolean }).__omrDebug) console.log("[header/det]", lines.map((l) => `${Math.round(l.charH)}px@${Math.round(l.cx)},${Math.round(l.cy)}w${Math.round(l.bbox.w)}=${JSON.stringify(l.text)}`).join("  "));

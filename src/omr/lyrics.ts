@@ -110,6 +110,31 @@ export interface LyricTrace {
 const STRIP_H = 48, STRIP_MAXW = 300; // rec 宽上限 320 → 单条限 ~5 字免压扁
 const STRIP_PAD = 4; // 拼条时字格两侧留白（也是 xFrac↔源图 x 换算的边距）
 
+/** 歌词块里的破折号「——」：只有一道细横、齐在字身半高、连着两个字宽上下的列段（源图 x 区间）。
+ *  它常与两旁的字粘成一块、分字时又被按字宽切开，故不看字格、在整块的横向范围里逐列量：本列墨只是一小截、
+ *  落在行高中部，就算横线列；中间断开不到 0.15 字宽的接着算（两个「—」之间的缝）。
+ *  门槛 1.4 字宽——单个「一」只有一个字宽，挡在外面。 */
+function dashSpans(bin: Binary, cells: Rect[], charW: number): { x0: number; x1: number }[] {
+  const out: { x0: number; x1: number }[] = [];
+  const y0 = Math.max(0, Math.round(Math.min(...cells.map((c) => c.y))));
+  const y1 = Math.min(bin.h - 1, Math.round(Math.max(...cells.map((c) => rbottom(c)))));
+  const xa = Math.max(0, Math.round(Math.min(...cells.map((c) => c.x))));
+  const xb = Math.min(bin.w - 1, Math.round(Math.max(...cells.map((c) => rright(c)))));
+  const H = y1 - y0 + 1, thin = Math.max(3, H * 0.15);
+  let run = -1, last = -1;
+  const close = () => { if (run >= 0 && last - run + 1 >= charW * 1.4) out.push({ x0: run, x1: last }); run = -1; };
+  for (let x = xa; x <= xb; x++) {
+    let top = -1, bot = -1;
+    for (let y = y0; y <= y1; y++) if (bin.data[y * bin.w + x]) { if (top < 0) top = y; bot = y; }
+    if (top < 0) { if (run >= 0 && x - last > charW * 0.15) close(); continue; }
+    const mid = (top + bot) / 2;
+    if (bot - top + 1 <= thin && mid >= y0 + H * 0.3 && mid <= y0 + H * 0.75) { if (run < 0) run = x; last = x; }
+    else close();
+  }
+  close();
+  return out;
+}
+
 /** 压缩字格间过宽空白的布局：每个字间 gap 上限压到 maxGap（默认 ∞=不压，保留自然排版）。
  *  歌词字距过大时（如基督更美 ~1 字宽的间隔）自然区域会超 rec 宽上限被迫拆成单字；压掉多余空白后
  *  同样几个字能并进一条整体 rec（字形/字序不动，只去纯空白 → 不伤"自然排版"那点优势）。
@@ -653,7 +678,14 @@ export async function recognizeLyrics(
       // 处理（见趟 1），否则（阿拉伯数字段号、和弦）照普通块装配，与原来无异。
       let body = cells;
       const c0 = cells[0], c1 = cells[1];
-      if (!above && c1 && rright(c0) < row.nums[0].bbox.x && c1.x - rright(c0) >= c1.h * 0.5) {
+      // 隔开不到半个字时（青年诗歌 6《我们同来在一起》粗体「副」紧挨着「神」）另看第二个字：它正对首音、
+      // 第一个字整个在首音左边没有音可配，那也是边注。只认整字大小的第一块——段号「1.」「一.」窄或扁，
+      // 照旧跟正文一起送 rec（拆出来会改动歌词那批的输入，沧海一声笑的字就漂了）。
+      const n0 = row.nums[0].bbox;
+      const gap01 = c1 ? c1.x - rright(c0) : 0;
+      const fullChar = c1 && c0.h >= c1.h * 0.8 && c0.w >= c1.w * 0.7;
+      if (!above && c1 && rright(c0) < n0.x &&
+        (gap01 >= c1.h * 0.5 || (fullChar && gap01 >= c1.h * 0.15 && Math.abs(rcx(c1) - rcx(n0)) < c1.w * 0.5))) {
         chunks.push({ rowIdx: i, verse, cells: [c0], maxGap, margin: true });
         strips.push(buildStrip(src, [c0], STRIP_H, maxGap));
         body = cells.slice(1);
@@ -703,12 +735,12 @@ export async function recognizeLyrics(
   const rawByKey = new Map<string, string>();   // 每 (row,verse) 的 rec 原文（供和弦/段落标记行判定）
   const lineSeen = new Set<string>();
   // 行首边注块（分块时单独拿出来的那格）读出汉字 → 不进歌词；是单个中文数字就收作段号。
-  // 「一」只是一横，单独 rec 常读成横线或「1」：横线一律认作「一」；「1」只在本页别的边注
+  // 「一」只是一横，单独 rec 常读成横线（含下划线 `_`，青年诗歌 4《陪我生活》）或「1」：横线一律认作「一」；「1」只在本页别的边注
   // 读出了中文数字时才认（《祭司的国度》`二` 读对、`一` 读成 `1`）——阿拉伯段号总带点（`1.`）。
   const marginNote = new Set<number>();                            // 按边注处理的块
   const marginLabel = new Map<string, string>();                   // (row,verse) → 中文段号
   const marginText = (s: number) =>
-    (textsPos ? textsPos[s].map((c) => c.ch).join("") : texts![s]).replace(/[\s()（）]/g, "").replace(/^[-‐‑–—]$/, "一");
+    (textsPos ? textsPos[s].map((c) => c.ch).join("") : texts![s]).replace(/[\s()（）]/g, "").replace(/^[-_‐‑–—]$/, "一");
   const cnMarginPage = chunks.some((c, s) => c.margin && marginText(s).length === 1 && CN_NUM.includes(marginText(s)));
   const marks: { rowIdx: number; word: string; x: number }[] = []; // 段落标记（印在下一谱行上方）
   const dynMarks: { rowIdx: number; name: string; x: number }[] = []; // 力度（同样印在下一谱行上方）
@@ -736,7 +768,8 @@ export async function recognizeLyrics(
       if (/[一-鿿]/.test(bare)) {
         probe("lyrics.marginNote");
         marginNote.add(s);
-        if (bare.length === 1 && CN_NUM.includes(bare)) marginLabel.set(`${rowIdx}:${verse}`, bare);
+        // 带分隔符的（`一.`，边注那条判据把号与首字分开了）照谱面原样记
+        if (CN_NUM.includes(bare[0]!) && /^.[、.．]?$/.test(bare)) marginLabel.set(`${rowIdx}:${verse}`, bare);
         continue;
       }
     }
@@ -926,6 +959,20 @@ export async function recognizeLyrics(
         }
       }
       flushLatin();
+      // 破折号「——」：rec 读不出（青年诗歌 4《陪我生活》「耶稣——神赐」只读出「稣神」），按墨迹找回来贴前一字。
+      // 本块范围内已有字落在横线中段的不算（那是 rec 认出的「一」之类）。
+      // 字宽按行高取：整块只有一个粘连宽格时 charW（格宽中位）就是那个宽格
+      const dashW = Math.min(charW, cy1 - cy0);
+      for (const sp of dashSpans(bin, cells, dashW)) {
+        if (placed.some((p) => p.x > sp.x0 + dashW * 0.3 && p.x < sp.x1 - dashW * 0.5)) continue;
+        let prev: (typeof placed)[number] | undefined;
+        for (const p of placed) if (p.x < sp.x0 && (!prev || p.x > prev.x)) prev = p;
+        // 前一字是「一」「二」：多半本身就是横线读成的字（16《爱心的功课》谱行下杂字伪行 `二——二`）
+        if (!prev || prev.ch.endsWith("—") || /[一二]$/.test(prev.ch)) continue;
+        probe("lyrics.dash");
+        prev.ch += "——";
+        if (prev.region) prev.region.text += "——";
+      }
     } else {
       // 回退：后端无字位时，沿用"字↔连通块格"按序映射 + 段号几何剔除（首格落在第一个音符中心左侧 → 段号丢弃）。
       const toks: string[] = [];
@@ -1084,7 +1131,8 @@ export async function recognizeLyrics(
     if (!row?.nums.length) continue;
     let bi = row.nums.length - 1;
     while (bi > 0 && rcx(row.nums[bi].bbox) > jp.x) bi--;
-    row.nums[bi].jumpMark = jp.word;
+    const marks = row.nums[bi].jumpMarks ??= [];
+    if (!marks.includes(jp.word)) marks.push(jp.word);
   }
 
   // 剔除伪 verse：谱行下方噪声/记号被误当额外歌词行，rec 出来多为空、偶尔一行垃圾字（如世上 row3 的
@@ -1141,7 +1189,7 @@ export async function recognizeLyrics(
       if (seen.has(verse)) continue;           // 每个视觉行只看它首次出现的那一谱行（= 标号那行）
       seen.add(verse);
       const cnMargin = marginLabel.get(key);
-      const nums = parseVerseLabel(raw) ?? (cnMargin ? [CN_NUM.indexOf(cnMargin) + 1] : null);
+      const nums = parseVerseLabel(raw) ?? (cnMargin ? [CN_NUM.indexOf(cnMargin[0]!) + 1] : null);
       if (nums) { probe("lyrics.verseLabel"); verseLabels.set(verse, nums); }
     }
     // 段号漏读补齐：读出来的（≥2 个）都恰好是「行序+1」，同一谱行上别的歌词行没读出号的，也照「行序+1」补上。
@@ -1191,6 +1239,26 @@ export async function recognizeLyrics(
       const dotted = (filled ? ![...rawByKey].some(([k, r]) => k.split(":")[0] === String(rowIdx) && parseVerseLabel(r) && undotted(r))
         : !undotted(raw)) || targets.length > 1;
       (row.lyricLabels ??= [])[targets[0] - 1] = cn ? cn[1] + cn[2] : cnMargin ?? targets.map((n) => (dotted ? `${n}.` : `${n}`)).join("");
+    }
+    // 同一谱行的中文段号，分隔符是同一个印法（青年诗歌 6 四段都是 `一.`），OCR 却常把小点读成「、」或读丢：按多数统一。
+    // 夹着一个阿拉伯数字的（青年诗歌 5 `一 / 2. / 三`，「二」单独读成了 2.）：号对得上行序就改回中文、去掉读出来的点。
+    for (const row of staff) {
+      const ls = row.lyricLabels;
+      if (!ls || ls.length < 2) continue;
+      const cnN = ls.filter((l) => l && CN_NUM.includes(l[0]!)).length;
+      if (cnN * 2 > ls.filter(Boolean).length) {
+        ls.forEach((l, i) => {
+          const m = l ? /^(\d)[.．、]?$/.exec(l) : null;
+          if (m && Number(m[1]) === i + 1 && CN_NUM[i]) ls[i] = CN_NUM[i]!;
+        });
+      }
+      const m = ls.map((l) => (l ? new RegExp(`^([${CN_NUM}])([、.．]?)$`).exec(l) : null));
+      if (m.some((x, i) => ls[i] !== undefined && !x)) continue;
+      const cnt = new Map<string, number>();
+      for (const x of m) if (x?.[2]) cnt.set(x[2], (cnt.get(x[2]) ?? 0) + 1);
+      const best = [...cnt].sort((a, b) => b[1] - a[1])[0];
+      if (!best || best[1] * 2 <= m.filter(Boolean).length - 1) continue;
+      m.forEach((x, i) => { if (x) ls[i] = x[1] + best[0]; });
     }
   }
 
