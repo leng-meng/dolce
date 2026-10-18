@@ -388,7 +388,7 @@ export function attachDynamicTexts(
  * 取「下缘在它上方、且最近」的那一行；上方没有（页面第一行谱之上）才退回下方最近的一行。
  * 容差各五格与三格——谱表之间隔着歌词带，记号常印在带里。
  */
-function ownerStaff(pg: SPage, cy: number, sp: number, reach = 5, lyricBottom?: Map<Staff, number>): Staff | null {
+function ownerStaff(pg: SPage, cy: number, sp: number, reach = 5, lyricBottom?: Map<Staff, number>, nextReach = 3): Staff | null {
   let best: Staff | null = null;
   let bd = Infinity;
   for (const st of pg.staves) {
@@ -406,7 +406,7 @@ function ownerStaff(pg: SPage, cy: number, sp: number, reach = 5, lyricBottom?: 
   if (best && lyricBottom) {
     const lb = lyricBottom.get(best);
     if (lb !== undefined && cy > lb) {
-      const below = pg.staves.filter((st) => st.box.top >= cy && st.box.top - cy <= sp * 3).sort((a, b) => a.box.top - b.box.top)[0];
+      const below = pg.staves.filter((st) => st.box.top >= cy && st.box.top - cy <= sp * nextReach).sort((a, b) => a.box.top - b.box.top)[0];
       if (below) return below;
     }
   }
@@ -424,6 +424,20 @@ function ownerStaff(pg: SPage, cy: number, sp: number, reach = 5, lyricBottom?: 
 
 /** 松叶往上找它那行谱的范围（格）：谱表下方隔着几段歌词也算。 */
 const WEDGE_REACH = 9;
+/** 松叶隔着上一行歌词、紧贴下一行谱的归下一行：离下一行谱顶这么多格以内（力度那一条是 3 格）。
+ *  印在下一行谱上方的离谱顶 1.0~2.54 格（宣主荣耀、牵我的手、破碎 p4 m30）；破碎印在自己歌词下面的离下一行 2.80~2.92 格 */
+const WEDGE_NEXT_REACH = 2.6;
+/** 起端那一带在唱长音（离最近的音超过 4 格）：往左这么多格内本行有音就挂它（破碎 m98 女高） */
+const WEDGE_LONG_REACH = 12;
+/** 右端压过小节线这么多格以内的，算收在小节线前（开口顶着小节线、与它连成一团认出来的） */
+const WEDGE_PAST_BAR = 2.5;
+/** 「音头处」的容差（格，按符头左缘量）：左端在音头左缘右边这么多以内的、右端在音头左缘左边这么多以内的，都算在那个音头处 */
+const WEDGE_END_TOL = 0.5;
+/** 行首续段：左端在本行第一个音头之前这么多格以上 */
+const WEDGE_CONT_LEAD = 0.5;
+/** 行尾要续的：右端离谱表右端这么多格以内——续下去的直画到谱表尽头（破碎 m64、m72 差 3 像素），
+ *  收在系统末小节线前的留着空（m80 差 0.65 格） */
+const WEDGE_CONT_EDGE = 0.4;
 
 /** 一条松叶：两端的 x 与纵向位置（谁挂给谁由 `attachWedges` 定）。 */
 export interface WedgeSpan {
@@ -436,10 +450,9 @@ export interface WedgeSpan {
 }
 
 /**
- * 松叶挂到音符上：起点挂给左端最近的音符、终点挂给右端最近的。
- *
- * 与力度同一套「按 x 找最近、纵向在谱表带外四格以内」的判据（那一条已经调过）。
- * 两端落到同一个音符时**只留起点**——MusicXML 里同一处既起又止没有意义。
+ * 松叶挂到音符上：先定谱行（与力度同一套），起点挂左端处或之前的音、终点挂右端处或之后的第一个音
+ *（右端过了末音、收在小节线前的挂末音并写在它后面），两端都不隔小节线；跨系统的那一截只写起或只写止。
+ * 止端只在起端之后找，不会与起点落在同一个音上。
  */
 export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[], lyricBottom?: Map<Staff, number>): void {
   const sp = pg.normalStaffSpace || pg.space;
@@ -449,7 +462,7 @@ export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[],
     // ——不先定谱行，一条松叶会挂到下一行去，逐声部比出来的次序全乱。
     // 上方够得着的范围放到 `WEDGE_REACH` 格：合唱谱人声的松叶印在**自己那行歌词下面**（破碎 p4 女高、女低），
     // 离下一行谱表反而更近，五格以内找不到上方那行就挂到了下一行
-    const owner = ownerStaff(pg, wg.cy, sp, WEDGE_REACH, lyricBottom);
+    const owner = ownerStaff(pg, wg.cy, sp, WEDGE_REACH, lyricBottom, WEDGE_NEXT_REACH);
     const near = (x: number): StaffNote | undefined => {
       // 先在**它那行谱**里找；那一行在这个位置没有音符（人声休止、钢琴前奏一类）
       // 才退回「所有纵向够得着的谱行里 x 最近的那个」。
@@ -467,31 +480,48 @@ export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[],
           }
         }
         if (best && bd < sp * 4) return best;
+        if (only && owner) {
+          // 那一带在唱长音：取它左边最近的音（长音中间起的松叶，GT 挂在长音上）
+          const left = notes.filter((n) => n.staff === owner && n.sym.px <= x && x - n.sym.px <= sp * WEDGE_LONG_REACH).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
+          if (left) return left;
+        }
         if (only && !owner) continue;
       }
       return undefined;
     };
-    const a = near(wg.x0);
-    if (!a) continue;
-    // **止端与起端同一行谱**：两端分头找、各自退回别的行，一条松叶会起在女高、止在钢琴（不同声部），
-    // 写出来两个声部各有半条。止端只在起端那行里找：x 最近的；那一带没有音（长音、休止）就取起端之后、
-    // 不越过右端太远的最后一个音。
-    // 试过「止在右端处或其后的第一个音」（谱面上松叶多收在小节线前）：合唱谱多 8 步——GT 的松叶按拍记，
-    // 与印出来的线段常对不齐（破碎 p2 m4 印在小节中段，GT 从小节头拉到小节末），按画面挑止端改不准它
+    const a0 = near(wg.x0);
+    if (!a0) continue;
+    const bars = pg.segsWithTag("BarLine").filter((b) => b.top <= a0.staff.box.bottom && b.bottom >= a0.staff.box.top).map((b) => b.cx);
+    const barBetween = (xa: number, xb: number) => bars.some((x) => x > Math.min(xa, xb) && x < Math.max(xa, xb));
+    // 两端挂哪个音照排版惯例：松叶**起在它开始的那个音下**（左端在那个音头处或之后），**收在它通向的那个音之前**
+    //（右端在那个音头处或之前）；右端过了小节里末一个音、收在小节线前的，止在小节末。两端都不隔小节线去找。
+    // 从前两端各挂 x 最近的音：起端印在某个音右边一点就挂到了下一个音，收在小节线前的挂到了下一小节的头一个音
+    const a = notes.filter((n) => n.staff === a0.staff && n.sym.px <= wg.x0 + sp * WEDGE_END_TOL && n.sym.px >= wg.x0 - sp * 4 && !barBetween(n.sym.px, wg.x0)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined) ?? a0;
     const row = notes.filter((n) => n.staff === a.staff && n.sym.px > a.sym.px);
-    let b: StaffNote | undefined;
-    let bd = sp * 4;
-    for (const n of row) {
-      const dx = Math.abs(n.sym.px - wg.x1);
-      if (dx < bd) (bd = dx), (b = n);
+    // 右端顶到或压过小节线（开口顶着小节线、粘在一起认出来的常见）：收在小节线前
+    const barAt = bars.filter((x) => x <= wg.x1 + sp * 0.3 && wg.x1 - x <= sp * WEDGE_PAST_BAR && x > wg.x0 + sp).sort((p, q) => p - q)[0];
+    const x1 = barAt === undefined ? wg.x1 : Math.min(wg.x1, barAt - 1);
+    let b = row.filter((n) => n.sym.px >= x1 - sp * WEDGE_END_TOL && !barBetween(n.sym.px, x1)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px < m.sym.px ? n : m), undefined);
+    let after = false;
+    if (!b) {
+      b = [a, ...row].filter((n) => n.sym.px <= x1 && !barBetween(n.sym.px, x1)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
+      after = !!b;
     }
     b ??= row.filter((n) => n.sym.px <= wg.x1 + sp * 4).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
-    if (a.wedgeStart === undefined) {
+    // **跨系统的松叶**：上一系统末那一截不写止、下一系统行首那一截不写起，MusicXML 里同号的起止跨行自然接上（弧线同此）。
+    // 行首那截：渐强、左端在本行第一个音头之前（渐强从尖端起，最早也是从第一个音起；左端在音前又张着口的只能是续段）。
+    // 渐弱在行首本来就是开口那头，单看这一截分不出起还是续（宁静 m107 真从行首起、破碎 m30 / m90 是续段，几何一样），照起点写。
+    // 行尾那截右端到了谱表右端、又在本行末音之后
+    const inRow = notes.filter((n) => n.staff === a.staff).map((n) => n.sym.px);
+    const contIn = wg.type === "crescendo" && inRow.length > 0 && wg.x0 < Math.min(...inRow) - sp * WEDGE_CONT_LEAD;
+    const contOut = inRow.length > 0 && wg.x1 >= a.staff.box.right - sp * WEDGE_CONT_EDGE && wg.x1 > Math.max(...inRow) + sp;
+    if (!contIn && a.wedgeStart === undefined) {
       a.wedgeStart = wg.type;
       a.wedgeAt = { x0: wg.x0, cy: wg.cy, ...(wg.spread ? { spread: wg.spread } : {}) };
     }
-    if (b) {
+    if (!contOut && b) {
       b.wedgeStop = true;
+      if (after) b.wedgeStopAfter = true;
       b.wedgeStopAt = { x1: wg.x1, ...(wg.type === "crescendo" && wg.spread ? { spread: wg.spread } : {}) };
     }
   }

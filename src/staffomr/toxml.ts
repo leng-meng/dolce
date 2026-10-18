@@ -128,12 +128,12 @@ function wedgeStartXml(n: StaffNote, no: number, dirStaff: string): string {
   return `<direction placement="${pl}"><direction-type><wedge number="${no}" type="${n.wedgeStart}" default-y="${staffY(n.staff, w.x0, w.cy)}" relative-x="${staffDx(n.staff, w.x0 - x)}"${spread}/></direction-type>${dirStaff}</direction>`;
 }
 
-/** `<wedge type="stop">`：右端离符头左缘（`relative-x`）；渐强的开口写在止点（MusicXML 的 `spread` 写在开口那一端） */
-function wedgeStopXml(n: StaffNote, no: number, dirStaff: string): string {
+/** `<wedge type="stop">`：右端离它所在拍位（`anchorX`：写在音后时是下一个和弦的符头左缘、小节末是小节线）的距离（`relative-x`）；渐强的开口写在止点（MusicXML 的 `spread` 写在开口那一端） */
+function wedgeStopXml(n: StaffNote, no: number, dirStaff: string, anchorX = n.sym.box.left): string {
   const w = n.wedgeStopAt;
   if (!withSourceLayout || !w) return `<direction placement="below"><direction-type><wedge number="${no}" type="stop"/></direction-type>${dirStaff}</direction>`;
   const sp = w.spread ? ` spread="${staffDx(n.staff, w.spread)}"` : "";
-  return `<direction placement="below"><direction-type><wedge number="${no}" type="stop" relative-x="${staffDx(n.staff, w.x1 - n.sym.box.left)}"${sp}/></direction-type>${dirStaff}</direction>`;
+  return `<direction placement="below"><direction-type><wedge number="${no}" type="stop" relative-x="${staffDx(n.staff, w.x1 - anchorX)}"${sp}/></direction-type>${dirStaff}</direction>`;
 }
 
 /** 写出源谱版面（符干端点、力度松叶原位）：`scoreToMusicXml` 按 `opts.layout` 设，只在写出时有效 */
@@ -219,7 +219,7 @@ export function toMusicXml(lines: StaffLineResult[], opts: StaffXmlOptions = {})
       // 正向反复（`|:`）挂在小节的**左端**
       body += barlineXml("left", { style: bar.leftStyle, repeat: bar.leftRepeat, ending: bar.endingStart ? bar.endingNumber : null });
       // 一行谱上写两个声部时要分开写，中间用 `<backup>` 把时间倒回小节头
-      body += emitVoices(inBar, ticks, 0);
+      body += emitVoices(inBar, ticks, 0, [], bar.right);
       // 终止线/复纵线/反向反复（`:|`）挂在小节的**右端**
       body += barlineXml("right", {
         style: bar.rightStyle,
@@ -255,7 +255,7 @@ export function toMusicXml(lines: StaffLineResult[], opts: StaffXmlOptions = {})
  *（下谱表 5、6，通行写法），且一律写 `<voice>`。各行谱都从 1 编的话，上下谱表的
  * voice 1 被读成同一个声部，拍数自检把两行的时值加在一起（每小节都成了两倍）。
  */
-function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: number, midClefs: { x: number; xml: string }[] = []): string {
+function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: number, midClefs: { x: number; xml: string }[] = [], barRight?: number): string {
   // **起点不能用 `ticks`**：那个函数有 `Math.max(1, …)` 的下限（时值再短也得占一格），
   // 拿它换算 offset=0 会得到 1，于是每个从小节头起的声部都白白多出一个 1 格的 `<forward>`。
   const at = (dur: number) => Math.round(ticks(1) * dur);
@@ -294,6 +294,7 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
     }
     let cur = 0;
     let prev: StaffNote | null = null;
+    let pendingStop: ((anchorX?: number) => string) | null = null;
     const movedLyrics = new Set<NonNullable<StaffNote["lyrics"]>[number]>();
     // 行中换谱号写在第一个声部里、它右边第一个音之前（`<attributes>` 按时间位置对整个谱表生效）
     const clefsLeft = vi === 0 ? midClefs.slice() : [];
@@ -306,6 +307,10 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
       const extra = timed || grouped ? !n0.grace && !!prev && !prev.grace && prev.group === n0.group : !!n0.chordExtra;
       let n = extra === !!n0.chordExtra ? n0 : { ...n0, chordExtra: extra || undefined };
       prev = n0;
+      if (pendingStop && !extra) {
+        body += pendingStop(n0.sym.box.left);
+        pendingStop = null;
+      }
       // **歌词挂到和弦打头写出的那个音上**：字挂在和弦里哪个头上是识别时按位置配的，写出时那个头常带着 `<chord/>`，
       // 而读入端（与多数软件）只认和弦第一个 `<note>` 上的 `<lyric>`，字就丢了（望十架 p7 m57-58 一串八个字）
       if (!extra && !n0.grace && n0.group) {
@@ -354,11 +359,17 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
       if (n.dynamic) body += dynamicXml(n, dirStaff);
       // 松叶：**止排在起之前**——同一个音符上前一条松叶收尾、下一条起头是常事，
       // 反过来写会让两条重叠（MusicXML 里同号的 wedge 不能套嵌）。
-      if (n.wedgeStop) body += wedgeStopXml(n, wedgeNo, dirStaff);
+      // 收在小节线前的止（`wedgeStopAfter`）写在末音（和弦）之后：下一个和弦打头之前、或本声部末尾 `<forward>` 之前冲掉
+      if (n.wedgeStop && !n.wedgeStopAfter) body += wedgeStopXml(n, wedgeNo, dirStaff);
       if (n.wedgeStart) body += wedgeStartXml(n, wedgeNo, dirStaff);
       body += noteXml(n, ticks(n.duration), n.crossTo && staffNo ? (partStaffNo.get(n.staff) ?? staffNo) : staffNo, withVoice, voiceBase);
+      if (n.wedgeStop && n.wedgeStopAfter) {
+        const sn = n;
+        pendingStop = (ax) => wedgeStopXml(sn, wedgeNo, dirStaff, ax);
+      }
       if (!n.chordExtra && !n.grace) cur += ticks(n.duration);
     }
+    if (pendingStop) body += pendingStop(barRight);
     // 按拍位排满的小节里，提前收尾的声部补 `<forward>` 到小节末：合唱谱的女低、男低常常
     // 唱半小节就并回主声部的和弦（共用符干）。不补的话，换行谱前按最长声部写的 `<backup>`
     // 会倒过小节头，下一行谱整体前移。
@@ -1004,7 +1015,7 @@ function scoreToMusicXmlRaw(
             return { x: c.box.left, xml: staves.length > 1 ? x.replace("<clef>", `<clef number="${k + 1}">`) : x };
           });
           if (mids.length) prevClef[k] = clefXml(mids[mids.length - 1].code);
-          body += emitVoices(inBar, ticks, staves.length > 1 ? k + 1 : 0, midXml);
+          body += emitVoices(inBar, ticks, staves.length > 1 ? k + 1 : 0, midXml, bar.right);
           const used = voiceTicks(inBar, ticks);
           // 换到下一行谱之前要把时间**倒回**小节头（MusicXML 的 `<backup>`）
           if (k < staves.length - 1 && used > 0) body += `<backup><duration>${used}</duration></backup>`;

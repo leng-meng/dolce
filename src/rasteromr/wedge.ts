@@ -62,14 +62,17 @@ const ARM_MAX_H = 1.6;
 const ONE_RUN_FRAC = 0.85;
 /** 离两端连线最远的那一点，不能超过这么多（线距）。弧线拱得高，一量就出局。 */
 const STRAIGHT_TOL = 0.18;
-/** 臂的斜率范围。太平的是加线、连音线的一截；太陡的是符干残段。 */
-const SLOPE_MIN = 0.03;
+/** 臂的斜率范围。太平的是加线、连音线的一截；太陡的是符干残段。
+ *  下限原来 0.03：长而平的松叶（钢琴两行之间二十来格长、续到下一行的那一截，破碎 m65 / m73）一条臂只有 0.016 */
+const SLOPE_MIN = 0.015;
 const SLOPE_MAX = 0.6;
 /** 配对：两条臂在 x 上要盖住多少（短的那条的比例）。 */
 const OVERLAP_MIN = 0.55;
 /** 尖端那一头：两条臂的端点要挨着。 */
 const TIP_DX = 0.7;
 const TIP_DY = 0.45;
+/** 跨系统松叶在行首、行尾那一截：「尖端」那头已经张开，放到这么多（且不过开口的一半） */
+const TIP_DY_CONT = 0.9;
 /** 开口那一头：要张开这么多。 */
 const OPEN_DY = 0.55;
 
@@ -85,7 +88,7 @@ const OPEN_DY = 0.55;
  *
  * @param only 只看这些 contour（一般传账本里**无主**的那些——认出来的符号不必再判）。
  */
-export function findRasterWedges(map: ContourMap, unit: RasterUnit, only?: Contour[]): RasterWedge[] {
+export function findRasterWedges(map: ContourMap, unit: RasterUnit, only?: Contour[], atRowEdge?: (x: number, y: number) => boolean): RasterWedge[] {
   const pool = only ?? map.contours;
   const out: RasterWedge[] = [];
   const taken = new Set<number>();
@@ -98,7 +101,7 @@ export function findRasterWedges(map: ContourMap, unit: RasterUnit, only?: Conto
       taken.add(c.id);
     }
   }
-  for (const w of pairArms(pool.filter((c) => !taken.has(c.id)), map, unit)) out.push(w);
+  for (const w of pairArms(pool.filter((c) => !taken.has(c.id)), map, unit, atRowEdge)) out.push(w);
   return out;
 }
 
@@ -135,9 +138,16 @@ export function armOf(map: ContourMap, c: Contour, unit: RasterUnit): Arm | null
   if (!cols || one < cols * ONE_RUN_FRAC) return null;
   // 两端各取四分之一段的均值（与 `prims.ts::centerLine` 同一套，末端的毛刺影响不到）
   const q = Math.max(1, Math.round(ys.length / 4));
-  const y0 = mean(ys.slice(0, q));
-  const y1 = mean(ys.slice(-q));
-  if (Number.isNaN(y0) || Number.isNaN(y1)) return null;
+  const ym0 = mean(ys.slice(0, q));
+  const ym1 = mean(ys.slice(-q));
+  if (Number.isNaN(ym0) || Number.isNaN(ym1)) return null;
+  // 两段均值落在各自那一段的中点，**外推到两端**：长而平的臂（钢琴两行之间二十来格长的松叶）按段均值当端点，
+  // 尖端那头差出两三个像素，两臂「挨着」的判据就过不去
+  const c0 = (q - 1) / 2;
+  const c1 = ys.length - 1 - (q - 1) / 2;
+  const k = c1 > c0 ? (ym1 - ym0) / (c1 - c0) : 0;
+  const y0 = ym0 - k * c0;
+  const y1 = ym1 + k * (ys.length - 1 - c1);
   const x0 = b.x;
   const x1 = b.x + b.w - 1;
   // **要直**：离两端连线最远的那一点不能超过 0.18 格。弧线拱得高，一量就出局。
@@ -159,7 +169,7 @@ export function armOf(map: ContourMap, c: Contour, unit: RasterUnit): Arm | null
  * 单看一条臂与弧线的一截分不开（都是又细又长的一段墨），
  * 但两条臂的**关系**是硬的：尖端处两端点几乎重合，开口处拉开半格以上。
  */
-function pairArms(pool: Contour[], map: ContourMap, unit: RasterUnit): RasterWedge[] {
+function pairArms(pool: Contour[], map: ContourMap, unit: RasterUnit, atRowEdge?: (x: number, y: number) => boolean): RasterWedge[] {
   const sp = unit.space;
   const arms = pool.map((c) => armOf(map, c, unit)).filter((a): a is Arm => !!a);
   const used = new Set<Contour>();
@@ -180,7 +190,11 @@ function pairArms(pool: Contour[], map: ContourMap, unit: RasterUnit): RasterWed
       const tipLeft = dLeft < dRight;
       const tipD = tipLeft ? dLeft : dRight;
       const openD = tipLeft ? dRight : dLeft;
-      if (tipD > sp * TIP_DY || openD < sp * OPEN_DY) continue;
+      // 尖端在行首、行尾的是**跨系统松叶的一截**：那一头本来就张开着，只要另一头张得更开
+      const tipX = tipLeft ? Math.min(a.x0, b.x0) : Math.max(a.x1, b.x1);
+      const tipY = tipLeft ? (a.y0 + b.y0) / 2 : (a.y1 + b.y1) / 2;
+      const tipMax = atRowEdge?.(tipX, tipY) ? Math.min(TIP_DY_CONT * sp, openD / 2) : TIP_DY * sp;
+      if (tipD > tipMax || openD < sp * OPEN_DY) continue;
       if (Math.abs(tipLeft ? a.x0 - b.x0 : a.x1 - b.x1) > sp * TIP_DX) continue;
       used.add(a.c);
       used.add(b.c);

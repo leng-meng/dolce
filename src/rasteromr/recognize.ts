@@ -4561,6 +4561,8 @@ export async function recognizeRasterPage(
   // 当成「从没看见的墨」（缓存没命中时曾经就是这样，覆盖率一下子低二十个点）。
   /** 各行谱下方歌词的下沿：松叶隔着上一行的歌词、紧贴着下一行谱的，归下一行（`notations.ts::ownerStaff`，与矢量路同一条） */
   const lyricBottom = new Map<Staff, number>();
+  /** 文字带里 OCR 读出来的力度（松叶那一步剔掉压在力度字上的） */
+  const ocrDynamics: { px: number; py: number; text: string }[] = [];
   {
     // **认领了却没落成音符的「符头」也还给歌词**：歌词字的笔画（点、口字框）常被收成符头，
     // 归不上谱表又被扔掉，可认领还在，那一格字就从歌词行里缺了
@@ -4909,6 +4911,7 @@ export async function recognizeRasterPage(
       }
     }
     const placed = attachWordLines(pg, notes, wordStrips, wordOcr, unit, skip, lyricStrips.map((st) => st.box));
+    ocrDynamics.push(...placed.dynamics);
     // 文字带里读出来的和弦记号：和弦带那一路（要自己的 OCR 缓存，合唱谱没生成）没认到和弦时才用
     if (!harmonies.length && placed.chords.length) {
       const objs = placed.chords.map((t, i) => withTextSize(makeTextObj(pg.objs.length + i, { cells: [{ box: t.box, ch: t.text }], sizeDev: t.box.h }), pg, t));
@@ -4949,9 +4952,30 @@ export async function recognizeRasterPage(
   // 只在**无主**的 contour 里找：认出来的符号不必再判一遍，而松叶从来没人认领。
   // 松叶只取谱表外并起来的：扫描件谱表里断续的谱线残段在修补图上连成一团，也张得开（破碎扫描版 p7、望十架 p1 各一处）
   const wv = candView(() => false, (rc) => rc.place.zone !== "in");
-  const wedges = findRasterWedges(wv.map, unit, wv.unclaimed());
+  // 行首、行尾：本行第一个音头之前、最后一个音头之后（跨系统松叶的一截落在这里，`pairArms` 的尖端闸放宽）
+  const rowEdge = (x: number, y: number): boolean => {
+    const st = pg.staves.filter((s0) => y >= s0.box.top - unit.space * 10 && y <= s0.box.bottom + unit.space * 10).sort((p, q) => Math.abs((p.box.top + p.box.bottom) / 2 - y) - Math.abs((q.box.top + q.box.bottom) / 2 - y))[0];
+    if (!st) return false;
+    const xs = notes.filter((n) => n.staff === st).map((n) => n.sym.px);
+    return xs.length > 0 && (x < Math.min(...xs) || x > Math.max(...xs) + unit.space * 2);
+  };
+  const wedges = findRasterWedges(wv.map, unit, wv.unclaimed(), rowEdge);
   // 开口顶到小节线、与小节线连成一团的（`findFusedWedges`）
   wedges.push(...findFusedWedges(cmap, unit, cmap.contours.filter((c) => ledger.claimsOf(c.id).some((k) => k.by === "seg:BarLine"))));
+  // **压在力度字上的不是松叶**：斜体 p 的竖笔与圆肚子逐列看也是两段墨、往右张开（破碎 p2 m8 钢琴那个 p 认成了一条 2 格宽的渐强）
+  {
+    const sp = unit.space;
+    const dynBoxes = [
+      ...dynamics.map((d) => d.box ?? { left: d.px, right: d.px + sp, top: d.py - sp * 0.5, bottom: d.py + sp * 0.5 }),
+      ...ocrDynamics.map((d) => ({ left: d.px, right: d.px + sp * d.text.length, top: d.py - sp * 0.5, bottom: d.py + sp * 0.5 })),
+    ];
+    for (let i = wedges.length - 1; i >= 0; i--) {
+      const w = wedges[i];
+      if (w.x1 - w.x0 > sp * 4) continue;
+      const cx = (w.x0 + w.x1) / 2;
+      if (dynBoxes.some((b) => cx >= b.left - sp * 0.3 && cx <= b.right + sp * 0.3 && w.cy >= b.top - sp * 0.3 && w.cy <= b.bottom + sp * 0.3)) wedges.splice(i, 1);
+    }
+  }
   for (const wg of wedges) {
     if (wg.box) {
       ledger.claim(wg.box, `wedge:${wg.type}`);
