@@ -97,8 +97,9 @@ export function groupDynamics(anchors: Sym[], map: ContourMap, unit: RasterUnit)
         again = true;
       }
     }
-    // 串里的其它锚要一并标记掉（`ff` 的两个 `f` 都是锚，`mf` 的 `m` 也常是）
-    for (const b of sorted) if (b !== a && b.box.left >= left - 1 && b.box.right <= right + 1) used.add(b);
+    // 串里的其它锚要一并标记掉（`ff` 的两个 `f` 都是锚，`mf` 的 `m` 也常是）。纵向也要落在这一串里：
+    // 只看横向会把上下几行同一 x 上的力度一并吞掉（破碎 p11 女高二的 `f` 正在女高一那个的正下方）
+    for (const b of sorted) if (b !== a && b.box.left >= left - 1 && b.box.right <= right + 1 && b.box.bottom > top && b.box.top < bottom) used.add(b);
     const text = parts.sort((p, q) => p.x - q.x).map((p) => p.ch).join("");
     if (!VALID.has(text)) continue; // 拼不出一个像样的力度就整个丢掉（宁可少，不可编）
     out.push({ px: left, py: acy, text, box: { left, right, top, bottom } });

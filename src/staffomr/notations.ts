@@ -357,8 +357,9 @@ export function attachDynamicTexts(
 ): void {
   const sp = pg.normalStaffSpace || pg.space;
   for (const d of items) {
-    // 与松叶同一条：先定谱行（力度也印在它那行谱的下方），再在行内按 x 找最近的音符
-    const owner = ownerStaff(pg, d.py, sp, 5, lyricBottom);
+    // 与松叶同一条：先定谱行（力度也印在它那行谱的下方），再在行内按 x 找最近的音符。
+    // 够到六格：钢琴两行之间隔得宽的，印在正中的力度离上一行下线 5.6 格（破碎 p6 m66 `mf`）
+    const owner = ownerStaff(pg, d.py, sp, 6, lyricBottom);
     for (const only of [true, false]) {
       let best: StaffNote | undefined;
       let bd = Infinity;
@@ -369,6 +370,16 @@ export function attachDynamicTexts(
         if (dx < bd) {
           bd = dx;
           best = n;
+        }
+      }
+      // 三格内没有音、而有墨迹框的：取本行字框右边第一个音（四格半内）。人声的力度常印在**音前**，
+      // 隔着领起歌词的段号或印在前面休止小节的末尾（宁静 p3 `mf 1. 寧`，右缘到音 3.9 格；p4 m48 两处同此）
+      if (only && owner && d.box && !(best && bd < sp * 3)) {
+        const right = d.box.right;
+        const next = notes.filter((n) => n.staff === owner && n.sym.px > right && n.sym.px - right < sp * 4.5).sort((p, q) => p.sym.px - q.sym.px)[0];
+        if (next) {
+          best = next;
+          bd = 0;
         }
       }
       if (best && bd < sp * 3) {
