@@ -581,6 +581,12 @@ function readMeasure(
   let maxEnd = 0;
   /** 和弦符号读到时的游标（与所挂元素的起点不同才记 `onset`） */
   let pendingOnsets: number[] = [];
+  /** 上一个元素之后读到的 `<direction>`：后面接着的是 `<chord/>` 音，它其实写在**和弦中间**（Finale 导出常见，牵我的手钢琴 m45 的 `f`），
+   *  时刻是这个和弦的起点，不是和弦的终点——改记成写在和弦之前 */
+  let dirsSinceLast: Direction[] = [];
+  /** 上一个元素的起点、它之前那个元素的终点（挪到和弦前的 direction 缺省时刻就是后者，两者不同要写明 `onset`） */
+  let lastStart = 0;
+  let prevEnd = 0;
 
   for (const c of Array.from(el.children)) {
     switch (c.tagName) {
@@ -635,6 +641,7 @@ function readMeasure(
         if (d && m.elements.length > 0) d.afterElements = m.elements.length;
         if (d && cursor !== end) d.onset = cursor;
         if (d) (m.directions ??= []).push(d);
+        if (d) dirsSinceLast.push(d);
         break;
       }
       case "sound": {
@@ -675,6 +682,13 @@ function readMeasure(
         const noteSize = child(c, "type")?.getAttribute("size");
         if (noteSize) note.typeSize = noteSize;
         if (isChordNote && last) {
+          for (const d of dirsSinceLast) {
+            if (d.onset !== undefined || d.afterElements !== m.elements.length) continue;
+            if (m.elements.length > 1) d.afterElements = m.elements.length - 1;
+            else delete d.afterElements;
+            if (lastStart !== prevEnd) d.onset = lastStart;
+          }
+          dirsSinceLast = [];
           last.notes.push(note);
           // 和弦里后面那几个音上的歌词并到和弦上（同段号已有的不收）：有的软件把字挂在和弦的非首音上，只读首音会丢字
           const more = readLyrics(c).filter((l) => !last!.lyrics?.some((k) => k.number === l.number));
@@ -749,8 +763,11 @@ function readMeasure(
           pendingHarmonies = [];
           pendingOnsets = [];
         }
+        prevEnd = end;
+        lastStart = cursor;
         m.elements.push(ch);
         last = ch;
+        dirsSinceLast = [];
         cursor += ch.duration.divisions;
         end = cursor;
         reach = Math.max(reach, cursor);

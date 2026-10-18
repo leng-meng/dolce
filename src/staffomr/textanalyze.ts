@@ -1020,7 +1020,8 @@ export function attachDirectionTexts(
   }
   const items = [...lines.map((l) => ({ objs: l, tempo: true })), ...text.expression.map((o) => ({ objs: [o], tempo: false }))];
   for (const { objs, tempo: isTempo } of items) {
-    const parts = objs.map((o) => objText(o).replace(/\s+/g, " ").trim()).filter(Boolean);
+    // 没有 ToUnicode 的字体抽出来是控制字符（牵我的手 `= 60` 的数字读成 `\u0018\u0012`）：剥掉，解不出数的等号也不留
+    const parts = objs.map((o) => objText(o).replace(/[\u0000-\u001f]/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
     if (!parts.length) continue;
     const box = {
       left: Math.min(...objs.map((o) => o.box.left)),
@@ -1054,6 +1055,8 @@ export function attachDirectionTexts(
       }
       continue;
     }
-    (note.words ??= []).push({ text: s, above: cy < (stf.box.top + stf.box.bottom) / 2, ...(size > 0 ? { size } : {}) });
+    const plain = isTempo ? s.replace(/\s*=\s*$/, "") : s;
+    if (!plain) continue;
+    (note.words ??= []).push({ text: plain, above: cy < (stf.box.top + stf.box.bottom) / 2, ...(size > 0 ? { size } : {}) });
   }
 }

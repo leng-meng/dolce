@@ -323,6 +323,18 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
           n = { ...n, lyrics: [...(n.lyrics ?? []), ...add] };
         }
       } else if (extra && n.lyrics?.some((l) => movedLyrics.has(l))) n = { ...n, lyrics: n.lyrics.filter((l) => !movedLyrics.has(l)) };
+      // 文字指示、速度、力度同理：挂在后写的头上，`<direction>` 落在和弦两个音中间，读回来成了打头那个音之后的时刻（破碎 m107 `rit.` 挪了两拍）
+      if (n0.group) {
+        const mates = vn.filter((m) => m !== n0 && m.group === n0.group);
+        if (!extra) {
+          const w = mates.flatMap((m) => m.words ?? []);
+          if (w.length) n = { ...n, words: [...(n.words ?? []), ...w] };
+          const t = !n.metronome && !n.tempoText ? mates.find((m) => m.metronome || m.tempoText) : undefined;
+          if (t) n = { ...n, metronome: t.metronome, tempoText: t.tempoText, tempoSize: t.tempoSize };
+          const d = !n.dynamic ? mates.find((m) => m.dynamic) : undefined;
+          if (d) n = { ...n, dynamic: d.dynamic, dynamicBox: d.dynamicBox };
+        } else n = { ...n, words: undefined, metronome: undefined, tempoText: undefined, dynamic: undefined };
+      }
       // 松叶的起止同理：挂在和弦哪个头上都是这一拍，写在打头的那个音前；挂在后写的头上，`<direction>` 落在和弦中间，
       // 读回来是下一拍（按拍位写时和弦先写最高音，主音不一定打头：破碎 m5、m106、m107）
       if (n0.group) {

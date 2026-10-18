@@ -21,6 +21,8 @@ export interface WordStrip {
   box: Rect;
   /** 声部名带（`findNameStrips`）：指纹前缀与挑行口径另算（中文名也留，`keepStripLine`） */
   name?: boolean;
+  /** 框字带（`findFrameStrips`）：方框里的字单独切出来，读出来的就是排练号 / 框着的段落名 */
+  frame?: boolean;
 }
 
 /** 页首行上方、页末行下方各取这么多格；两行谱之间取整段空当，上下各让开谱线这么多格。 */
@@ -36,19 +38,21 @@ export function findWordStrips(bin: Binary, staves: { box: { left: number; right
   const sp = unit.space;
   const rows = [...staves].sort((a, b) => a.box.top - b.box.top);
   const out: WordStrip[] = [];
+  // 页首行上方、页末行下方那条超出页面的，**照原高切、页外填白**（盒的 y 可以是负的）：贴着页边截断的窄带 DBNet 吃亏，
+  // 破碎 p9 页顶「Soprano 1」离页边四点，截成 54 点高的带只读出「Soprano」
   const cut = (y0: number, y1: number, left: number, right: number) => {
     const box = {
       x: Math.max(0, Math.round(left - sp * SIDE)),
-      y: Math.max(0, Math.round(y0)),
+      y: Math.round(y0),
       w: 0,
       h: 0,
     };
     box.w = Math.min(bin.w, Math.round(right + sp * SIDE)) - box.x;
-    box.h = Math.min(bin.h, Math.round(y1)) - box.y;
-    if (box.w < 8 || box.h < sp * 1.2) return;
+    box.h = Math.round(y1) - box.y;
+    if (box.w < 8 || Math.min(bin.h, box.y + box.h) - Math.max(0, box.y) < sp * 1.2) return;
     const data = new Uint8Array(box.w * box.h);
     let ink = 0;
-    for (let y = 0; y < box.h; y++)
+    for (let y = Math.max(0, -box.y); y < box.h && box.y + y < bin.h; y++)
       for (let x = 0; x < box.w; x++) {
         const v = bin.data[(box.y + y) * bin.w + box.x + x];
         data[y * box.w + x] = v;
@@ -64,6 +68,105 @@ export function findWordStrips(bin: Binary, staves: { box: { left: number; right
     else cut(st.box.top - sp * EDGE_BAND, st.box.top - sp * LINE_CLEAR, st.box.left, st.box.right);
     if (i === rows.length - 1) cut(st.box.bottom + sp * LINE_CLEAR, st.box.bottom + sp * EDGE_BAND, st.box.left, st.box.right);
   });
+  return out;
+}
+
+/** 方框：边线粗不过这么多格；框高、框宽的范围（格）；框里四周垫白（格）。 */
+const FRAME_LINE_MAX = 0.3;
+const FRAME_MIN_H = 1.2;
+const FRAME_MAX_H = 3.5;
+const FRAME_MIN_W = 1.0;
+const FRAME_MAX_W = 15;
+const FRAME_PAD = 1;
+/** 框里贴边那一圈的墨占比上限、框外贴上下边那一行的墨占比上限。 */
+const FRAME_RING = 0.05;
+const FRAME_OUTER = 0.2;
+
+/**
+ * **框字带**：文字带里的方框（排练号 `[A]`、框着的段落名 `[Interelude]`），框里的字单独切成一条、四周垫白再送 OCR。
+ * 整条文字带两千多点宽，DBNet 常把框里孤零零一个字母漏掉（宁静 p5 m73 的 `A`）；方框本身的几何很确定：
+ * 上下两条等长的细横线，两端各有一条竖边连着。只取框**里面**（让开边线），不让边线读成 `[`、`|`。
+ */
+export function findFrameStrips(strips: readonly WordStrip[], unit: RasterUnit): WordStrip[] {
+  const sp = unit.space;
+  const out: WordStrip[] = [];
+  for (const st of strips) {
+    if (st.name || st.frame) continue;
+    const at = (x: number, y: number) => x >= 0 && y >= 0 && x < st.w && y < st.h && st.data[y * st.w + x] === 1;
+    // 每行的横游程（长度在框宽范围内），相邻几行同一段并成一条线
+    type Seg = { x0: number; x1: number; y0: number; y1: number };
+    const segs: Seg[] = [];
+    let open: Seg[] = [];
+    for (let y = 0; y < st.h; y++) {
+      const runs: { x0: number; x1: number }[] = [];
+      for (let x = 0; x < st.w; ) {
+        if (!at(x, y)) {
+          x++;
+          continue;
+        }
+        const x0 = x;
+        while (x < st.w && at(x, y)) x++;
+        if (x - x0 >= sp * FRAME_MIN_W && x - x0 <= sp * FRAME_MAX_W) runs.push({ x0, x1: x - 1 });
+      }
+      const next: Seg[] = [];
+      for (const r of runs) {
+        const o = open.find((q) => Math.abs(q.x0 - r.x0) <= 2 && Math.abs(q.x1 - r.x1) <= 2);
+        if (o) {
+          o.y1 = y;
+          next.push(o);
+        } else {
+          const sg = { ...r, y0: y, y1: y };
+          segs.push(sg);
+          next.push(sg);
+        }
+      }
+      open = next;
+    }
+    const lines = segs.filter((g) => g.y1 - g.y0 + 1 <= sp * FRAME_LINE_MAX);
+    for (const a of lines)
+      for (const b of lines) {
+        const hgt = b.y0 - a.y1;
+        if (hgt < sp * FRAME_MIN_H || hgt > sp * FRAME_MAX_H) continue;
+        if (Math.abs(a.x0 - b.x0) > 3 || Math.abs(a.x1 - b.x1) > 3) continue;
+        // 两端的竖边：在两条横线之间每行都有墨（边线一两点宽，容一点偏）
+        const side = (x: number) => {
+          let n = 0;
+          for (let y = a.y1 + 1; y < b.y0; y++) if (at(x, y) || at(x + 1, y) || at(x - 1, y)) n++;
+          return n >= (b.y0 - a.y1 - 1) * FRAME_COVER;
+        };
+        if (!side(Math.min(a.x0, b.x0) + 1) || !side(Math.max(a.x1, b.x1) - 1)) continue;
+        // 框里：让开边线（横线粗、竖边找到墨尽处）
+        let ix0 = Math.min(a.x0, b.x0) + 1;
+        while (ix0 < a.x1 && side(ix0)) ix0++;
+        let ix1 = Math.max(a.x1, b.x1) - 1;
+        while (ix1 > ix0 && side(ix1)) ix1--;
+        const iy0 = a.y1 + 2;
+        const iy1 = b.y0 - 2;
+        if (ix1 - ix0 < 3 || iy1 - iy0 < 3) continue;
+        // 字不碰框：框里紧贴边线那一圈（两点宽）几乎全白；框外紧贴上下边那一行也基本空（不是更大一块图形里的两道横）
+        let ring = 0;
+        let ringN = 0;
+        for (let y = iy0; y <= iy1; y++)
+          for (let x = ix0; x <= ix1; x++) {
+            if (y > iy0 + 1 && y < iy1 - 1 && x > ix0 + 1 && x < ix1 - 1) continue;
+            ringN++;
+            ring += at(x, y) ? 1 : 0;
+          }
+        if (ring > ringN * FRAME_RING) continue;
+        let outer = 0;
+        for (let x = a.x0; x <= a.x1; x++) outer += (at(x, a.y0 - 2) ? 1 : 0) + (at(x, b.y1 + 2) ? 1 : 0);
+        if (outer > (a.x1 - a.x0 + 1) * 2 * FRAME_OUTER) continue;
+        let ink = 0;
+        for (let y = iy0; y <= iy1; y++) for (let x = ix0; x <= ix1; x++) ink += at(x, y) ? 1 : 0;
+        if (!ink) continue;
+        const pad = Math.round(sp * FRAME_PAD);
+        const w = ix1 - ix0 + 1 + pad * 2;
+        const h = iy1 - iy0 + 1 + pad * 2;
+        const data = new Uint8Array(w * h);
+        for (let y = iy0; y <= iy1; y++) for (let x = ix0; x <= ix1; x++) data[(y - iy0 + pad) * w + x - ix0 + pad] = at(x, y) ? 1 : 0;
+        out.push({ w, h, data, box: { x: st.box.x + ix0 - pad, y: st.box.y + iy0 - pad, w, h }, frame: true });
+      }
+  }
   return out;
 }
 
@@ -258,15 +361,15 @@ const HEADER_MARGIN = 0.12;
 
 /** 条的内容指纹（与 `stafflabel.ts::labelKey` 同一套：尺寸 + FNV-1a）。声部名带另用前缀（挑行口径不同，同一块像素不能共用一条缓存）。 */
 export function wordKey(s: WordStrip): string {
-  return contentKey(s.name ? "N" : "W", s.w, s.h, s.data);
+  return contentKey(s.name ? "N" : s.frame ? "F" : "W", s.w, s.h, s.data);
 }
 
 /** 声部名里有的字：拉丁字母或汉字 */
 const NAME_CHAR_RE = /[A-Za-z\u3400-\u9fff]/;
 
 /** 这条带该存的行：文字指示带按 `keepWordLine`；声部名带中文名也留（「女低」「男低」，带在谱行左边，压不进歌词） */
-export function keepStripLine(strip: { name?: boolean }, text: string): boolean {
-  return strip.name ? NAME_CHAR_RE.test(text) : keepWordLine(text);
+export function keepStripLine(strip: { name?: boolean; frame?: boolean }, text: string): boolean {
+  return strip.name ? NAME_CHAR_RE.test(text) : strip.frame ? /[A-Za-z0-9]/.test(text) : keepWordLine(text);
 }
 
 /** 值得存进缓存的行：有拉丁字母（力度只有一个字母），或者像节拍器记号（`= 86`）。纯中文行（歌词、署名）、纯数字不存。 */
@@ -334,6 +437,8 @@ const LYRIC_ROW = 3;
 const LYRIC_ROW_IN_ZONE = 2;
 /** 和弦页的门槛：一页里至少这么多行整行是和弦记号、其中至少一行带后缀（`m7`、`/F`…），才把和弦记号从文字里分出去。 */
 const CHORD_PAGE_MIN = 3;
+/** 和弦记号的字高下限（格，OCR 框高）：是爱的和弦框高 1.4 格以上。 */
+const CHORD_MIN_H = 1.1;
 /** 两个字母以内也算文字指示的那几样（声部缩写、管风琴键盘名）。 */
 const SHORT_RE = /^(S|A|T|B|SA|TB|ST|AB|Ch|Sw|Gt)\.?$/;
 /** 短标记的字高下限（格）。 */
@@ -344,10 +449,99 @@ const SHORT_STEM_DY = 3.5;
 /** 上下两行字叠成一条指示：左端对齐（格）、行距不过行高的这么多倍。 */
 const STACK_X = 1.5;
 const STACK_GAP = 0.6;
-/** 节拍器记号：`♩= 86`（音符那个字形 OCR 读不出，只认等号后的数）。 */
-const METRO_RE = /=\s*(\d ?\d ?\d?)(?!\d)/;
+/** 节拍器记号：`♩= 86`、`= ca. 76`（音符那个字形 OCR 读不出，只认等号后的数；`ca.` / `c.` 照谱面写成 `c. 76`）。 */
+const METRO_RE = /=\s*(c(?:a|irca)?\.?\s*)?(\d ?\d ?\d?)(?!\d)/;
+/** 速度语与节拍器分成两行时，两行之间的横向空当上限（格），同矢量路 `TEMPO_JOIN_GAP`。 */
+const TEMPO_JOIN_GAP = 3;
+/** 整行只有力度字母（不与节拍器并）。 */
+const DYNAMIC_ONLY_RE = /^(ppp|pp|p|mp|mf|fff|ff|f|sfz|sf|fz|fp)$/;
 /** 一行字离它那行谱的距离上限（格）。 */
 const REACH = 7;
+/** 系统之间的字：离下一系统首行不超过离上一系统末行的这么多倍就归下一系统。 */
+const INTER_SYS_BIAS = 1.6;
+
+/** 带内一点有没有墨（越界算白）。 */
+function inkAt(strip: WordStrip, x: number, y: number): boolean {
+  const lx = Math.round(x - strip.box.x);
+  const ly = Math.round(y - strip.box.y);
+  return lx >= 0 && ly >= 0 && lx < strip.w && ly < strip.h && strip.data[ly * strip.w + lx] === 1;
+}
+
+/** 方框四边离字最远这么多格；边线要占字那一边长度的这么多。 */
+const FRAME_REACH = 1.2;
+const FRAME_COVER = 0.9;
+
+/**
+ * 字外面围着一个方框（排练号）：上下左右各往外找一条边线——竖边在字的整个高度上都有墨、横边在字的整个宽度上都有墨。
+ * OCR 的框有时把方框也框进来了（宁静 p8 `B` 高两格半），所以从框里往外一点（框宽高的两成）起找。
+ */
+function framed(strip: WordStrip, b: Rect, sp: number): boolean {
+  const reach = sp * FRAME_REACH;
+  const colFull = (x: number) => {
+    let n = 0;
+    for (let y = b.y; y < b.y + b.h; y++) if (inkAt(strip, x, y)) n++;
+    return n >= b.h * FRAME_COVER;
+  };
+  const rowFull = (y: number) => {
+    let n = 0;
+    for (let x = b.x; x < b.x + b.w; x++) if (inkAt(strip, x, y)) n++;
+    return n >= b.w * FRAME_COVER;
+  };
+  const scan = (from: number, to: number, hit: (v: number) => boolean) => {
+    const step = from <= to ? 1 : -1;
+    for (let v = from; step > 0 ? v <= to : v >= to; v += step) if (hit(v)) return true;
+    return false;
+  };
+  return (
+    scan(Math.round(b.x + b.w * 0.2), Math.round(b.x - reach), colFull) &&
+    scan(Math.round(b.x + b.w * 0.8), Math.round(b.x + b.w + reach), colFull) &&
+    scan(Math.round(b.y + b.h * 0.2), Math.round(b.y - reach), rowFull) &&
+    scan(Math.round(b.y + b.h * 0.8), Math.round(b.y + b.h + reach), rowFull)
+  );
+}
+
+/** 歌词连字短横：字右边这么多格以内（`Glo` 到头一道短横三格半），扁度、长度、离字的空当。 */
+const DASH_REACH = 5;
+const DASH_MIN_W = 0.4;
+const DASH_MAX_W = 1.5;
+const DASH_MAX_H = 0.3;
+
+/**
+ * 字右边同一高度（字身中段）上有一截**孤立的短横**：英文歌词拖着的连字符（`Glo - - -`）。
+ * 从字右缘往右逐列走，跳过空白，碰到的头一块墨要扁（高不过 `DASH_MAX_H` 格、长 `DASH_MIN_W`~`DASH_MAX_W` 格）、
+ * 上下没有别的墨（字身整高里只有这一道横）。
+ */
+function lyricDashAfter(strip: WordStrip, b: Rect, sp: number): boolean {
+  const y0 = Math.round(b.y);
+  const y1 = Math.round(b.y + b.h);
+  const colInk = (x: number) => {
+    let top = -1;
+    let bot = -1;
+    for (let y = y0; y < y1; y++)
+      if (inkAt(strip, x, y)) {
+        if (top < 0) top = y;
+        bot = y;
+      }
+    return top < 0 ? null : { top, bot };
+  };
+  let x = Math.round(b.x + b.w);
+  // 字自己的墨（框右缘可能切在最后一个字母里）
+  while (x < b.x + b.w + sp * 0.5 && colInk(x)) x++;
+  const end = b.x + b.w + sp * DASH_REACH;
+  while (x < end && !colInk(x)) x++;
+  if (x >= end) return false;
+  const x0 = x;
+  let top = Infinity;
+  let bot = -Infinity;
+  for (let c = colInk(x); c && x < end + sp * DASH_MAX_W; c = colInk(++x)) {
+    top = Math.min(top, c.top);
+    bot = Math.max(bot, c.bot);
+  }
+  const w = x - x0;
+  const h = bot - top + 1;
+  const mid = (top + bot) / 2;
+  return w >= sp * DASH_MIN_W && w <= sp * DASH_MAX_W && h <= sp * DASH_MAX_H && mid > b.y + b.h * 0.3 && mid < b.y + b.h * 0.85;
+}
 
 export interface PlacedWord {
   text: string;
@@ -380,16 +574,37 @@ export function attachWordLines(
   const dynamics: { px: number; py: number; text: string }[] = [];
   const inside = (q: Rect, x: number, y: number) => x >= q.x && x <= q.x + q.w && y >= q.y && y <= q.y + q.h;
   // 先收齐各行（页面坐标），同一处被上下两条带各读一遍的只留一份
-  const lines: { text: string; box: Rect }[] = [];
-  for (const strip of strips)
+  const lines: { text: string; box: Rect; strip: WordStrip }[] = [];
+  // 框字带排在前面：框里单独读的字比整条带里读的干净（不带边线读成的 `[`），同一处只留一份
+  for (const strip of [...strips].sort((a, b) => +!!b.frame - +!!a.frame))
     for (const l of ocr.get(wordKey(strip)) ?? []) {
       const box = { x: strip.box.x + l.x, y: strip.box.y + l.y, w: l.w, h: l.h };
       const cx = box.x + box.w / 2;
       const cy = box.y + box.h / 2;
       if (lines.some((q) => inside(q.box, cx, cy))) continue;
-      lines.push({ text: l.t.replace(/\s+/g, " ").trim(), box });
+      lines.push({ text: l.t.replace(/\s+/g, " ").trim(), box, strip });
     }
   lines.sort((a, b) => a.box.y - b.box.y || a.box.x - b.box.x);
+  // 速度语与节拍器常被 DBNet 切成两行（宁静 `Allegretto semplicemente` / `= 104`、破碎 `Andante con moto` / `( = 82)`）：
+  // 并回一行再往下走——各挂各的，文字与节拍器就成了两个对象，还落到不同的音上（与矢量路 `attachDirectionTexts` 同一口径）
+  for (let i = 0; i < lines.length; i++) {
+    const m = lines[i];
+    if (!METRO_RE.test(m.text)) continue;
+    const j = lines.findIndex((l, k) => {
+      if (k === i || METRO_RE.test(l.text) || !/[A-Za-z]{2}/.test(l.text) || DYNAMIC_ONLY_RE.test(l.text)) return false;
+      const gap = m.box.x - (l.box.x + l.box.w);
+      const ov = Math.min(l.box.y + l.box.h, m.box.y + m.box.h) - Math.max(l.box.y, m.box.y);
+      return gap >= -sp * 0.5 && gap <= sp * TEMPO_JOIN_GAP && ov >= Math.min(l.box.h, m.box.h) * 0.5;
+    });
+    if (j < 0) continue;
+    const l = lines[j];
+    const x0 = Math.min(l.box.x, m.box.x);
+    const y0 = Math.min(l.box.y, m.box.y);
+    l.text = `${l.text} ${m.text}`;
+    l.box = { x: x0, y: y0, w: Math.max(l.box.x + l.box.w, m.box.x + m.box.w) - x0, h: Math.max(l.box.y + l.box.h, m.box.y + m.box.h) - y0 };
+    lines.splice(i, 1);
+    i = -1;
+  }
   // 叠着的两行并成一条（`1st time SA Unison` / `2nd time Parts`）
   for (let i = 0; i < lines.length; i++) {
     const a = lines[i];
@@ -412,7 +627,9 @@ export function attachWordLines(
     if (full(whole)) return [whole];
     return toks.length > 1 && toks.every(full) ? toks : null;
   };
-  const chordLines = lines.filter((l) => chordOf(l.text));
+  // 方框里的字母是排练号；比和弦字小一截的（小节号、符头读成的 `A4`）也不算——宁静 p7 排练号 `B` 与两个碎字凑够三行，整页成了和弦页
+  const chordLike = (l: (typeof lines)[number]) => l.box.h >= sp * CHORD_MIN_H && !l.strip.frame && !(/^[A-Z]$/.test(l.text) && framed(l.strip, l.box, sp));
+  const chordLines = lines.filter((l) => chordOf(l.text) && chordLike(l));
   const chordPage = chordLines.length >= CHORD_PAGE_MIN && chordLines.some((l) => l.text.replace(/\s+/g, "").length > 1);
   const chords: { text: string; box: Rect }[] = [];
   for (const l of lines) {
@@ -430,7 +647,7 @@ export function attachWordLines(
     if (skip.some((q) => inside(q, cx, cy))) continue;
     // 页脚注不是文字指示（望十架 p1 末系统下「*Flute part is on page 43」挂成了钢琴上的文字）
     if (FOOTNOTE_RE.test(text)) continue;
-    if (chordPage) {
+    if (chordPage && chordLike(l)) {
       // 和弦后面跟着文字的（`G7 cresc.`）：前头的和弦摘走，剩下的照文字走
       const toks = text.split(/\s+/).filter(Boolean);
       const whole = chordOf(text);
@@ -452,6 +669,10 @@ export function attachWordLines(
     const crowded = peers >= (lyricZones.some((q) => inside(q, cx, cy)) ? LYRIC_ROW_IN_ZONE : LYRIC_ROW);
     // rec 偶尔给元音添上重音符（`póco`、`dím.`），术语里没有这种写法，一律去掉
     text = text.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+    // 框字的方框边读成了括号、竖线（`[Interelude`）
+    text = text.replace(/^[[|【]+\s*/, "").replace(/\s*[\]|】]+$/, "");
+    // 词后单独一个小写 l 是读错的 1（破碎扫描版「Soprano l」）；大写 I 是罗马数字，不动
+    text = text.replace(/([A-Za-z]{3,}) l$/, "$1 1");
     const term = DIRECTION_RE.exec(text);
     if (crowded && !term) continue;
     // 歌词与紧跟着的术语被框成一行（`paid so willingly poco rit.`）：从头一个术语起才是文字指示
@@ -459,17 +680,24 @@ export function attachWordLines(
     // 头尾粘着的力度字母（`ff unis.`、`unis. mp`）不算在文字里
     text = text.replace(/^(?:[pmf]{1,3}|s?fz?)\s+(?=\S)/, "").replace(/\s+(?:[pmf]{1,3}|s?fz?)$/, "");
     const metro = METRO_RE.exec(text);
-    if (metro) text = text.slice(0, metro.index).replace(/[\s(（♩J]+$/, "").trim();
+    // 等号前面是音符字形读成的字（`(J = 86)`、`(d =92)`）与左括号，不算在速度语里
+    if (metro) text = text.slice(0, metro.index).replace(/(?:^|[\s(（])[♩♪JjdhqP」]?\.?\s*$/, "").replace(/[\s(（]+$/, "").trim();
     const letters = (text.match(/[A-Za-z]/g) ?? []).length;
+    // 方框里的一个大写字母是排练号（宁静 `[A]` `[B]`）：字只有一格来高，不受下面短标记那两道闸
+    const rehearsal = /^[A-Z]$/.test(text) && (!!l.strip.frame || framed(l.strip, box, sp));
+    // 整行都是拆开的单个字母（`e E R`）：汉字歌词、符头读成的碎字
+    if (!rehearsal && /^[A-Za-z](?: [A-Za-z])+$/.test(text)) continue;
+    // 英文歌词的头一个音节、后面拖着连字短横（宁静 p8 `Glo - - -`），歌词那一路没认下来也不是文字指示
+    if (!term && !metro && lyricDashAfter(l.strip, box, sp)) continue;
     // 夹着汉字的是歌词或署名；字母太少的多半是把符头、弧线读成了字
-    const isWord = !/[\u4e00-\u9fff]/.test(text) && (letters >= 3 || SHORT_RE.test(text)) && !/^[pmfsz]+$/i.test(text.replace(/[^A-Za-z]/g, ""));
+    const isWord = rehearsal || (!/[\u4e00-\u9fff]/.test(text) && (letters >= 3 || SHORT_RE.test(text)) && !/^[pmfsz]+$/i.test(text.replace(/[^A-Za-z]/g, "")));
     if (!isWord && !metro) continue;
     // 只靠 `SHORT_RE` 进来的一两个字母（声部标记、排练号）要够大：排练号、分部标记是大字，一格来高的多是别的东西读成的
     //（宁静 p3 只剩一个字的歌词行「人.」读成 `A.`、谱表左缘的小号码读成 `A`，一页好几个）
-    if (isWord && letters < 3 && box.h < sp * SHORT_MIN_H) continue;
+    if (isWord && !rehearsal && letters < 3 && box.h < sp * SHORT_MIN_H) continue;
     // 它还不能落在某个音的符干那一列上（头左右 `SHORT_STEM_DX` 格、上下一根干长之内）：带尾的干顶读成 `T`
     //（破碎 p5 m53 女低末一个八分音符，挂到女高歌词下面成了「T」）
-    if (isWord && letters < 3 && notes.some((n) => !n.rest && Math.abs(n.x - cx) < sp * SHORT_STEM_DX && cy > n.sym.box.top - sp * SHORT_STEM_DY && cy < n.sym.box.bottom + sp * SHORT_STEM_DY)) continue;
+    if (isWord && !rehearsal && letters < 3 && notes.some((n) => !n.rest && Math.abs(n.x - cx) < sp * SHORT_STEM_DX && cy > n.sym.box.top - sp * SHORT_STEM_DY && cy < n.sym.box.bottom + sp * SHORT_STEM_DY)) continue;
     // 定谱行：上下最近的那行（按谱表边到字心的距离比）
     let stf: Staff | undefined;
     let bd = sp * REACH;
@@ -484,11 +712,26 @@ export function attachWordLines(
       }
     }
     if (!stf) continue;
+    // 两个系统之间的空当：文字指示、排练号、段落名都印在它管的那个系统**上方**，挂在上一系统末行下方的少（`rit.` 印在谱表下也贴着谱表）。
+    // 离下一系统首行不比离上一系统末行远出 `INTER_SYS_BIAS` 倍就归下一系统（宁静 p5「Interelude」框字离上面钢琴左手 4 格、离下面右手 6 格）
+    if (cy > stf.box.bottom) {
+      const sys = pg.systems.find((s) => s.staves.includes(stf!));
+      const next = sys && pg.systems.filter((s) => s !== sys && s.box.top > stf!.box.bottom).sort((a, b) => a.box.top - b.box.top)[0];
+      const low = next?.staves.reduce<Staff | undefined>((a, s) => (!a || s.box.top < a.box.top ? s : a), undefined);
+      if (sys && low && sys.staves.every((s) => s.box.bottom <= stf!.box.bottom) && cx >= low.box.left - sp * SIDE && cx <= low.box.right + sp * SIDE) {
+        const dLow = low.box.top - cy;
+        if (dLow > 0 && dLow <= bd * INTER_SYS_BIAS) (stf = low), (above = true);
+      }
+    }
     // 定音符：字行左端对着它起作用的那个音——取左端往左让一格之后、右边最近的；没有就取这一行最后一个
     const row = notes.filter((n) => n.staff === stf && !n.chordExtra && !n.grace).sort((a, b) => a.x - b.x);
     const note = row.find((n) => n.x >= box.x - sp) ?? row[row.length - 1];
     if (!note) continue;
-    if (metro) note.metronome = { unit: "quarter", bpm: Number(metro[1].replace(/ /g, "")) };
+    if (metro) {
+      const bpm = Number(metro[2].replace(/ /g, ""));
+      // 拍子单位只认四分：音符字形 OCR 读成 `J` / `d` 都有（烛光颂曲的四分读成 `d`），字母分不出
+      note.metronome = { unit: "quarter", bpm, ...(metro[1] ? { text: `c. ${bpm}` } : {}) };
+    }
     // 速度文字与节拍器同一行的（`Andante ♩=76`）写进同一个 `<direction>`（见 `staffomr/textanalyze.ts::attachDirectionTexts`）
     if (metro && isWord && text) {
       note.tempoText = text;

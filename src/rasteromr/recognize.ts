@@ -19,7 +19,7 @@ import { buildNotes, checkBars, findClefKeyTime, keyFifths, lastTimeSignature, t
 import { findRasterArticulations } from "./artic";
 import { markRepeatsAndVoltas } from "./repeats";
 import { findRasterTuplets } from "./tuplet";
-import { attachWordLines, findHeaderStrip, findNameStrips, findWordStrips, headerZoneLines, partNameLines, wordKey, type HeaderStrip, type WordStrip } from "./words";
+import { attachWordLines, findFrameStrips, findHeaderStrip, findNameStrips, findWordStrips, headerZoneLines, partNameLines, wordKey, type HeaderStrip, type WordStrip } from "./words";
 import { headerCredits, type HeaderCredit, type WordLine } from "../omrkit/headertext";
 import { applyTuplet, attachDynamicTexts, attachNotations, attachWedges, findNotations, findTuplets, markLyricExtends, type WedgeOpen, type WedgeRows } from "../staffomr/notations";
 import type { PObj, SPage, Staff, Sym, Tag } from "../staffomr/model";
@@ -4852,6 +4852,8 @@ export async function recognizeRasterPage(
   //
   // 带照固定几何切（两行谱之间的空当），认字靠 `wordOcr` 缓存；歌词行、和弦字母已经另有身份，中心落在它们盒里的行不要。
   const wordStrips = opts.wordOcr || opts.wantWordStrips || live?.word ? findWordStrips(raster.bin, pg.staves, unit) : [];
+  // 带里的方框（排练号、框着的段落名）另切一条单独读（`findFrameStrips`）
+  wordStrips.push(...findFrameStrips(wordStrips, unit));
   // 声部名带（行首缩进与页边）：认字同文字指示带，归位另走（`partNameLines`）
   const nameStrips = opts.wordOcr || opts.wantWordStrips || live?.word ? findNameStrips(raster.bin, pg.systems, unit) : [];
   const wordOcr = opts.wordOcr ?? (live?.word ? await live.word([...wordStrips, ...nameStrips]) : undefined);
