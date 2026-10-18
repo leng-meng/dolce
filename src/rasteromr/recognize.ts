@@ -37,7 +37,7 @@ import { headProb, trainHeadClassifier } from "./headclass";
 import { findStaffLabels, labelKey, normalizeLabel, type LabelStrip } from "./stafflabel";
 import { findHarmonyStrips, harmonyKey, harmonyLine, readHarmonyStrip, type HarmonyStrip, type HarmonyToken } from "./harmony";
 import { findFusedWedges, findRasterWedges, findStrippedWedges, type RasterWedge } from "./wedge";
-import { groupDynamics, type RasterDynamic } from "./dynamics";
+import { findGluedDynamics, groupDynamics, type RasterDynamic } from "./dynamics";
 import { extendArcEnds, findFusedSlurs, findRasterDashedSlurs, findRasterSlurs, findStubSlurs, judgeArcUnion } from "./slur";
 import { ContourLedger } from "./ledger";
 import { attachHarmonies, attachLyrics, buildLyricLines, type LyricLine } from "../staffomr/textanalyze";
@@ -4523,7 +4523,11 @@ export async function recognizeRasterPage(
   // `mf` 印出来是**两个字母**，字典只认得出 `f`——先按版式把一串字母拼起来
   // （`dynamics.ts`），再按力度文本挂接，不走 `attachDynamics` 那条按单个 SMuFL 名的路。
   const dynamics = groupDynamics(marks.dynamics, cmap, unit);
-  attachDynamicTexts(pg, notes, dynamics);
+  // 粘了弧、连了笔的力度字典按整块查不着：拿本页认出的 `f` 当模板在大块里找（`dynamics.ts`）
+  dynamics.push(...findGluedDynamics(marks.dynamics, cmap, unit, dynamics));
+  const placedDyn = attachDynamicTexts(pg, notes, dynamics);
+  // OCR 读出来的力度只让给**挂上了**的那些：字形那一路认出来却没挂上的（印在终止线外：爱是从神而来 p5 m63 `p`），OCR 那份照补
+  const dynHeld = dynamics.filter((_, i) => placedDyn.has(i));
 
   // ── 声部标签 ────────────────────────────────────────────────────────────
   //
@@ -4928,7 +4932,7 @@ export async function recognizeRasterPage(
       liftHarmonies(notes, unit.space);
     }
     // OCR 读出来的力度只补按字形那一路没认到的地方（三格内已有的不重复挂）
-    attachDynamicTexts(pg, notes, placed.dynamics.filter((d) => !dynamics.some((q) => Math.abs(q.px - d.px) <= unit.space * 3 && Math.abs(q.py - d.py) <= unit.space * 2)));
+    attachDynamicTexts(pg, notes, placed.dynamics.filter((d) => !dynHeld.some((q) => Math.abs(q.px - d.px) <= unit.space * 3 && Math.abs(q.py - d.py) <= unit.space * 2)));
   }
 
   // ── 贴着符头的演奏法记号（保持音 / 断奏 / 顿音 / 重音 / 延长记号）──────────────

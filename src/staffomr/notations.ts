@@ -354,9 +354,11 @@ export function attachDynamicTexts(
   notes: StaffNote[],
   items: { px: number; py: number; text: string; box?: { left: number; right: number; top: number; bottom: number } }[],
   lyricBottom?: Map<Staff, number>,
-): void {
+): Set<number> {
   const sp = pg.normalStaffSpace || pg.space;
-  for (const d of items) {
+  /** 挂上了的（下标）：调用方据此判别的路认出的还要不要补 */
+  const placed = new Set<number>();
+  for (const [di, d] of items.entries()) {
     // 与松叶同一条：先定谱行（力度也印在它那行谱的下方），再在行内按 x 找最近的音符。
     // 够到六格：钢琴两行之间隔得宽的，印在正中的力度离上一行下线 5.6 格（破碎 p6 m66 `mf`）
     const owner = ownerStaff(pg, d.py, sp, 6, lyricBottom);
@@ -387,10 +389,12 @@ export function attachDynamicTexts(
           best.dynamic = d.text;
           if (d.box) best.dynamicBox = { left: d.box.left, right: d.box.right, top: d.box.top, bottom: d.box.bottom };
         }
+        placed.add(di);
         break;
       }
     }
   }
+  return placed;
 }
 
 /**
