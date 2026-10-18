@@ -513,6 +513,7 @@ function readDirectionPart(first: Element): DirectionPart {
       if (pm !== undefined) d.tempo.perMinute = pm;
       const pmText = childText(first, "per-minute");
       if (pmText !== null && (pm === undefined || String(pm) !== pmText.trim())) d.tempo.perMinuteText = pmText;
+      if (first.getAttribute("parentheses") === "yes") d.tempo.parentheses = true;
       break;
     }
     case "pedal":

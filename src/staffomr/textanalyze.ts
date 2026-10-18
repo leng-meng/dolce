@@ -1047,8 +1047,10 @@ export function attachDirectionTexts(
     const metro = isTempo && s.includes("=") ? METRO_TEXT_RE.exec(s) : null;
     if (metro) {
       const bpm = Number(metro[3]);
-      note.metronome = { unit: METRO_UNIT[metro[1] ?? "q"] ?? "quarter", bpm, ...(metro[2] ? { text: `c. ${bpm}` } : {}) };
-      const words = s.slice(0, metro.index).trim();
+      // 印在圆括号里（`Andante (q = 76)`）：等号段前紧挨左括号或数后紧跟右括号
+      const paren = /[(（]\s*$/.test(s.slice(0, metro.index)) || /^\s*[)）]/.test(s.slice(metro.index + metro[0].length));
+      note.metronome = { unit: METRO_UNIT[metro[1] ?? "q"] ?? "quarter", bpm, ...(metro[2] ? { text: `c. ${bpm}` } : {}), ...(paren ? { parentheses: true } : {}) };
+      const words = s.slice(0, metro.index).replace(/[\s(（]+$/, "").trim();
       if (words) {
         note.tempoText = words;
         if (size > 0) note.tempoSize = size;

@@ -1008,6 +1008,9 @@ class DocPartLoader {
     // 缺字形的方框。Bravura 含同一套 metNote 字形，故用 Bravura。
     const noteFont = new Font("Bravura", wordFont.size);
     let any = false;
+    // `parentheses="yes"`：整个节拍器套一对圆括号「(♩ = 82)」
+    const paren = !!met.tempo?.parentheses;
+    if (paren) blk.add("(", wordFont, false);
     if (met.tempo?.beatUnit !== undefined) {
       blk.add(metNoteGlyph(met.tempo.beatUnit) + (met.tempo.beatUnitDot ? GlyphCodes.metAugmentationDot : ""), noteFont, true);
       any = true;
@@ -1021,6 +1024,7 @@ class DocPartLoader {
       blk.add(pm, wordFont, false, undefined, pad);
       any = true;
     }
+    if (paren && any) blk.add(")", wordFont, false);
     return any;
   }
 

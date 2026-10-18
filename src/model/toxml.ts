@@ -143,7 +143,7 @@ const OWNS: Readonly<Record<string, { attrs?: readonly string[]; kids?: readonly
   "direction-type": { kids: "*" },
   dynamics: { kids: "*" },
   wedge: { attrs: ["type"] },
-  metronome: { kids: ["beat-unit", "beat-unit-dot", "per-minute"] },
+  metronome: { attrs: ["parentheses"], kids: ["beat-unit", "beat-unit-dot", "per-minute"] },
   bracket: { attrs: ["type", "line-end", "line-type"] },
   pedal: { attrs: ["type", "line"] },
   "octave-shift": { attrs: ["type", "size"] },
@@ -635,7 +635,7 @@ function directionPartXml(o: Out, dir: DirectionPart, sur: Element | undefined, 
       o.leaf("wedge", ` type="${dir.spanType === "stop" ? "stop" : dir.wedgeType ?? "crescendo"}"${pos}`, sur);
       break;
     case "metronome":
-      o.open("metronome", lay, sur);
+      o.open("metronome", lay + (dir.tempo?.parentheses ? ' parentheses="yes"' : ""), sur);
       o.text("beat-unit", dir.tempo?.beatUnit ?? "quarter");
       if (dir.tempo?.beatUnitDot) o.leaf("beat-unit-dot");
       o.text("per-minute", dir.tempo?.perMinuteText ?? dir.tempo?.perMinute ?? 90);

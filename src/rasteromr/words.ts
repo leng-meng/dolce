@@ -680,6 +680,8 @@ export function attachWordLines(
     // 头尾粘着的力度字母（`ff unis.`、`unis. mp`）不算在文字里
     text = text.replace(/^(?:[pmf]{1,3}|s?fz?)\s+(?=\S)/, "").replace(/\s+(?:[pmf]{1,3}|s?fz?)$/, "");
     const metro = METRO_RE.exec(text);
+    // 节拍器印在圆括号里（`Andante (J = 86)`、`( = 82)`）：等号前紧挨着左括号（中间顶多一个音符字形读成的字），或数后紧跟右括号
+    const paren = !!metro && (/[(（]\s*[♩♪JjdhqP」]?\.?\s*$/.test(text.slice(0, metro.index)) || /^\s*[)）]/.test(text.slice(metro.index + metro[0].length)));
     // 等号前面是音符字形读成的字（`(J = 86)`、`(d =92)`）与左括号，不算在速度语里
     if (metro) text = text.slice(0, metro.index).replace(/(?:^|[\s(（])[♩♪JjdhqP」]?\.?\s*$/, "").replace(/[\s(（]+$/, "").trim();
     const letters = (text.match(/[A-Za-z]/g) ?? []).length;
@@ -730,7 +732,7 @@ export function attachWordLines(
     if (metro) {
       const bpm = Number(metro[2].replace(/ /g, ""));
       // 拍子单位只认四分：音符字形 OCR 读成 `J` / `d` 都有（烛光颂曲的四分读成 `d`），字母分不出
-      note.metronome = { unit: "quarter", bpm, ...(metro[1] ? { text: `c. ${bpm}` } : {}) };
+      note.metronome = { unit: "quarter", bpm, ...(metro[1] ? { text: `c. ${bpm}` } : {}), ...(paren ? { parentheses: true } : {}) };
     }
     // 速度文字与节拍器同一行的（`Andante ♩=76`）写进同一个 `<direction>`（见 `staffomr/textanalyze.ts::attachDirectionTexts`）
     if (metro && isWord && text) {

@@ -372,7 +372,7 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
         const m = n.metronome;
         // 文字后面接节拍器时末尾留一个空格（`Andante ♩ = c. 76`），不然排出来文字与音符字形贴在一起
         const words = n.tempoText ? `<direction-type><words${fontAttr(textPt(n, n.tempoSize))}>${escapeXml(m ? `${n.tempoText.trimEnd()} ` : n.tempoText)}</words></direction-type>` : "";
-        const metro = m ? `<direction-type><metronome><beat-unit>${m.unit}</beat-unit><per-minute>${escapeXml(m.text ?? String(m.bpm))}</per-minute></metronome></direction-type>` : "";
+        const metro = m ? `<direction-type><metronome${m.parentheses ? ' parentheses="yes"' : ""}><beat-unit>${m.unit}</beat-unit><per-minute>${escapeXml(m.text ?? String(m.bpm))}</per-minute></metronome></direction-type>` : "";
         body += `<direction placement="above">${words}${metro}${dirStaff}${m ? `<sound tempo="${m.bpm}"/>` : ""}</direction>`;
       }
       for (const w of n.words ?? []) {

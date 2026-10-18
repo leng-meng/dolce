@@ -629,8 +629,9 @@ export interface Direction {
   type: string;
   /** 力度名（`f` / `mf`…）或文字内容 */
   text?: string;
-  /** `<metronome>`：♩=76。`perMinuteText` 是 `<per-minute>` 不是纯数字时的原文（「132 温馨、期盼的」） */
-  tempo?: { beatUnit?: NoteType; beatUnitDot?: boolean; perMinute?: number; perMinuteText?: string };
+  /** `<metronome>`：♩=76。`perMinuteText` 是 `<per-minute>` 不是纯数字时的原文（「132 温馨、期盼的」）；
+   *  `parentheses` 是 `<metronome parentheses="yes">`，谱面印成「(♩ = 82)」 */
+  tempo?: { beatUnit?: NoteType; beatUnitDot?: boolean; perMinute?: number; perMinuteText?: string; parentheses?: boolean };
   /** wedge / pedal / octave-shift 的起止，与 `Mark` 配对用 */
   spanType?: "start" | "stop" | "continue";
   /** `<wedge type>`：crescendo / diminuendo */
