@@ -21,7 +21,7 @@ import { markRepeatsAndVoltas } from "./repeats";
 import { findRasterTuplets } from "./tuplet";
 import { attachWordLines, findHeaderStrip, findNameStrips, findWordStrips, headerZoneLines, partNameLines, wordKey, type HeaderStrip, type WordStrip } from "./words";
 import { headerCredits, type HeaderCredit, type WordLine } from "../omrkit/headertext";
-import { applyTuplet, attachDynamicTexts, attachNotations, attachWedges, findNotations, findTuplets, markLyricExtends } from "../staffomr/notations";
+import { applyTuplet, attachDynamicTexts, attachNotations, attachWedges, findNotations, findTuplets, markLyricExtends, type WedgeOpen, type WedgeRows } from "../staffomr/notations";
 import type { PObj, SPage, Staff, Sym, Tag } from "../staffomr/model";
 import { buildRasterPage, makeSymObj, makeTextObj, type RasterSym } from "./adapt";
 import { binSig, blobImage, extendVSegs, findBlobs, findBraces, findPrimitives, groupByLeftInk, findPartBrackets, ledgerGrid, joinVSegs, removeStaffLines, removeStaffLinesByRun, repairLineCuts, verticalStrokes, type BeamQuad, type LineSeg, type RasterPrims } from "./prims";
@@ -149,6 +149,8 @@ export interface RasterPageResult {
   carryTime?: { beats: number; beatType: number };
   /** 这一页最后生效的调号（记号种类与个数）——下一页拿它当 `opts.carryKey`（见 `extendKeyByCarry`）。 */
   carryKey?: CarryKey;
+  /** 末系统各行续到下一页的松叶等（见 `attachWedges`）。 */
+  wedgeRows?: WedgeRows;
 }
 
 /** 跨页沿用的调号：记号种类与个数。 */
@@ -164,6 +166,8 @@ export interface PageCarry {
   carryTime?: { beats: number; beatType: number };
   carryKey?: CarryKey;
   wantHeader?: boolean;
+  /** 上一页末系统各行续过来的松叶 */
+  openWedges?: (WedgeOpen | null)[];
 }
 
 /** 一页的来源：栅格化、拼页眉带（曲首页的页眉印在谱图之外时）。串行路由 pdf.js 页对象实现，Worker 里另有实现。 */
@@ -560,6 +564,7 @@ export async function recognizeRasterPage(
   opts: {
     carryTime?: { beats: number; beatType: number };
     carryKey?: CarryKey;
+    openWedges?: (WedgeOpen | null)[];
     /**
      * 跨页沿用（上一页的 `carryTime` / `carryKey`、前面有没有页眉）**晚到**的版本：给了它就不看同名的三个同步字段，
      * 识别走到第一处要用沿用的地方（`shareOctaveClefs` 之前）才 await。多页并行时前段不等上一页（见 `pagepool.ts`）。
@@ -618,7 +623,7 @@ export async function recognizeRasterPage(
 ): Promise<RasterPageResult> {
   const source: PageSource = opts.source ?? { raster: () => rasterizePage(pdfPage, OPS), composeHeader: (binW) => composeHeaderStrip(pdfPage, OPS, binW) };
   let carryP: Promise<PageCarry> | null = null;
-  const carryOf = (): Promise<PageCarry> => (carryP ??= opts.carry ? opts.carry() : Promise.resolve({ carryTime: opts.carryTime, carryKey: opts.carryKey, wantHeader: opts.wantHeader }));
+  const carryOf = (): Promise<PageCarry> => (carryP ??= opts.carry ? opts.carry() : Promise.resolve({ carryTime: opts.carryTime, carryKey: opts.carryKey, wantHeader: opts.wantHeader, openWedges: opts.openWedges }));
   /** 没认出谱的页照样把沿用原样交下去 */
   const emptyPage = async (page: SPage, raster: RasterPage | null, unit: RasterUnit | null): Promise<RasterPageResult> => {
     const c = await carryOf();
@@ -5008,7 +5013,7 @@ export async function recognizeRasterPage(
       if (c) ledger.claim(c.bbox, `wedge:${wg.type}`);
     }
   }
-  attachWedges(pg, notes, wedges.map((w) => (w.box ? { ...w, fromBlob: true } : w)), lyricBottom);
+  const wedgeRows = attachWedges(pg, notes, wedges.map((w) => (w.box ? { ...w, fromBlob: true } : w)), lyricBottom, carry.openWedges);
 
   // ── 弧线（圆滑线 / 连音线）────────────────────────────────────────────────
   //
@@ -5350,6 +5355,7 @@ export async function recognizeRasterPage(
     carryTime: lastTimeSignature(pg, ctx, carry.carryTime),
     // 没有调号的页也要把谱号的见证带下去：个数记零（`extendKeyByCarry` 见零不补）
     carryKey: { ...(lastKey(pg, ctx, carry.carryKey) ?? { code: "accidentalFlat", n: 0 }), clefs: clefTally },
+    wedgeRows,
   };
 }
 /**

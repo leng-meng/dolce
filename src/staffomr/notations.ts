@@ -443,6 +443,22 @@ const WEDGE_CONT_LEAD = 0.5;
 /** 行尾要续的：右端离谱表右端这么多格以内——续下去的直画到谱表尽头（破碎 m64、m72 差 3 像素），
  *  收在系统末小节线前的留着空（m80 差 0.65 格） */
 const WEDGE_CONT_EDGE = 0.4;
+/** 行尾可能续的：右端离谱表右端这么多格以内，下一系统同一行行首有同类续段才算（破碎 m89 渐弱续到下一页，右端离谱表右端 0.88 格、压在末音底下） */
+const WEDGE_CONT_LOOSE = 1.5;
+
+/** 行尾续出去的松叶：类型，确定（顶到谱表右端）还是可能（下一截认了才算）。 */
+export interface WedgeOpen {
+  type: "crescendo" | "diminuendo";
+  sure: boolean;
+}
+
+/** `attachWedges` 交给下一页的：末系统各行续出的（`open`）、其中「可能」续出那截写了止的音（`stops`），
+ *  以及本页头一个系统认作上一页续段、要撤掉上一页那截止端的行（`took`）。 */
+export interface WedgeRows {
+  open: (WedgeOpen | null)[];
+  stops: (StaffNote | null)[];
+  took: number[];
+}
 
 /** 一条松叶：两端的 x 与纵向位置（谁挂给谁由 `attachWedges` 定）。 */
 export interface WedgeSpan {
@@ -460,9 +476,16 @@ export interface WedgeSpan {
  * 松叶挂到音符上：先定谱行（与力度同一套），起点挂左端处或之前的音、终点挂右端处或之后的第一个音
  *（右端过了末音、收在小节线前的挂末音并写在它后面），两端都不隔小节线；跨系统的那一截只写起或只写止。
  * 止端只在起端之后找，不会与起点落在同一个音上。
+ * `openIn`：上一页末系统各行续过来的松叶；返回本页末系统的同一张表等（跨页沿用，见 `PageCarry.openWedges`）。
  */
-export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[], lyricBottom?: Map<Staff, number>): void {
+export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[], lyricBottom?: Map<Staff, number>, openIn?: (WedgeOpen | null)[]): WedgeRows {
   const sp = pg.normalStaffSpace || pg.space;
+  // 先把每条的起止定下来、记下行尾续出的行，再写：行首渐弱是不是续段要看上一系统（上一页末系统）同一行有没有续出去的
+  const plans: { wg: WedgeSpan; a: StaffNote; b?: StaffNote; after: boolean; head: boolean; contOut: boolean; maybeOut: boolean }[] = [];
+  const rowKey = (st: Staff): [number, number] => {
+    const sys = pg.systems.findIndex((s) => s.staves.includes(st));
+    return [sys, sys < 0 ? -1 : pg.systems[sys].staves.indexOf(st)];
+  };
   // 挑中的是和弦附加音的换成同一和弦的主音：挂在附加音上的，写出时落在和弦头一个音之后，起止时刻被推到下一拍（破碎 m106、m107、m109）。
   // 挑的时候仍按全部音的位置（二度挤开的和弦，附加音的头比主音靠前）
   const mainOf = (n: StaffNote): StaffNote => (n.chordExtra && n.group ? (notes.find((m) => m.group === n.group && m.staff === n.staff && !m.chordExtra) ?? n) : n);
@@ -539,16 +562,49 @@ export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[],
     b ??= row.filter((n) => n.sym.px <= wg.x1 + sp * 4).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
     // **跨系统的松叶**：上一系统末那一截不写止、下一系统行首那一截不写起，MusicXML 里同号的起止跨行自然接上（弧线同此）。
     // 行首那截：渐强、左端在本行第一个音头之前（渐强从尖端起，最早也是从第一个音起；左端在音前又张着口的只能是续段）。
-    // 渐弱在行首本来就是开口那头，单看这一截分不出起还是续（宁静 m107 真从行首起、破碎 m30 / m90 是续段，几何一样），照起点写。
+    // 渐弱在行首本来就是开口那头，单看这一截分不出起还是续（宁静 m107 真从行首起、破碎 m30 / m90 是续段，几何一样）：
+    // 看上一系统同一行有没有续出来的（见下）。
     // 行尾那截右端到了谱表右端、又在本行末音之后
     const inRow = notes.filter((n) => n.staff === a.staff).map((n) => n.sym.px);
-    const contIn = wg.type === "crescendo" && inRow.length > 0 && wg.x0 < Math.min(...inRow) - sp * WEDGE_CONT_LEAD;
-    const contOut = inRow.length > 0 && wg.x1 >= a.staff.box.right - sp * WEDGE_CONT_EDGE && wg.x1 > Math.max(...inRow) + sp;
+    const head = inRow.length > 0 && wg.x0 < Math.min(...inRow) - sp * WEDGE_CONT_LEAD;
+    const pastLast = inRow.length > 0 && wg.x1 > Math.max(...inRow) + sp;
+    const contOut = pastLast && wg.x1 >= a.staff.box.right - sp * WEDGE_CONT_EDGE;
+    // 可能续出的不看末音（要等下一截认）：破碎 m89 渐弱右端压在本行末音底下
+    const maybeOut = contOut || (inRow.length > 0 && wg.x1 >= a.staff.box.right - sp * WEDGE_CONT_LOOSE);
     a = mainOf(a);
     if (b) b = mainOf(b);
     // 从粘连团里切出来的（`fromBlob`）、起止又落在同一个音（和弦）上：整条落在一个音的身后，是符尾、杠之间凑出来的碎块（新编 078 m9、105 m19）
     if (wg.fromBlob && b && (b === a || (b.group && b.group === a.group))) continue;
-    if (!contIn && a.wedgeStart === undefined) {
+    plans.push({ wg, a, b, after, head, contOut, maybeOut });
+  }
+  // 行尾续出去的：确定的（顶到谱表右端）与可能的（离右端 `WEDGE_CONT_LOOSE` 格内，下一系统同一行行首有同类的续段才认）
+  const openAt = new Map<string, { type: WedgeSpan["type"]; sure: boolean; plan: (typeof plans)[number] }>();
+  for (const p of plans) {
+    if (!p.maybeOut) continue;
+    const [sys, row] = rowKey(p.a.staff);
+    const k = `${sys}:${row}`;
+    const o = openAt.get(k);
+    if (!o || p.wg.x1 > o.plan.wg.x1) openAt.set(k, { type: p.wg.type, sure: p.contOut, plan: p });
+  }
+  const took: number[] = [];
+  const contIns = plans.map((p) => {
+    if (!p.head) return false;
+    // 上一系统同一行（本页头一个系统看上一页末系统，`openIn`）有同类续出去的：是续段，不写起；那一截只是「可能」续出的，撤掉它的止
+    // 渐弱只认这一条（宁静 m107 真从行首起）；渐强左端在行首音前张着口，本来就只能是续段
+    const [sys, row] = rowKey(p.a.staff);
+    const inPage = sys > 0 ? openAt.get(`${sys - 1}:${row}`) : undefined;
+    const prev = inPage ?? (sys === 0 ? openIn?.[row] : undefined);
+    if (prev && prev.type === p.wg.type) {
+      if (!prev.sure) {
+        if (inPage) inPage.plan.contOut = true;
+        else took.push(row);
+      }
+      return true;
+    }
+    return p.wg.type === "crescendo";
+  });
+  plans.forEach(({ wg, a, b, after, contOut }, i) => {
+    if (!contIns[i] && a.wedgeStart === undefined) {
       a.wedgeStart = wg.type;
       a.wedgeAt = { x0: wg.x0, cy: wg.cy, ...(wg.spread ? { spread: wg.spread } : {}) };
     }
@@ -557,7 +613,15 @@ export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[],
       if (after) b.wedgeStopAfter = true;
       b.wedgeStopAt = { x1: wg.x1, ...(wg.type === "crescendo" && wg.spread ? { spread: wg.spread } : {}) };
     }
-  }
+  });
+  // 末系统各行续到下一页的；可能续出的那截止端写在哪个音上（下一页认作续段时由整曲那头撤掉，见 `recognizeRasterSong`）
+  const last = pg.systems.length - 1;
+  const rows = last < 0 ? [] : pg.systems[last].staves.map((_, row) => openAt.get(`${last}:${row}`));
+  return {
+    open: rows.map((o) => (o ? { type: o.type, sure: o.sure } : null)),
+    stops: rows.map((o) => (o && !o.sure && !o.plan.contOut ? (o.plan.b ?? null) : null)),
+    took,
+  };
 }
 
 /**
