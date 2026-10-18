@@ -36,7 +36,7 @@ import { buildHeadMasks, buildHollowMasks, headFromStemBlock, scoreAt, scoreAtMa
 import { headProb, trainHeadClassifier } from "./headclass";
 import { findStaffLabels, labelKey, normalizeLabel, type LabelStrip } from "./stafflabel";
 import { findHarmonyStrips, harmonyKey, harmonyLine, readHarmonyStrip, type HarmonyStrip, type HarmonyToken } from "./harmony";
-import { findFusedWedges, findRasterWedges, type RasterWedge } from "./wedge";
+import { findFusedWedges, findRasterWedges, findStrippedWedges, type RasterWedge } from "./wedge";
 import { groupDynamics, type RasterDynamic } from "./dynamics";
 import { extendArcEnds, findFusedSlurs, findRasterDashedSlurs, findRasterSlurs, findStubSlurs, judgeArcUnion } from "./slur";
 import { ContourLedger } from "./ledger";
@@ -4957,11 +4957,33 @@ export async function recognizeRasterPage(
     const st = pg.staves.filter((s0) => y >= s0.box.top - unit.space * 10 && y <= s0.box.bottom + unit.space * 10).sort((p, q) => Math.abs((p.box.top + p.box.bottom) / 2 - y) - Math.abs((q.box.top + q.box.bottom) / 2 - y))[0];
     if (!st) return false;
     const xs = notes.filter((n) => n.staff === st).map((n) => n.sym.px);
-    return xs.length > 0 && (x < Math.min(...xs) || x > Math.max(...xs) + unit.space * 2);
+    // 谱表右端一格以内也算行尾：末音紧挨着行尾小节线时，续到下一行的那截尖端在末音之上（破碎 m89 钢琴渐弱）
+    return xs.length > 0 && (x < Math.min(...xs) || x > Math.max(...xs) + unit.space * 2 || x >= st.box.right - unit.space);
   };
-  const wedges = findRasterWedges(wv.map, unit, wv.unclaimed(), rowEdge);
+  // 只被符杠认过的整团也判一次（宁静 m85 男声、m86 女声那两条四十格长的渐强，两臂被横段抽取当成了符杠）：
+  // 只走整团判据（逐列两段墨、一头尖一头张），不当臂去配——一根斜符杠单看就是一条直臂
+  const claimedByBeamOnly = (id: number) => {
+    const cl = wv.claimsOf(id);
+    return cl.length > 0 && cl.every((by) => by === "beam");
+  };
+  const wedgeBeamOnly = wv.map.contours.filter((c) => c.w >= 4 && c.h <= 3 && claimedByBeamOnly(c.id));
+  const wedges = findRasterWedges(wv.map, unit, wv.unclaimed(), rowEdge, wedgeBeamOnly);
   // 开口顶到小节线、与小节线连成一团的（`findFusedWedges`）
   wedges.push(...findFusedWedges(cmap, unit, cmap.contours.filter((c) => ledger.claimsOf(c.id).some((k) => k.by === "seg:BarLine"))));
+  // 和符干、符杠、圆滑线粘成一大团的（`findStrippedWedges`）：够宽、比松叶的高度闸还高、还没认成松叶的团
+  {
+    // 只有候选图那一路的团号能拿来排除（小节线那一路带 `box`、团号是去线图的，同号不同团）
+    const got = new Set(wedges.filter((w) => !w.box).flatMap((w) => [w.contourId, w.pairedId]));
+    const pool = wv.map.contours.filter((c) => c.w >= 3 && c.h > 3 && !got.has(c.id));
+    // 小节线那一路（`findFusedWedges`）用的是去线图，团号对不上：按位置去重。
+    // 重叠的：原来那条也是切出来的（小节线那一路常只切出半截，宁静 m22 钢琴）、同一种、长出一格以上的换掉，不然留原来的。
+    // 整团判出来的不换：剥团的候选随歌词认领变（OCR），换了会时有时无（宁静 m105 人声两条）
+    for (const w of findStrippedWedges(wv.map, unit, pool, contourStaves, rowEdge)) {
+      const i = wedges.findIndex((q) => Math.abs(q.cy - w.cy) < unit.space && Math.min(q.x1, w.x1) - Math.max(q.x0, w.x0) > 0.5 * Math.min(q.x1 - q.x0, w.x1 - w.x0));
+      if (i < 0) wedges.push(w);
+      else if (wedges[i].box && wedges[i].type === w.type && w.x1 - w.x0 > wedges[i].x1 - wedges[i].x0 + unit.space) wedges[i] = w;
+    }
+  }
   // **压在力度字上的不是松叶**：斜体 p 的竖笔与圆肚子逐列看也是两段墨、往右张开（破碎 p2 m8 钢琴那个 p 认成了一条 2 格宽的渐强）
   {
     const sp = unit.space;
@@ -4986,7 +5008,7 @@ export async function recognizeRasterPage(
       if (c) ledger.claim(c.bbox, `wedge:${wg.type}`);
     }
   }
-  attachWedges(pg, notes, wedges, lyricBottom);
+  attachWedges(pg, notes, wedges.map((w) => (w.box ? { ...w, fromBlob: true } : w)), lyricBottom);
 
   // ── 弧线（圆滑线 / 连音线）────────────────────────────────────────────────
   //

@@ -276,7 +276,6 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
   // **合成一个 part 的钢琴两行，`<direction>` 也要带 `<staff>`**：不带的话读入端把它算到整个 part（两行都有一份，
   // 或一律落到第一行），松叶两行都用 1 号还会互相套住
   const dirStaff = staffNo ? `<staff>${staffNo}</staff>` : "";
-  const wedgeNo = staffNo || 1;
   const full = timed ? voiceTicks(inBar, ticks) : 0;
   voices.forEach((v, vi) => {
     const vn = inBar.filter((n) => n.voice === v);
@@ -324,6 +323,18 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
           n = { ...n, lyrics: [...(n.lyrics ?? []), ...add] };
         }
       } else if (extra && n.lyrics?.some((l) => movedLyrics.has(l))) n = { ...n, lyrics: n.lyrics.filter((l) => !movedLyrics.has(l)) };
+      // 松叶的起止同理：挂在和弦哪个头上都是这一拍，写在打头的那个音前；挂在后写的头上，`<direction>` 落在和弦中间，
+      // 读回来是下一拍（按拍位写时和弦先写最高音，主音不一定打头：破碎 m5、m106、m107）
+      if (n0.group) {
+        if (!extra) {
+          const host = vn.find((m) => m.group === n0.group && m !== n0 && (m.wedgeStart || m.wedgeStop));
+          if (host && !n.wedgeStart && !n.wedgeStop)
+            n = { ...n, wedgeStart: host.wedgeStart, wedgeAt: host.wedgeAt, wedgeStop: host.wedgeStop, wedgeStopAfter: host.wedgeStopAfter, wedgeStopAt: host.wedgeStopAt };
+        } else if (n.wedgeStart || n.wedgeStop) {
+          const lead = vn.find((m) => m.group === n0.group);
+          if (lead && lead !== n0 && !lead.wedgeStart && !lead.wedgeStop) n = { ...n, wedgeStart: undefined, wedgeAt: undefined, wedgeStop: undefined, wedgeStopAfter: undefined, wedgeStopAt: undefined };
+        }
+      }
       // 符杠同理：整枚和弦共一根干，杠记在哪个头上都一样，写在打头的那个音上
       if (!extra && n0.group && !n.beam) {
         const bm = vn.find((m) => m.group === n0.group && m.beam)?.beam;
@@ -360,12 +371,17 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
       // 松叶：**止排在起之前**——同一个音符上前一条松叶收尾、下一条起头是常事，
       // 反过来写会让两条重叠（MusicXML 里同号的 wedge 不能套嵌）。
       // 收在小节线前的止（`wedgeStopAfter`）写在末音（和弦）之后：下一个和弦打头之前、或本声部末尾 `<forward>` 之前冲掉
-      if (n.wedgeStop && !n.wedgeStopAfter) body += wedgeStopXml(n, wedgeNo, dirStaff);
-      if (n.wedgeStart) body += wedgeStartXml(n, wedgeNo, dirStaff);
-      body += noteXml(n, ticks(n.duration), n.crossTo && staffNo ? (partStaffNo.get(n.staff) ?? staffNo) : staffNo, withVoice, voiceBase);
+      // 跨谱表书写的音（`crossTo`）`<staff>` 按符头所在那行；挂在它上面的松叶也按那一行编号，才与那一行上的另一端配得上
+      //（宁静 m7–8 钢琴渐弱止在左手跨到右手谱表的 A3 上，原来写成 `<staff>2`，起端在右手，两端配不上）
+      const nStaffNo = n.crossTo && staffNo ? (partStaffNo.get(n.staff) ?? staffNo) : staffNo;
+      const wDir = nStaffNo ? `<staff>${nStaffNo}</staff>` : "";
+      const wNo = nStaffNo || 1;
+      if (n.wedgeStop && !n.wedgeStopAfter) body += wedgeStopXml(n, wNo, wDir);
+      if (n.wedgeStart) body += wedgeStartXml(n, wNo, wDir);
+      body += noteXml(n, ticks(n.duration), nStaffNo, withVoice, voiceBase);
       if (n.wedgeStop && n.wedgeStopAfter) {
         const sn = n;
-        pendingStop = (ax) => wedgeStopXml(sn, wedgeNo, dirStaff, ax);
+        pendingStop = (ax) => wedgeStopXml(sn, wNo, wDir, ax);
       }
       if (!n.chordExtra && !n.grace) cur += ticks(n.duration);
     }

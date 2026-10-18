@@ -433,6 +433,11 @@ const WEDGE_LONG_REACH = 12;
 const WEDGE_PAST_BAR = 2.5;
 /** 「音头处」的容差（格，按符头左缘量）：左端在音头左缘右边这么多以内的、右端在音头左缘左边这么多以内的，都算在那个音头处 */
 const WEDGE_END_TOL = 0.5;
+/** 起端：左端离之前那个音头过这么多格、后一个音头在左端后这么多格以内，挂后一个音。 */
+/** 止端：右端离前一个音头（左缘）不过这么多格、后一个音又远，收在这个音上。 */
+const WEDGE_STOP_ON_HEAD = 1.2;
+const WEDGE_START_FAR = 2.6;
+const WEDGE_START_NEXT = 2.5;
 /** 行首续段：左端在本行第一个音头之前这么多格以上 */
 const WEDGE_CONT_LEAD = 0.5;
 /** 行尾要续的：右端离谱表右端这么多格以内——续下去的直画到谱表尽头（破碎 m64、m72 差 3 像素），
@@ -447,6 +452,8 @@ export interface WedgeSpan {
   cy: number;
   /** 宽口那头的开口高（页面单位）；量不到不写 */
   spread?: number;
+  /** 从粘连的大团里切出来的（位图路小节线切段、剥团） */
+  fromBlob?: boolean;
 }
 
 /**
@@ -456,6 +463,9 @@ export interface WedgeSpan {
  */
 export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[], lyricBottom?: Map<Staff, number>): void {
   const sp = pg.normalStaffSpace || pg.space;
+  // 挑中的是和弦附加音的换成同一和弦的主音：挂在附加音上的，写出时落在和弦头一个音之后，起止时刻被推到下一拍（破碎 m106、m107、m109）。
+  // 挑的时候仍按全部音的位置（二度挤开的和弦，附加音的头比主音靠前）
+  const mainOf = (n: StaffNote): StaffNote => (n.chordExtra && n.group ? (notes.find((m) => m.group === n.group && m.staff === n.staff && !m.chordExtra) ?? n) : n);
   for (const wg of wedges) {
     // **先定是哪一行谱，再在那一行里找音符。** 松叶印在它那行谱的**下方**
     // （歌词带那一条里也常见），而下面一行谱的上缘往往比它自己那行的下缘还近
@@ -496,13 +506,32 @@ export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[],
     // 两端挂哪个音照排版惯例：松叶**起在它开始的那个音下**（左端在那个音头处或之后），**收在它通向的那个音之前**
     //（右端在那个音头处或之前）；右端过了小节里末一个音、收在小节线前的，止在小节末。两端都不隔小节线去找。
     // 从前两端各挂 x 最近的音：起端印在某个音右边一点就挂到了下一个音，收在小节线前的挂到了下一小节的头一个音
-    const a = notes.filter((n) => n.staff === a0.staff && n.sym.px <= wg.x0 + sp * WEDGE_END_TOL && n.sym.px >= wg.x0 - sp * 4 && !barBetween(n.sym.px, wg.x0)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined) ?? a0;
+    // 不设回看距离：同一小节里左端之前的音再远也是它在响（起在长音中间的挂这个长音，破碎 m107 右手二分音符）
+    let a = notes.filter((n) => n.staff === a0.staff && n.sym.px <= wg.x0 + sp * WEDGE_END_TOL && !barBetween(n.sym.px, wg.x0)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined) ?? a0;
+    // 左端离之前那个音已远（`WEDGE_START_FAR` 格开外）、后一个音就在跟前：起点是印在后一个音前面的（宁静 m85 男声、m86 女声，
+    // 左端在后一个音前一格多、离前一个音三格）
+    // 钢琴大谱表两行之间的松叶：「之前那个音」两行都算（宁静 m7 左手 2.5 拍有音、右手没有，不能因右手那一段空着就挂到下一个音）。
+    // 本行没有歌词、下面紧挨着还有一行（12 格内），当作一个大谱表（下面那行的「歌词带」不可靠：排练号框也算进去；
+    // 不看本行歌词、一律算上下一行的试过，宁静、破碎、破碎扫描各多一步）
+    const pairBelow = !lyricBottom?.has(a.staff) ? pg.staves.find((s0) => s0 !== a.staff && s0.box.top > a.staff.box.bottom && s0.box.top - a.staff.box.bottom <= sp * 12 && wg.cy < s0.box.top) : undefined;
+    const prevX = Math.max(a.sym.px, ...notes.filter((n) => n.staff === pairBelow && n.sym.px <= wg.x0 + sp * WEDGE_END_TOL && !barBetween(n.sym.px, wg.x0)).map((n) => n.sym.px));
+    if (wg.x0 - prevX > sp * WEDGE_START_FAR) {
+      const nx = notes.filter((n) => n.staff === a.staff && !n.chordExtra && !n.grace && n.sym.px > wg.x0 && n.sym.px - wg.x0 <= sp * WEDGE_START_NEXT && !barBetween(n.sym.px, wg.x0)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px < m.sym.px ? n : m), undefined);
+      if (nx) a = nx;
+    }
     const row = notes.filter((n) => n.staff === a.staff && n.sym.px > a.sym.px);
     // 右端顶到或压过小节线（开口顶着小节线、粘在一起认出来的常见）：收在小节线前
     const barAt = bars.filter((x) => x <= wg.x1 + sp * 0.3 && wg.x1 - x <= sp * WEDGE_PAST_BAR && x > wg.x0 + sp).sort((p, q) => p - q)[0];
     const x1 = barAt === undefined ? wg.x1 : Math.min(wg.x1, barAt - 1);
     let b = row.filter((n) => n.sym.px >= x1 - sp * WEDGE_END_TOL && !barBetween(n.sym.px, x1)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px < m.sym.px ? n : m), undefined);
     let after = false;
+    // 收在长音音头上（右端离前一个音头不到 `WEDGE_STOP_ON_HEAD` 格、后一个音还在 4 格开外）：挂这个长音（破碎 m40 女高二收在第 3 拍降 B4 上）
+    // 钢琴大谱表：另一行在右端附近有音（宁静 m64 右手长和弦、左手八分音符），不算收在长音中间
+    const nextOther = notes.filter((n) => n.staff === pairBelow && n.sym.px >= x1 - sp * WEDGE_END_TOL && !barBetween(n.sym.px, x1)).reduce((m, n) => Math.min(m, n.sym.px), Infinity);
+    if (b && b.sym.px - x1 > sp * 4 && nextOther - x1 > sp * 4) {
+      const on = [a, ...row].filter((n) => n.sym.px <= x1 && x1 - n.sym.px <= sp * WEDGE_STOP_ON_HEAD && n !== a && !barBetween(n.sym.px, x1)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
+      if (on) b = on;
+    }
     if (!b) {
       b = [a, ...row].filter((n) => n.sym.px <= x1 && !barBetween(n.sym.px, x1)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
       after = !!b;
@@ -515,6 +544,10 @@ export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[],
     const inRow = notes.filter((n) => n.staff === a.staff).map((n) => n.sym.px);
     const contIn = wg.type === "crescendo" && inRow.length > 0 && wg.x0 < Math.min(...inRow) - sp * WEDGE_CONT_LEAD;
     const contOut = inRow.length > 0 && wg.x1 >= a.staff.box.right - sp * WEDGE_CONT_EDGE && wg.x1 > Math.max(...inRow) + sp;
+    a = mainOf(a);
+    if (b) b = mainOf(b);
+    // 从粘连团里切出来的（`fromBlob`）、起止又落在同一个音（和弦）上：整条落在一个音的身后，是符尾、杠之间凑出来的碎块（新编 078 m9、105 m19）
+    if (wg.fromBlob && b && (b === a || (b.group && b.group === a.group))) continue;
     if (!contIn && a.wedgeStart === undefined) {
       a.wedgeStart = wg.type;
       a.wedgeAt = { x0: wg.x0, cy: wg.cy, ...(wg.spread ? { spread: wg.spread } : {}) };
