@@ -65,6 +65,8 @@ const VERSE_LABEL_RE = /^[\s(（[]*((?:\d[\s.．、,，/]*){1,4})/;
 // 它是汉字，装配时不会像阿拉伯数字那样被自然丢弃，得在装配里显式跳过（见 CN_LABEL_AT）。
 export const CN_NUM = "一二三四五六七八九十";
 const CN_LABEL_RE = new RegExp(`^[\\s(（[]*([${CN_NUM}])\\s*([、.．])`);
+// 行首括起来的副歌标签：`(副一)` `(副)` `（副歌）`
+const SIDE_LABEL_RE = new RegExp(`^\\s*[(（]\\s*副歌?\\s*[${CN_NUM}\\d]?\\s*[)）]`);
 /** 行首段号 → 段号列表；不是段号则 null。 */
 function parseVerseLabel(raw: string): number[] | null {
   const cn = CN_LABEL_RE.exec(raw);
@@ -748,6 +750,7 @@ export async function recognizeLyrics(
   // 读出了中文数字时才认（《祭司的国度》`二` 读对、`一` 读成 `1`）——阿拉伯段号总带点（`1.`）。
   const marginNote = new Set<number>();                            // 按边注处理的块
   const marginLabel = new Map<string, string>();                   // (row,verse) → 中文段号
+  const sideLabel = new Map<string, string>();                     // (row,verse) → 行首「(副一)」这类标签，照原样
   const marginText = (s: number) =>
     (textsPos ? textsPos[s].map((c) => c.ch).join("") : texts![s]).replace(/[\s()（）]/g, "").replace(/^[-_‐‑–—]$/, "一");
   const cnMarginPage = chunks.some((c, s) => c.margin && marginText(s).length === 1 && CN_NUM.includes(marginText(s)));
@@ -759,6 +762,11 @@ export async function recognizeLyrics(
   // ── 趟 1：把每块的 rec 原文定下来（含「一」改判），按 (row,verse) 拼成**整行**原文 ──
   // 和弦行判定必须以整行为单位：短块上覆盖率不稳，单个 `Be`/`Ah` 会被误当成和弦。
   const rawTexts: string[] = [];
+  // 全角拉丁字母、数字、＃折成半角：和弦行常被 rec 读成全角（青年诗歌 16《神圣罗曼史》末行「CＢＣDCＧ」），文法认不得，
+  // 整行不算和弦行，挨着的「DC」反被当成跳转记号 D.C.。中文标点不动（歌词要原样）
+  const halfLatin = (t: string) => t.replace(/[Ａ-Ｚａ-ｚ０-９＃]/g, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0));
+  if (textsPos) for (const tp of textsPos) for (const c of tp) c.ch = halfLatin(c.ch);
+  else if (texts) for (let s = 0; s < texts.length; s++) texts[s] = halfLatin(texts[s]!);
   for (let s = 0; s < chunks.length; s++) {
     const { rowIdx, verse, cells, mark, above } = chunks[s];
     const raw0 = textsPos ? textsPos[s].map((c) => c.ch).join("") : texts![s];
@@ -823,6 +831,13 @@ export async function recognizeLyrics(
       if (cn && first) {
         const lx = textsPos ? fracToSrcX(textsPos[s][0]?.xFrac ?? 0) : cells[0].x;
         if (lx < rcx(first.bbox)) labelEnd = cn[0].length;
+      }
+      // 副歌行首的「(副一)」「(副二)」（青年诗歌 16《神圣罗曼史》）：落在首音左侧就剔出正文、照原样记成行首标签，
+      // 不参与段号映射（混进正文的话首音休止 0 对上了字，被改成 1）
+      const sub = !labelEnd && isFirstChunk && rowIdx >= 0 ? SIDE_LABEL_RE.exec(rawText) : null;
+      if (sub && first) {
+        const lx = textsPos ? fracToSrcX(textsPos[s][0]?.xFrac ?? 0) : cells[0].x;
+        if (lx < rcx(first.bbox)) { probe("lyrics.sideLabel"); labelEnd = sub[0].length; sideLabel.set(key, sub[0].trim().replace(/（/g, "(").replace(/）/g, ")")); }
       }
       // 没分隔符、跟正文读成一块的（选本 299「一在远山…」、195）：首字是中文数字、在首音左边半个字号以外，
       // 且第二个字正落在首音下方——真歌词首字是「一」的，它自己才在首音下，第二个字要到下一个音
@@ -1065,7 +1080,27 @@ export async function recognizeLyrics(
       }
     }
     const inStanza = (k: string) => { const [r, v] = k.split(":").map(Number); return stanzaFrom.has(r!) && v! >= stanzaFrom.get(r!)!; };
-    const dropKeys = [...perLine.keys()].filter((k) => chordKeys.has(k) || inStanza(k) || isFooterNoticeLine(rawByKey.get(k) ?? "") ||
+    // 与同谱行别的歌词行**错开**、字不落在音下的一行是夹在谱行间的普通文字（青年诗歌 16《神圣罗曼史》第 4 行词下
+    // 「(副歌接下一页 注：一、二段接副一，三、四段接副二。)」：字落在音符正下方（0.4 字号内）的只有 0.42，同行四段词都是 1.00）。
+    // 只比同一谱行：四声部谱的词对的是另一声部的音，整行几段一起低（三一来临歌末段 0.31~0.50），不能按绝对值卡
+    const alignRatio = (k: string): number | null => {
+      const [r] = k.split(":").map(Number);
+      const ns = staff[r!]?.nums ?? [];
+      const han = (perLine.get(k) ?? []).filter((p) => isHanzi(p.ch));
+      if (han.length < 4 || !ns.length) return null;
+      return han.filter((p) => Math.min(...ns.map((n) => Math.abs(rcx(n.bbox) - p.x))) <= numH * 0.4).length / han.length;
+    };
+    const ratioOf = new Map([...perLine.keys()].map((k) => [k, alignRatio(k)] as const));
+    const misaligned = (k: string): boolean => {
+      const a = ratioOf.get(k);
+      if (a == null || a >= 0.6) return false;
+      const row = k.split(":")[0];
+      const sib = [...ratioOf].filter(([k2, v]) => k2 !== k && k2.split(":")[0] === row && v != null && v >= 0.8).map(([, v]) => v!);
+      if (sib.length < 2 || median(sib) - a < 0.35) return false;
+      probe("lyrics.misalignedText");
+      return true;
+    };
+    const dropKeys = [...perLine.keys()].filter((k) => chordKeys.has(k) || inStanza(k) || isFooterNoticeLine(rawByKey.get(k) ?? "") || misaligned(k) ||
       (hanPage && junkLine(rawByKey.get(k) ?? "") && (probe("lyrics.junkLine"), true)));
     for (const k of dropKeys) {
       for (const p of perLine.get(k)!) if (p.region) dropped.add(p.region);
@@ -1275,6 +1310,10 @@ export async function recognizeLyrics(
     }
   }
 
+  for (const [key, label] of sideLabel) {
+    const [rowIdx, visual] = key.split(":").map(Number);
+    if (perLine.has(key)) (staff[rowIdx].lyricLabels ??= [])[versesOf(visual)[0] - 1] ??= label;
+  }
   if (TR) { TR.placed = {}; for (const [k, p] of perLine) TR.placed[k] = p.map(({ x, ch }) => ({ x, ch })); }
 
   // 每个音符各段歌词串里逐个汉字的来源（与串里汉字一一对应，没有来源的记 null）。
@@ -1293,6 +1332,16 @@ export async function recognizeLyrics(
     const notes = staff[rowIdx].nums;
     if (!notes.length) continue;
     placed.sort((a, b) => a.x - b.x);
+    // 两字之间的破折号「—」读成了「一」（青年诗歌 16《神圣罗曼史》「许配给你—我王」）：不在任何音下面（离最近的音中心
+    // 超过 0.6 字号；真字都正对着音），并到前一个字上，不占音位——占了的话前面的字整体往前挤一个音
+    for (let k = placed.length - 1; k >= 1; k--) {
+      if (placed[k]!.ch !== "一" || isHanzi(placed[k - 1]!.ch.slice(-1)) === false) continue;
+      const near = Math.min(...notes.map((n) => Math.abs(rcx(n.bbox) - placed[k]!.x)));
+      if (near <= numH * 0.6) continue;
+      probe("lyrics.dashBetween");
+      placed[k - 1] = { ...placed[k - 1]!, ch: placed[k - 1]!.ch + "—" };
+      placed.splice(k, 1);
+    }
     const M = placed.length;
     let ni = 0;
     const restHits: Array<{ ni: number; x: number; ch: string }> = []; // 落到休止上的字（事后复核）

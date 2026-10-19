@@ -9,6 +9,7 @@
 import { blankNonChord, normalizeChord, splitChordTokens } from "../omrkit/chordgrammar";
 import type { JpNum, Rect, StaffRow, TextRegion } from "../omrkit/types";
 import { rright } from "../omrkit/types";
+import { probe } from "./probe";
 
 /** 一个待落位的和弦记号：归一后的文本 + 源图起始 x + 源图框。 */
 export type ChordCand = { tok: string; x: number; bbox: Rect };
@@ -73,6 +74,7 @@ export function placeChords(
   const lefts = nums.map((n) => n.bbox.x);
   const extraY = new Map<JpNum, number[]>();   // 每个 extraChords 项的来源 y（并行编配撞车时取低的那排）
   const sorted = [...cands].sort((a, b) => a.x - b.x);
+  const placedX = new Map<JpNum, number>();   // 每个音上主和弦的左缘 x
   for (const [ci, c] of sorted.entries()) {
     const x = c.x;
     let i = 0;
@@ -101,7 +103,9 @@ export function placeChords(
     // 同一音符已有和弦：顺延到右邻空位（限一格）。两个和弦挤在同一音符上多半是印刷字距紧，
     // 直接丢掉会静默少一个记号。但**同名**的不顺延——同一拍点不会连着奏两个相同和弦，那只是
     // OCR 把一个记号读了两遍（跨 rec 块边界时常见），顺延会在谱上凭空多一个 G。
-    if (nums[i].chord === c.tok) continue;
+    // 隔开一个字号以上的同名和弦是两个记号（16《神圣罗曼史》副歌 `2 - - -` 上的 `D D`），照挂到增时线上
+    const prevX = placedX.get(nums[i]);
+    if (nums[i].chord === c.tok && !(prevX !== undefined && x - prevX > nums[i].bbox.h && nums[i].augment > 0)) continue;
     // 已有和弦、而本记号又**明明落在本音符时值之内**（frac>0，多半印在增时线上方）：
     // 那是长音里换和弦（「世上所有的民族」第二行 `1 - - 0` 的第三拍上另有一个 C/G），
     // 不是字距挤在一起。顺延给右邻会把它挪后一整拍，故改挂 extraChords + 拍位。
@@ -126,9 +130,22 @@ export function placeChords(
       }
       continue;
     }
+    // 长音上方挤着几个和弦（青年诗歌 16《神圣罗曼史》副歌 `5 - - -` 上印着 `G D Em`、`3 - - -` 上 `Em D C`、`2 - - -` 上 `D D`）：
+    // 没越过下一个音的，依次挂到本音的增时线上，不顺延给下一个音（那就推到下一小节了）
+    const n0 = nums[i];
+    if (n0.chord !== undefined && n0.augment > 0 && !n0.div && !n0.dot && x > n0.bbox.x && (i + 1 >= nums.length || x < lefts[i + 1]!)) {
+      const extra = n0.extraChords ??= [];
+      if (extra.length < n0.augment) {
+        probe("chord.stackedOnSustain");
+        extra.push({ tok: c.tok, offset: (1 + extra.length) / (1 + n0.augment) });
+        regions.push({ text: c.tok, bbox: c.bbox });
+      }
+      continue;
+    }
     if (nums[i].chord !== undefined && i + 1 < nums.length && nums[i + 1].chord === undefined) { i += 1; frac = 0; }
     if (nums[i].chord !== undefined) continue;
     nums[i].chord = c.tok;
+    placedX.set(nums[i], x);
     if (frac > 0) nums[i].chordOffset = frac;
     regions.push({ text: c.tok, bbox: c.bbox });
   }
