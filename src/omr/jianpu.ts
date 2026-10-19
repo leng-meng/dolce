@@ -681,8 +681,14 @@ function midbandHole(bin: Binary, b: Rect): boolean {
   return rows > 0 && holes * 2 > rows;
 }
 
-/** `refLyrics`：同一首诗歌的歌词文本（已解码），给了就与识别歌词互证纠错（reflyrics.ts），结果在 `lyricCheck`。 */
-export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refLyrics?: string; review?: boolean } = {}): Promise<RecognizedScore> {
+/** 阶段快照点（回归测试按阶段比对用，见 `trace`）。 */
+export type JianpuStage = "comps" | "classified" | "cores" | "rows" | "repeats" | "slurs" | "header" | "lyrics";
+
+/** `refLyrics`：同一首诗歌的歌词文本（已解码），给了就与识别歌词互证纠错（reflyrics.ts），结果在 `lyricCheck`。
+ *  `trace`：各阶段结束时回调一次中间产物（块表、谱行……）。**之后还会被就地改**，要留就在回调里当场序列化；不给就没有任何开销。 */
+export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
+  opts: { refLyrics?: string; review?: boolean; trace?: (stage: JianpuStage, data: unknown) => void } = {}): Promise<RecognizedScore> {
+  const trace = opts.trace;
   // 去连通：把贯穿全高的小节线（常像"桥"把弧/增时线粘成一团）从像素上擦掉重做连通域，
   // 让弧/小节线/数字各自独立、以干净连通块流入下面的 classify 与 detectSlurs。
   const raw = connectedComponents(bin, 4);
@@ -707,7 +713,9 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
     comps = splitArcInnerDots(bin, comps, numHOf(comps));
     comps = splitMordentDot(bin, comps, numHOf(comps));
   }
+  trace?.("comps", comps);
   const { c, numH } = classify(comps, bin);
+  trace?.("classified", { numH, ...c });
 
   // 数字块 → 数字格（拆分粘连/连音，并测各自下划线 div）。
   // 与数字粘连的圆滑线弧帽在此切出，作为合成连通块补进 comps 供 detectSlurs 检测。
@@ -774,6 +782,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
     }
   }
 
+  trace?.("cores", { allCores, meterMarks });
   const rowsC = groupRows(allCores, numH);
   // 每行的 y 范围 + 穿过的小节线。
   const rowMetaAll = rowsC.map((rd) => {
@@ -2189,10 +2198,12 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
   }
   for (const r of useRows) r.meters?.sort((a, b) => a.x - b.x);
 
+  trace?.("rows", useRows);
   // 反复线与一/二房：以冒号点对/顶括线几何识别，锚到相邻音符，建模型时提升为小节线。
   await detectRepeatsAndEndings(bin, comps, c.dots, useRows, numH, ocr);
   // segno 𝄋（跳转目标）：字形识别，锚到下方音符所在小节的左线。
   detectSegno(comps, useRows, numH);
+  trace?.("repeats", useRows);
 
   // 多连音（三连音 ⌒3⌒）：先于 slur 认——括线的两半自己也够得着圆滑线的判据，认出来后
   // 要把它们从 detectSlurs 的输入里摘掉。「几连」靠 OCR 读括线上那个小号数字；
@@ -2250,6 +2261,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
   // comps 之外再补上与数字粘连切出的弧帽（arcComps）。与小节线粘连的弧已在 untangleBridged
   // 去连通阶段还原为 comps 里的独立连通块，这里天然一并检测。
   const slurRefits = detectSlurs(bin, [...comps, ...arcComps].filter((k) => !tupComps.has(k)), useRows, numH);
+  trace?.("slurs", useRows);
 
   // 页眉：标题/作词/作曲/调号/速度（同样仅 PaddleOCR 后端）。
   // **必须排在歌词/和弦识别之前**：第一谱行的「上方带」（和弦所在）与页眉 ROI 在几何上是重叠的，
@@ -2273,6 +2285,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
     meters = h.meters; meterNote = h.meterNote;
     tempo = h.tempo; tempoBeat = h.tempoBeat;
     headerRegions = h.regions.length ? h.regions : undefined;
+    trace?.("header", h);
   }
   // 与页眉同排的「前奏」字样：认出来是两三个汉字就当段落词，挂到它右边第一个音上（123 `"^前奏"`）
   if (preludeLabel && ocr.recognizeRegion) {
@@ -2354,6 +2367,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
     resolveSlurRefits(slurRefits);
     // 复核歌词字（再跑一遍逐字候选，费时）：`review: false` 时不做（批量回归、只要文本的命令行）
     if (opts.review !== false) await markLyricDoubts(useRows, lr.hooks);
+    trace?.("lyrics", useRows);
   }
   {
     const verses = Math.max(0, ...useRows.flatMap((r) => r.nums.map((n) => n.lyrics?.length ?? 0)));
