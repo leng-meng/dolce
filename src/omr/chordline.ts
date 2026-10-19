@@ -8,6 +8,7 @@
 // （整行和弦常被连写成 "C#mF#mBmBm7E"）。
 import { blankNonChord, normalizeChord, splitChordTokens } from "../omrkit/chordgrammar";
 import type { JpNum, Rect, StaffRow, TextRegion } from "../omrkit/types";
+import { rright } from "../omrkit/types";
 
 /** 一个待落位的和弦记号：归一后的文本 + 源图起始 x + 源图框。 */
 export type ChordCand = { tok: string; x: number; bbox: Rect };
@@ -71,7 +72,8 @@ export function placeChords(
   // 凭空算出 0.35~0.40 的假偏移（音符半宽在密排行里就占相邻间距的近四成）。
   const lefts = nums.map((n) => n.bbox.x);
   const extraY = new Map<JpNum, number[]>();   // 每个 extraChords 项的来源 y（并行编配撞车时取低的那排）
-  for (const c of [...cands].sort((a, b) => a.x - b.x)) {
+  const sorted = [...cands].sort((a, b) => a.x - b.x);
+  for (const [ci, c] of sorted.entries()) {
     const x = c.x;
     let i = 0;
     while (i + 1 < lefts.length && lefts[i + 1] <= x) i++;
@@ -85,7 +87,14 @@ export function placeChords(
       const gap = lefts[i + 1] - lefts[i];
       if (gap > 1) {
         const t = (x - lefts[i]) / gap;
-        if (t >= 0.65) { i += 1; }        // 明显更贴右邻 → 归右邻、正对音符
+        // 两音之间隔着小节线、和弦左缘已到线前 0.3 字号以内：是下一小节的强拍和弦，不是上一小节末音的半拍换和弦。
+        // 青年诗歌 12《大好信息》`4 3̲ 2̲|5̣ 4` 的 E7(D7) 左缘在线后（0.63 处）、`3 2|1 -` 的 A(G) 在线前 10px（0.2 字号，0.57 处），
+        // 括号备选和弦整组居中印在音上，主和弦左缘就探到了前一个音那边。线内的不动（青年诗歌 5 `5·1̲ 2` 的 G 在 1̲ 上）；
+        // 下一小节首音另有自己的和弦也不动（世上所有的民族 `… Dsus4 1̲|D7 5 - - -`，Dsus4 贴着线印在末音上）
+        const bar = row.barlineXs.find((bx) => bx > rright(nums[i].bbox) && bx < lefts[i + 1]);
+        const nx = sorted[ci + 1]?.x ?? Infinity;
+        const nextOwn = i + 2 < lefts.length ? nx < lefts[i + 2] - (lefts[i + 2] - lefts[i + 1]) * 0.35 : nx < Infinity;
+        if (t >= 0.65 || (t >= 0.35 && bar !== undefined && x >= bar - nums[i].bbox.h * 0.3 && !nextOwn)) { i += 1; }        // 明显更贴右邻 → 归右邻、正对音符
         else if (t >= 0.35) frac = t;     // 夹在两音符之间 → 挂左音符 + 拍内偏移
       }
     }

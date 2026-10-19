@@ -637,6 +637,69 @@ export function splitLineOverArc(bin: Binary, comps: Component[], numH: number):
   return out;
 }
 
+/** 弧顶粘着上方的一个字形：和弦 `G(Bm)` 的左括号脚正落在 `2·3̲` 的弧上（青年诗歌 13《爱使我们相聚一起》块 112×77，字号 48），
+ *  块高 1.6 字号、框里大半是空的，过不了弧的高度门，整条弧丢了。
+ *  判据：块的**下包络**（每列最低一段墨）是一条弧——横贯九成以上的列、中位厚 ≤0.15 字号、两端比中间低 ≥0.15 字号；
+ *  包络之上剩下的墨只占一段窄宽（≤0.6 字号，一个括号/字母的笔画），且整段都在弧顶以上起笔。
+ *  拆成「弧 + 上面那个字形」两块。 */
+export function splitArcUnderGlyph(bin: Binary, comps: Component[], numH: number): Component[] {
+  const out: Component[] = [];
+  let nextId = 7_100_000;
+  for (const k of comps) {
+    const b = k.bbox;
+    if (b.w < numH * 1.5 || b.h <= numH * 1.05 || b.h > numH * 2) { out.push(k); continue; }
+    const sub: Binary = { w: b.w, h: b.h, data: new Uint8Array(b.w * b.h) };
+    for (let yy = 0; yy < b.h; yy++) for (let xx = 0; xx < b.w; xx++) sub.data[yy * b.w + xx] = bin.data[(b.y + yy) * bin.w + b.x + xx];
+    const labels = new Int32Array(b.w * b.h);
+    const self = connectedComponents(sub, 1, labels).filter((p) => p.bbox.w === b.w && p.bbox.h === b.h)
+      .sort((p, q) => q.area - p.area)[0];
+    if (!self) { out.push(k); continue; }
+    const own = (xx: number, yy: number) => labels[yy * b.w + xx] === self.id;
+    // 每列最低墨点与最低那段的厚度
+    const low: number[] = [], thick: number[] = [];
+    for (let xx = 0; xx < b.w; xx++) {
+      let yy = b.h - 1;
+      while (yy >= 0 && !own(xx, yy)) yy--;
+      low.push(yy);
+      let t = 0;
+      while (yy - t >= 0 && own(xx, yy - t)) t++;
+      thick.push(t);
+    }
+    const inked = low.filter((y) => y >= 0).length;
+    const t0 = median(thick.filter((t) => t > 0));
+    if (inked < b.w * 0.9 || t0 > numH * 0.15) { out.push(k); continue; }
+    const edge = Math.max(2, Math.round(b.w * 0.08));
+    const ends = Math.min(...low.slice(0, edge).filter((y) => y >= 0), ...low.slice(-edge).filter((y) => y >= 0));
+    const top = Math.min(...low.filter((y) => y >= 0));
+    if (ends - top < numH * 0.15) { out.push(k); continue; }
+    // 弧的像素：每列最低墨点往上一个中位厚（加一像素余量）
+    const cap = Math.ceil(t0) + 1;
+    const arcPx = (xx: number, yy: number) => low[xx] >= 0 && yy <= low[xx] && yy > low[xx] - cap;
+    let gx0 = Infinity, gx1 = -1, gy1 = -1;
+    for (let yy = 0; yy < b.h; yy++) for (let xx = 0; xx < b.w; xx++) {
+      if (!own(xx, yy) || arcPx(xx, yy)) continue;
+      gx0 = Math.min(gx0, xx); gx1 = Math.max(gx1, xx); gy1 = Math.max(gy1, yy);
+    }
+    if (gx1 < 0 || gx1 - gx0 + 1 > numH * 0.6) { out.push(k); continue; }
+    const box = (pick: (xx: number, yy: number) => boolean): Component | null => {
+      let x0 = Infinity, yy0 = Infinity, x1 = -1, yy1 = -1, area = 0;
+      for (let yy = 0; yy < b.h; yy++) for (let xx = 0; xx < b.w; xx++) {
+        if (!own(xx, yy) || !pick(xx, yy)) continue;
+        area++; x0 = Math.min(x0, xx); x1 = Math.max(x1, xx); yy0 = Math.min(yy0, yy); yy1 = Math.max(yy1, yy);
+      }
+      if (!area) return null;
+      const r = { x: b.x + x0, y: b.y + yy0, w: x1 - x0 + 1, h: yy1 - yy0 + 1 };
+      return { id: nextId++, bbox: r, area, cx: rcx(r), cy: rcy(r) };
+    };
+    const arc = box(arcPx), glyph = box((xx, yy) => !arcPx(xx, yy));
+    // 字形得从弧顶以上起笔（括号脚压在弧上，头在上面）
+    if (!arc || !glyph || glyph.bbox.y > arc.bbox.y - numH * 0.3) { out.push(k); continue; }
+    probe("splitArcUnderGlyph");
+    out.push(arc, glyph);
+  }
+  return out;
+}
+
 export function splitArcEndDots(bin: Binary, comps: Component[], numH: number, strokeMax = 0.12, fat = false): Component[] {
   const out: Component[] = [];
   let nextId = 2_000_000;

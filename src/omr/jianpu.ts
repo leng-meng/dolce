@@ -21,7 +21,7 @@ import { detectSegno } from "./segno";
 import { median, overlapX, unionRect } from "../omrkit/geom";
 import { accidentalOf } from "./accidental";
 import { probe } from "./probe";
-import { mergeBrokenHlines, untangleBridged, splitBarDash, splitBarCap, splitDigitDash, splitArcTail, splitArcFootDigit, splitLineOverArc, splitLineDot, splitArcEndDots, splitArcInnerDots, splitMordentDot } from "./compsurgery";
+import { mergeBrokenHlines, untangleBridged, splitBarDash, splitBarCap, splitDigitDash, splitArcTail, splitArcFootDigit, splitLineOverArc, splitArcUnderGlyph, splitLineDot, splitArcEndDots, splitArcInnerDots, splitMordentDot } from "./compsurgery";
 import { splitGluedSharp, splitBlock, meterCandidates, groupRows } from "./digitcores";
 import { buildJpNums, promoteGluedUpDots, resolvePairOctaveDots } from "./jpnums";
 import { rowInk, tightBox, columnInk } from "./inkprobe";
@@ -696,6 +696,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
   comps = splitArcTail(bin, comps, numHOf(comps));
   comps = splitArcFootDigit(bin, comps, numHOf(comps));
   comps = splitLineOverArc(bin, comps, numHOf(comps));
+  comps = splitArcUnderGlyph(bin, comps, numHOf(comps));
   comps = splitLineDot(bin, comps, numHOf(comps), isVoicedPage(comps, numHOf(comps)));
   // 弧端切点在四声部页上也做：这种页的线跨两个声部（≥2.6 字号），进不了「干净页」的尺子；弧又贴着音起笔，
   // 右脚常压在下一个音的高音点上（新编赞美诗·四声部 172 `1̇⌒2̇` 弧连点 58×22，整本漏高音点三百多处）
@@ -1294,7 +1295,10 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
   // 真「1」是一根竖笔（该页 17px 宽），这些 7 与别的数字一样宽（24~27px）。门：宽过本页真 1 中位宽的 1.35 倍，
   // 且顶部两成高度里有一道横贯七成宽度的横笔（7 的顶横；1 顶上只有一小撇）。
   {
-    const ones = allDigits.filter((k) => digitCache.get(k.bbox) === 1).map((k) => k.bbox.w).sort((a, b) => a - b);
+    // 真 1 的宽只取不高过本页数字中位高 1.2 倍的：和弦行里的竖线也读成 1（青年诗歌 12《大好信息》14×58，数字 44 高），
+    // 比衬线 1（22px，带底座、顶撇也有七成宽）窄一大截，混进来分位宽就成了 14，两个真 1 跟着被改成 7。
+    const digitH = median(allDigits.map((k) => k.bbox.h));
+    const ones = allDigits.filter((k) => digitCache.get(k.bbox) === 1 && k.bbox.h <= digitH * 1.2).map((k) => k.bbox.w).sort((a, b) => a - b);
     const oneW = ones.length >= 3 ? ones[Math.floor(ones.length * 0.3)]! : 0;   // 取偏窄的分位，免得被误读的 7 抬高
     const topBar = (b: Rect): boolean => {
       const y1 = b.y + Math.max(2, Math.round(b.h * 0.2));

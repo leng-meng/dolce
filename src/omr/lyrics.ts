@@ -375,7 +375,15 @@ function fillLeadingVerses(staff: StaffRow[], copied?: (n: JpNum, from: number, 
     const first = staff.findIndex((_, r) => has(r, v));
     if (first <= 0) continue;                       // 从第一谱行就有词（或整段无词）→ 无需补
     if (!has(first, 0)) continue;                   // 分岔行第 1 段反而空 → 是"上移"结构，别碰
-    for (let r = 0; r < first; r++) {
+    // 该段从反复 `‖:` 之后才印：第 2 段词是反复第二遍唱的，`‖:` 前面那几行只唱一遍、不补
+    //（青年诗歌 13《爱使我们相聚一起》前 4 行一行词，第 5 行起 `‖:` 两行词）
+    const firstLyric = staff[first].nums.findIndex((n) => (n.lyrics?.[v] ?? "") !== "");
+    let from = 0;
+    for (let r = first; r >= 0 && !from; r--) {
+      const k = staff[r].nums.findIndex((n) => n.repeatForward);
+      if (k >= 0 && (r < first || k <= firstLyric)) from = r;
+    }
+    for (let r = from; r < first; r++) {
       if (has(r, v) || !has(r, 0)) continue;
       for (const n of staff[r].nums) {
         const t = n.lyrics?.[0];

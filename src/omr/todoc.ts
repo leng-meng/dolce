@@ -292,7 +292,9 @@ function measuresOfRows(rows: readonly StaffRow[], score: RecognizedScore, ids: 
       if (m.rightX !== null && doubleXs.has(m.rightX)) doubleIdx.add(idx);
       if (m.rightX !== null && endXs.has(m.rightX)) endStyleIdx.add(idx);
     };
-    if (openTail && allMeasures.length) {
+    // 行首就是 `‖:`（上一行末开口）：那道反复线就是本行首小节的左线，不并进上一行——
+    // 青年诗歌 13《爱使我们相聚一起》`… 2|1 - - $ ‖:3̲ 4̲|5 …`，并了反复线就落到 `1 - -` 前面
+    if (openTail && allMeasures.length && !ms[0].notes[0]?.repeatForward) {
       // 跨行小节：原图换行落在小节中间，记在上一行最后一个音上（`Chord.lineBreakAfter`），写出时原位断行
       const prev = allMeasures[allMeasures.length - 1];
       if (prev.length) breakAfterNum.add(prev[prev.length - 1]);
