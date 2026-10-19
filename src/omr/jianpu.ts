@@ -1162,7 +1162,10 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
         }
         return false;
       };
-      const wideSharp = (sysOf.has(m) ? raised : voicedPage && k.bbox.h < medH * 0.8) && hungLow && k.bbox.w <= medW * 1.5 &&
+      // 单声部行上只收**顶底都悬高**的（顶高出 0.25、底高出 0.3 字高）：青年诗歌 14《雲彩》`7 6 ♯5` 的 ♯ 粗印糊成一团 23×40，
+      // 本行数字中位宽 26，差 1px 过不了宽度门，当音符读成了 1
+      const hungBoth = k.bbox.h <= medH * 1.1 && nx.bbox.y - k.bbox.y >= medH * 0.25 && rbottom(nx.bbox) - rbottom(k.bbox) >= medH * 0.3;
+      const wideSharp = (sysOf.has(m) ? raised : voicedPage ? k.bbox.h < medH * 0.8 : hungBoth) && hungLow && k.bbox.w <= medW * 1.5 &&
         accidentalOf(bin, k.bbox) === "sharp" && !underlined(k.bbox);
       if (k.bbox.w > medW * 0.85 && !wideSharp) continue;
       if (k.bbox.h < medH * 0.45 || k.bbox.w < medW * 0.3) continue;         // 太小 → 点/碎片

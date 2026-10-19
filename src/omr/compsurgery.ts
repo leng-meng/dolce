@@ -637,11 +637,11 @@ export function splitLineOverArc(bin: Binary, comps: Component[], numH: number):
   return out;
 }
 
-/** 弧顶粘着上方的一个字形：和弦 `G(Bm)` 的左括号脚正落在 `2·3̲` 的弧上（青年诗歌 13《爱使我们相聚一起》块 112×77，字号 48），
- *  块高 1.6 字号、框里大半是空的，过不了弧的高度门，整条弧丢了。
- *  判据：块的**下包络**（每列最低一段墨）是一条弧——横贯九成以上的列、中位厚 ≤0.15 字号、两端比中间低 ≥0.15 字号；
- *  包络之上剩下的墨只占一段窄宽（≤0.6 字号，一个括号/字母的笔画），且整段都在弧顶以上起笔。
- *  拆成「弧 + 上面那个字形」两块。 */
+/** 弧顶粘着上方的和弦字：`G(Bm)` 的左括号脚落在 `2·3̲` 的弧上（青年诗歌 13《爱使我们相聚一起》块 112×77，字号 48）、
+ *  `Am` 的 m 几只脚立在 `4̇ - 2̇` 的弧上、A 还伸出弧左端（14《雲彩》尾声 160×61，字号 43）。块高过了弧的高度门，整条弧丢了。
+ *  判据：块的**下包络**（每列最低墨点）切成平滑段（相邻列落差 ≤ max(2, 0.06 字号)），最长那段 ≥1.2 字号宽、
+ *  最低那段墨中位厚 ≤0.15 字号、两端比最高处低 ≥0.15 字号（拱形）就是弧——伸出弧外的字母（A 的脚、横笔）在别的高度上断开。
+ *  剩下的墨得整个在弧顶以上 0.3 字号起笔（字立在弧上）。拆成「弧 + 上面的字」两块。 */
 export function splitArcUnderGlyph(bin: Binary, comps: Component[], numH: number): Component[] {
   const out: Component[] = [];
   let nextId = 7_100_000;
@@ -665,22 +665,27 @@ export function splitArcUnderGlyph(bin: Binary, comps: Component[], numH: number
       while (yy - t >= 0 && own(xx, yy - t)) t++;
       thick.push(t);
     }
-    const inked = low.filter((y) => y >= 0).length;
-    const t0 = median(thick.filter((t) => t > 0));
-    if (inked < b.w * 0.9 || t0 > numH * 0.15) { out.push(k); continue; }
-    const edge = Math.max(2, Math.round(b.w * 0.08));
-    const ends = Math.min(...low.slice(0, edge).filter((y) => y >= 0), ...low.slice(-edge).filter((y) => y >= 0));
-    const top = Math.min(...low.filter((y) => y >= 0));
-    if (ends - top < numH * 0.15) { out.push(k); continue; }
-    // 弧的像素：每列最低墨点往上一个中位厚（加一像素余量）
-    const cap = Math.ceil(t0) + 1;
-    const arcPx = (xx: number, yy: number) => low[xx] >= 0 && yy <= low[xx] && yy > low[xx] - cap;
-    let gx0 = Infinity, gx1 = -1, gy1 = -1;
-    for (let yy = 0; yy < b.h; yy++) for (let xx = 0; xx < b.w; xx++) {
-      if (!own(xx, yy) || arcPx(xx, yy)) continue;
-      gx0 = Math.min(gx0, xx); gx1 = Math.max(gx1, xx); gy1 = Math.max(gy1, yy);
+    // 下包络按相邻列落差 ≤ max(2, 0.06 字号) 切成平滑段，最长的一段是弧（字母的脚、横笔在别的高度上断开）
+    const step = Math.max(2, numH * 0.06);
+    let best = { x0: 0, x1: -1 }, x0 = -1;
+    for (let xx = 0; xx <= b.w; xx++) {
+      const ok = xx < b.w && low[xx]! >= 0 && (x0 >= 0 ? Math.abs(low[xx]! - low[xx - 1]!) <= step : true);
+      if (ok && x0 < 0) x0 = xx;
+      else if (!ok && x0 >= 0) {
+        if (xx - 1 - x0 > best.x1 - best.x0) best = { x0, x1: xx - 1 };
+        x0 = xx < b.w && low[xx]! >= 0 ? xx : -1;
+      }
     }
-    if (gx1 < 0 || gx1 - gx0 + 1 > numH * 0.6) { out.push(k); continue; }
+    const runW = best.x1 - best.x0 + 1;
+    const inRun = (xx: number) => xx >= best.x0 && xx <= best.x1;
+    const t0 = median(thick.filter((t, xx) => t > 0 && inRun(xx)));
+    let topY = Infinity;
+    for (let xx = best.x0; xx <= best.x1; xx++) topY = Math.min(topY, low[xx]!);
+    const endY = Math.min(low[best.x0]!, low[best.x1]!);
+    if (runW < numH * 1.2 || t0 > numH * 0.15 || endY - topY < numH * 0.15) { out.push(k); continue; }
+    // 弧的像素：段内每列最低墨点往上一个中位厚（加一像素余量）；立在弧上的字脚高出这一截，归字
+    const cap = Math.ceil(t0) + 1;
+    const arcPx = (xx: number, yy: number) => inRun(xx) && yy <= low[xx]! && yy > low[xx]! - cap;
     const box = (pick: (xx: number, yy: number) => boolean): Component | null => {
       let x0 = Infinity, yy0 = Infinity, x1 = -1, yy1 = -1, area = 0;
       for (let yy = 0; yy < b.h; yy++) for (let xx = 0; xx < b.w; xx++) {
@@ -692,7 +697,7 @@ export function splitArcUnderGlyph(bin: Binary, comps: Component[], numH: number
       return { id: nextId++, bbox: r, area, cx: rcx(r), cy: rcy(r) };
     };
     const arc = box(arcPx), glyph = box((xx, yy) => !arcPx(xx, yy));
-    // 字形得从弧顶以上起笔（括号脚压在弧上，头在上面）
+    // 字得从弧顶以上起笔（字脚压在弧上，字身在上面）
     if (!arc || !glyph || glyph.bbox.y > arc.bbox.y - numH * 0.3) { out.push(k); continue; }
     probe("splitArcUnderGlyph");
     out.push(arc, glyph);
