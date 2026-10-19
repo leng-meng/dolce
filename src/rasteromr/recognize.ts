@@ -332,6 +332,42 @@ const KEY_OVERLAP = 0.5;
 const LATIN_CHAIN = 3;
 /** 拉丁行靠中文歌词行作保时，那行中文至少这么多个汉字。 */
 const CJK_SEED_MIN = 4;
+/** 孤行离上面那行谱底最多几个线距（同末行谱下第一行歌词，`lyric.ts` 的 TAIL_FIRST） */
+const LONE_FIRST = 6;
+/** 歌词条里的墨迹列连成的块（条内像素 `[起 x, 止 x, 上 y, 下 y)`），横向缝不过 `gap`（页面像素）的并掉 */
+function inkRuns(st: LyricStrip, gap: number): [number, number, number, number][] {
+  const g = gap / (st.box.w / st.w);
+  const top = new Int32Array(st.w).fill(-1);
+  const bot = new Int32Array(st.w).fill(-1);
+  for (let y = 0; y < st.h; y++)
+    for (let x = 0; x < st.w; x++)
+      if (st.data[y * st.w + x]) {
+        if (top[x] < 0) top[x] = y;
+        bot[x] = y + 1;
+      }
+  /** `[起 x, 止 x, 上 y, 下 y)`，条内像素 */
+  const runs: [number, number, number, number][] = [];
+  for (let x = 0; x < st.w; x++) {
+    if (top[x] < 0) continue;
+    const last = runs[runs.length - 1];
+    if (last && x - last[1] <= g) {
+      last[1] = x + 1;
+      last[2] = Math.min(last[2], top[x]);
+      last[3] = Math.max(last[3], bot[x]);
+    } else runs.push([x, x + 1, top[x], bot[x]]);
+  }
+  return runs;
+}
+/** 孤行字高的下限（本页歌词条字高中位数的倍数） */
+const LONE_MIN_H = 0.8;
+/** 声部、乐器标签（短拉丁行里单独成词的不是歌词） */
+const VOICE_LABEL_RE = /^(?:sopranos?|altos?|tenors?|bass(?:es)?|baritones?|men|women|all|solo|tutti|unis(?:on)?|div|piano|organ|choir|voices?)$/i;
+/** 力度词（短拉丁行里单独成词的不是歌词） */
+const DYNAMIC_WORD_RE = /^(?:p{1,4}|f{1,4}|m[pf]|s?fz|sf|rfz?|fp)$/;
+/** 反复跳转字样（短拉丁行里单独成词的不是歌词：颂赞与尊贵谱末的「Fine」） */
+const JUMP_WORD_RE = /^(?:fine|coda|D\.?C\.?|D\.?S\.?)$/i;
+/** 表情、速度字样（短拉丁行里单独成词的不是歌词：望十架「rit」「slower」、爱是从神而来「dolce」） */
+const EXPR_WORD_RE = /^(?:rit|ritard|riten|rall|accel|slower|faster|slowly|broadly|dolce|legato|cantabile|espr|espress|marcato|maestoso|sost|ten|tenuto|lento|largo|adagio|andante|moderato|allegro|vivace|simile|sim|subito|sub|calando|morendo|meno|piu|più|mosso|rubato|tranq|tranquillo)\.?$/i;
 /** 表情文字的术语、页脚注的字样（OCR 不出空格，按连写匹配，**别收会落在连写词缝里的短串**：「For all gen-」连写含 rall、「Spirit.」含 rit.）：带这些的拉丁行不是歌词（望十架 p1 页脚「Words: … Tune: …」「Flute part is on page 43」）。
  *  页脚注另认：脚注号 `*` 打头、`Tune;`（OCR 常把冒号读成分号）、生卒年 `1844-1927`（望十架 p1「** Beneath the Cross of Jesus - Tune; ST. CHRISTOPHER, by Frederick C. Maker (1844-1927)」被收成男声一行歌词） */
 const DIRECTION_TERM_RE = /tempo|cresc|poco|molto|unis\.|dim\.|rall\.|stagger|section|words[:;]|tune[:;]|music[:;]|page\d|copyright|©|^[*＊]|\d{4}[-–—]\d{4}/i;
@@ -4590,10 +4626,42 @@ export async function recognizeRasterPage(
         const b = { x: Math.round(sg.box.left), y: Math.round(sg.box.top), w: Math.max(1, Math.round(sg.box.right - sg.box.left)), h: Math.max(1, Math.round(sg.box.bottom - sg.box.top)) };
         return { id: -1 - k, bbox: b, area: b.w * b.h, cx: b.x + b.w / 2, cy: b.y + b.h / 2 };
       });
+    // **孤行**（一行只印一个音节：宁静女高 m32 尾句「人」、Gloria 散在各系统的「ri」「a」）：每个字格都正对上面那行谱的一个音、
+    // 离谱表不远、离下一行谱也不贴着才收；力度框里的不算。读出来是不是字交给 OCR 之后那一道（字高、字形，见下面出歌词对象处）
+    const keepLone = (row: LyricRow, normal: LyricRow[]) => {
+      const st = pg.staves[row.staffIndex];
+      if (!st) return false;
+      const sp = unit.space;
+      const top = Math.min(...row.cells.map((c) => c.y));
+      const bot = Math.max(...row.cells.map((c) => c.y + c.h));
+      if (top - st.box.bottom < sp * 0.5 || top - st.box.bottom > sp * LONE_FIRST) return false;
+      // 不比本页歌词首行贴谱表近太多（首行离谱表距离中位数的六成）：谱表下的倒延长号（弧加一点）读成「心」，离谱表不到一格，歌词首行在两格开外（新编 209）
+      const firstOff = new Map<number, number>();
+      for (const r of normal) {
+        const s0 = pg.staves[r.staffIndex];
+        if (!s0) continue;
+        const off = Math.min(...r.cells.map((c) => c.y)) - s0.box.bottom;
+        firstOff.set(r.staffIndex, Math.min(firstOff.get(r.staffIndex) ?? Infinity, off));
+      }
+      const offs = [...firstOff.values()].filter((v) => v > 0).sort((a, b) => a - b);
+      if (offs.length && top - st.box.bottom < offs[offs.length >> 1] * 0.6) return false;
+      const next = pg.staves[row.staffIndex + 1];
+      if (next && next.box.top - bot < sp) return false;
+      const xs = notes.filter((n) => n.staff === st && !n.rest).map((n) => (n.sym.box.left + n.sym.box.right) / 2);
+      return row.cells.every((c) => {
+        if (c.h > sp * 2.2 || c.w < sp * 0.4) return false;
+        // 碰着已认出的音头的不是字（破碎 m39 低音谱表下第三加线的 D2 连着加线成了一格）
+        if (notes.some((n) => c.x < n.sym.box.right && c.x + c.w > n.sym.box.left && c.y < n.sym.box.bottom && c.y + c.h > n.sym.box.top)) return false;
+        if (dynamics.some((d) => d.box && c.x < d.box.right && c.x + c.w > d.box.left && c.y < d.box.bottom && c.y + c.h > d.box.top)) return false;
+        const cx = c.x + c.w / 2;
+        return xs.some((x) => Math.abs(x - cx) <= Math.max(sp, c.w * 0.5));
+      });
+    };
     const rows = findLyricRows(
       [...blobs.filter((c) => (!claimed.has(c.id) || orphanHead(c)) && !dictClaimed.has(c.id)), ...segBlobs],
       pg.staves.map((st) => ({ top: st.box.top, bottom: st.box.bottom, left: st.box.left, right: st.box.right })),
       unit,
+      keepLone,
     );
     // **谱表上方文字行里的假音**：系统行首谱表上方印的「（副歌）」之类小字，圈状的笔画被认成符头
     //（新编赞美诗里四十来首在副歌那一行行首多出一个 D6；加线是按头的位置补出来的，查加线拦不住）。
@@ -4602,7 +4670,7 @@ export async function recognizeRasterPage(
       // 要落在**某一个字格里**（不是整行的跨度里），且那一行是六个字以内的短标签：合唱谱上一个系统最末一行歌词、
       // 速度术语就在下一个系统最上面那行谱的上方，按行跨度判会罩住女高上加线的真音（合唱谱扫描档音符 80.7 → 75.1；
       // 只限短标签、仍按跨度判 79.9）
-      const spans = rows.filter((row) => row.cells.length >= 2 && row.cells.length <= 6).flatMap((row) => row.cells.map((c) => ({ x0: c.x, x1: c.x + c.w, y0: c.y, y1: c.y + c.h })));
+      const spans = rows.filter((row) => !row.lone && row.cells.length >= 2 && row.cells.length <= 6).flatMap((row) => row.cells.map((c) => ({ x0: c.x, x1: c.x + c.w, y0: c.y, y1: c.y + c.h })));
       const pad = unit.space * 0.1;
       const topStaves = new Set(pg.systems.map((sy) => sy.staves[0]));
       const inText = (n: StaffNote) => {
@@ -4616,12 +4684,15 @@ export async function recognizeRasterPage(
       };
       for (let i = notes.length - 1; i >= 0; i--) if (inText(notes[i])) notes.splice(i, 1);
     }
-    for (const row of rows) for (const cell of row.cells) ledger.claim(cell, "lyric");
-    for (const row of rows) {
+    // 孤行是猜的，等 OCR 那道验过才记账（下面出歌词对象处）：先记了，验不过的那格墨也成了「歌词」，
+    // 弧的一截落在里面就按字的弯笔从严判（Holy Holy Holy m14 低音那条圆滑线丢了）
+    const claimRow = (row: LyricRow) => {
+      for (const cell of row.cells) ledger.claim(cell, "lyric");
       const st = pg.staves[row.staffIndex];
       // 往下让半格：与歌词同一高度、印在末字右边的松叶，中心比字的下沿还低几个像素（爱是从神而来 p5 m63 女声那条），不算在歌词下面
       if (st) lyricBottom.set(st, Math.max(lyricBottom.get(st) ?? -Infinity, ...row.cells.map((c) => c.y + c.h + unit.space * LYRIC_BELOW)));
-    }
+    };
+    for (const row of rows) if (!row.lone) claimRow(row);
     const objs = [];
     lyricStats.rows = rows.length;
     const stripRow = new Map<LyricStrip, LyricRow>();
@@ -4686,18 +4757,79 @@ export async function recognizeRasterPage(
         }
       }
     }
+    // **短拉丁音节行**（字母不到 `LATIN_MIN_CHAINED`：花腔 Gloria 拆在各系统的「Glo」「ri」「a」）：
+    // 压在力度框里的字母（`f` 读成 T）先剔掉，剩下的每个词都正对上面那行谱的一个音才收。
+    // 单个大写字母不收（排练号），带表情术语、力度词的不收
+    /** 剔过力度字母的 OCR 字（短拉丁行用） */
+    const charsFix = new Map<LyricStrip, OcrChar[]>();
+    for (const st of ocr ? lyricStrips : []) {
+      if (latinStrips.has(st)) continue;
+      const row = stripRow.get(st)!;
+      const staff = pg.staves[row.staffIndex];
+      const chs0 = ocr!.get(stripKey(st));
+      if (!staff || !chs0 || chs0.some((c) => /\p{Script=Han}|\d/u.test(c.ch))) continue;
+      const xOf = (c: OcrChar) => st.box.x + c.xFrac * st.box.w;
+      const sy0 = st.box.y, sy1 = st.box.y + st.box.h;
+      const chs = chs0.filter((c) => !dynamics.some((d) => d.box && xOf(c) >= d.box.left - unit.space * 0.3 && xOf(c) <= d.box.right + unit.space * 0.3 && d.box.top < sy1 && d.box.bottom > sy0));
+      const letters = chs.filter((c) => /[A-Za-z]/.test(c.ch));
+      if (!letters.length || letters.length >= LATIN_MIN_CHAINED || letters.length < chs.length * 0.8) continue;
+      // 按条里的空白列分词（OCR 不吐空格，`xFrac` 一个字常差半个字宽：「Glo」的 G 估在 l 左边 29px）：
+      // 墨迹列连成块，缝不过一个字高的并成一个词（G 的左半被别处认领、条里只剩一截，与 l 隔着 12px），字按 `xFrac` 落进最近的词
+      const runs = inkRuns(st, st.charH);
+      const words: OcrChar[][] = runs.map(() => []);
+      for (const c of [...letters].sort((a, b) => a.xFrac - b.xFrac)) {
+        const x = c.xFrac * st.w;
+        let bi = 0;
+        runs.forEach(([a, b], i) => {
+          const d = x < a ? a - x : x > b ? x - b : 0;
+          const d0 = x < runs[bi][0] ? runs[bi][0] - x : x > runs[bi][1] ? x - runs[bi][1] : 0;
+          if (d < d0) bi = i;
+        });
+        if (runs.length) words[bi].push(c);
+      }
+      const used = runs.map((r, i) => ({ r, w: words[i] })).filter((q) => q.w.length);
+      // 条里说不清的墨块（没读出字母、不在力度框里、又不是连字符那样的扁短横）：碎笔画、符号凑的条，OCR 碰巧吐个字母（钢琴两行之间读出「e」）
+      const sxr = st.box.w / st.w;
+      const stray = runs.some(([a, b, y0, y1], i) => {
+        if (words[i].length) return false;
+        if (y1 - y0 <= st.charH * 0.3 / sxr) return false;
+        const x0 = st.box.x + a * sxr, x1 = st.box.x + b * sxr;
+        return !dynamics.some((d) => d.box && x0 < d.box.right + unit.space * 0.3 && x1 > d.box.left - unit.space * 0.3);
+      });
+      // 单个字母只收 a、I、O（英文里自成一词的）：落单的「s」「e」多是碎笔
+      if (stray || (letters.length === 1 && !/^[aIO]$/.test(letters[0].ch))) continue;
+      const texts = used.map((q) => q.w.map((c) => c.ch).join(""));
+      const all = letters.map((c) => c.ch).join("");
+      if (!used.length || VOICE_LABEL_RE.test(all) || texts.some((t) => /^[A-Z]$/.test(t) || DYNAMIC_WORD_RE.test(t) || JUMP_WORD_RE.test(t) || EXPR_WORD_RE.test(t) || VOICE_LABEL_RE.test(t) || DIRECTION_TERM_RE.test(t))) continue;
+      const xs = notes.filter((n) => n.staff === staff && !n.rest).map((n) => (n.sym.box.left + n.sym.box.right) / 2);
+      const aligned = used.every(({ r: [a, b] }) => {
+        const x0 = st.box.x + a * sxr, x1 = st.box.x + b * sxr;
+        const cx = (x0 + x1) / 2;
+        return xs.some((x) => Math.abs(x - cx) <= Math.max(unit.space * 1.2, (x1 - x0) * 0.35));
+      });
+      // 碰着已认出的音头的不是字（耶和华是我的牧者 p1 下声部带加线的符头、符杠读成「ePpaaaa」）
+      const sy = st.box.h / st.h;
+      const onHead = used.some(({ r: [a, b, y0, y1] }) => {
+        const x0 = st.box.x + a * sxr, x1 = st.box.x + b * sxr, yy0 = st.box.y + y0 * sy, yy1 = st.box.y + y1 * sy;
+        return notes.some((n) => !n.rest && x0 < n.sym.box.right && x1 > n.sym.box.left && yy0 < n.sym.box.bottom && yy1 > n.sym.box.top);
+      });
+      if (!aligned || onHead) continue;
+      latinStrips.add(st);
+      charsFix.set(st, chs);
+    }
     /** 行首印着段号的歌词对象。 */
     const verseObjs = new Set<PObj>();
     for (const strip of ocr ? lyricStrips : []) {
-      const chars = ocr!.get(stripKey(strip));
+      const chars = charsFix.get(strip) ?? ocr!.get(stripKey(strip));
       if (!chars) continue; // 缓存没命中：这一条没跑过 OCR，宁可留空不编造
       lyricStats.hit++;
       // **页脚小字不是歌词**：赞美三一真神末行下面的版权行（字高 12，歌词 34~41）离低音谱表
       // 不到两个谱表高，被收成男声的第 1 段
-      if (strip.charH < medH * LYRIC_MIN_H) continue;
+      // 短拉丁音节（`charsFix`，已按音位验过）放宽到一半：「Glo」字高按块高中位数量，小写字母只有汉字的三成多
+      if (strip.charH < medH * LYRIC_MIN_H * (charsFix.has(strip) ? 0.5 : 1)) continue;
       // **三格以内、认不出一半字的条不收**：谱表紧下方带加线的低音被切成一条（赞美三一真神
       // 末系统 3 格只认出一个「户」），占掉第 1 段，后面四段整体下移一段
-      if (strip.cells.length <= 3 && foldLyricChars(chars).length < strip.cells.length * 0.5) continue;
+      if (strip.cells.length <= 3 && !latinStrips.has(strip) && foldLyricChars(chars).length < strip.cells.length * 0.5) continue;
       // **拉丁行绕开字格**：字格那一套是按汉字等宽见方切的，英文词宽差着数倍。
       // 逐字造盒、按间距补词间空格，断词断音节交给 `splitSyllables`（见 `lyric.ts`）。
       const latin = latinStrips.has(strip);
@@ -4708,12 +4840,21 @@ export async function recognizeRasterPage(
       // 后面几段整体下移（《高举主大能》第二系统）
       // 行里的笔画照样当字剔（上面已进 `readRows`），只是不出歌词：直接跳过的话，那一行被收成符头的
       // 笔画留下来成了假音（齐来称颂 −1.3、父恩广大 −0.6）
-      if (!latin && foldLyricChars(chars).length <= 1) continue;
+      // 孤行（`keepLone` 放进来的）例外：读出来的全是汉字才收
+      const lone = stripRow.get(strip)!.lone;
+      // 字高要够本页歌词的八成（「乙」「万」是 18px 的碎笔画，歌词字 30 开外）、字格不扁（「二」是两道横）
+      if (lone && !latin) {
+        const okChars = foldLyricChars(chars).length >= 1 && chars.every((c) => /\p{Script=Han}|[，。、；：！？,.;:!?]/u.test(c.ch));
+        const okSize = strip.charH >= medH * LONE_MIN_H && strip.cells.every((c) => c.box.h >= c.box.w * 0.7);
+        if (!okChars || !okSize) continue;
+      }
+      if (!latin && !lone && foldLyricChars(chars).length <= 1) continue;
+      if (lone) claimRow(stripRow.get(strip)!);
       // **中英混在一条的切成两份**，各出一个文本对象（见 `splitMixedChars`）：拉丁那份归英文段
       const mix = splitMixedChars(chars);
       const parts = mix
         ? [latinCells(strip, mix.la), mapCharsToCells(stripWithout(strip, mix.spans), mix.zh)]
-        : [latin ? latinCells(strip, chars) : mapCharsToCells(strip, chars)];
+        : [latin ? latinCells(strip, chars, charsFix.has(strip) ? 1 : undefined) : mapCharsToCells(strip, chars)];
       // 「字数 == 格数」这个结构指标只对汉字行有意义（拉丁行压根不切格）
       if (!latin && !mix && foldLyricChars(chars).length === strip.cells.length) lyricStats.parity++;
       // 行首印着段号（「1.」「2、」）：OCR 读出来、折叠时剔掉了，这里记一笔——段号是歌词的强判据（`lyricsBelongBelow`）

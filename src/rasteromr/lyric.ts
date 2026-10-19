@@ -27,6 +27,8 @@ export interface LyricRow {
   charH: number;
   /** 这一行的原始连通块（量全页字宽要用）。 */
   blocks: Component[];
+  /** 不足 `MIN_CELLS` 块的**孤行**（一行只印一个音节：「人」「a」），由 `keepLone` 放行的才有 */
+  lone?: boolean;
 }
 
 /** 谱行的纵向范围（切歌词带要用）。 */
@@ -50,6 +52,9 @@ const ROW_GAP = 0.9;
 /** 一行歌词至少要有几个字格才算数（少于这个多半是力度记号、小节号一类）。 */
 const MIN_CELLS = 3;
 
+/** 孤行字格高度的下限（线距的倍数） */
+const LONE_MIN = 0.5;
+
 /** **最后一行谱**下方的歌词带留多少个线距（中间的谱行以下一行的上缘为界）。
  *  原来是 16 格（四个谱表高），够合唱谱那种两三段词；
  *  独唱谱一页八段词（《坚固保障》中文四段 + 英文四段）要 20 格开外
@@ -71,8 +76,10 @@ const HEAD_FIRST = 6;
  *              否则谱表内的符号会混进歌词带。
  * @param staves 谱行的纵向范围，按 y 排好。
  */
-export function findLyricRows(blobs: Component[], staves: LyricStaff[], unit: RasterUnit): LyricRow[] {
+export function findLyricRows(blobs: Component[], staves: LyricStaff[], unit: RasterUnit, keepLone?: (row: LyricRow, rows: LyricRow[]) => boolean): LyricRow[] {
   const out: LyricRow[] = [];
+  /** 孤行候选（只在谱行下方的带里收，页顶那条带是标题、速度语） */
+  const loneRaw: LyricRow[] = [];
   /** 先按几何切一遍，**全页的字宽要等切完才量得出来**，剔假字格是第二遍的事。 */
   const raw: LyricRow[] = [];
   const sp = unit.space;
@@ -99,8 +106,30 @@ export function findLyricRows(blobs: Component[], staves: LyricStaff[], unit: Ra
     const isFlat = (c: Component) => c.bbox.h / sp < CHAR_MIN * 0.4;
     const flat = band.filter(isFlat);
     const solid = band.filter((c) => !isFlat(c));
-    if (solid.length < MIN_CELLS) continue;
-    let rowsHere = splitRows(solid, sp).sort((a, b) => Math.min(...a.map((c) => c.bbox.y)) - Math.min(...b.map((c) => c.bbox.y)));
+    if (solid.length < (keepLone && !head ? 1 : MIN_CELLS)) continue;
+    const split = splitRows(solid, sp);
+    if (keepLone && !head)
+      for (const row of split.lone) {
+        const charH = Math.max(median(row.map((c) => c.bbox.h)), sp * CHAR_MIN);
+        // 贴着的扁笔也并进来：宁静 p8 m103 的「ri」两道衬线被原语抽成线段，剩下两根 3px 的竖笔各成一格，宽度不够一个字母
+        const top = Math.min(...row.map((c) => c.bbox.y)) - charH * 0.5;
+        const bot = Math.max(...row.map((c) => rbottom(c.bbox))) + charH * 0.5;
+        const over = (c: Component) => row.some((b) => b.bbox.x < rright(c.bbox) && rright(b.bbox) > c.bbox.x);
+        const strokes = flat.filter((c) => c.bbox.y < bot && rbottom(c.bbox) > top && over(c));
+        // 小写字母（「ri」的 r 只有 12px，线距 18）够不上汉字那道 0.7 格；汉字孤行在 OCR 之后另按本页字高卡
+        // 并格按至少一个线距的字高：小写字母的块高只有 12px，按它并，「ri」上沿那道 22px 的衬线宽过单字上限（1.7 倍字高）并不进来
+        const cells = mergeToChars([...row, ...strokes], Math.max(charH, sp))
+          .filter((r) => r.h >= sp * LONE_MIN)
+          // 矮格（小写字母）往上放 0.6 格：i、j 的点太小，在 `findBlobs` 那步就按面积滤掉了，
+          // 条子里没有点，OCR 把「ri」读成「r1」（宁静 p8 m103）。条是按框裁图的，框进来就有
+          .map((r) => {
+            if (r.h >= sp * 1.2) return r;
+            const y = Math.round(Math.max(from, r.y - sp * 0.6));
+            return { ...r, y, h: rbottom(r) - y };
+          });
+        if (cells.length && cells.length < MIN_CELLS) loneRaw.push({ staffIndex: i, verse: 0, cells, charH, blocks: row, lone: true });
+      }
+    let rowsHere = split.rows.sort((a, b) => Math.min(...a.map((c) => c.bbox.y)) - Math.min(...b.map((c) => c.bbox.y)));
     // **末行谱下面的带要一行接一行**：第一行离谱表不过 `TAIL_FIRST` 个线距，往下每行与上一行的间隔不过上一行高。
     // 谱末印的经文、版权、出处（《信心使我得胜》末行谱下 8.5 格处的「我倚靠神，我要讚美祂的話……詩篇五十六篇」）
     // 字号与歌词一样，只有位置分得开；真的歌词第一行离谱表 1.8~3.3 格，各段紧挨着排
@@ -143,9 +172,37 @@ export function findLyricRows(blobs: Component[], staves: LyricStaff[], unit: Ra
       const bot = Math.max(...row.map((c) => rbottom(c.bbox)));
       const x0 = Math.min(...row.map((c) => c.bbox.x)) - sp * 2;
       const x1 = Math.max(...row.map((c) => rright(c.bbox))) + sp * 2;
-      const strokes = flat.filter((c) => c.cy > top && c.cy < bot && c.bbox.x >= x0 && rright(c.bbox) <= x1);
+      // 行首行尾的「一」整个落在 ±2 格窗外也收（宁静 m47 男声「一起敘寒溫」行首的「一」比窗宽出半个字）：
+      // 离行里最近的字不过 1.5 个字高、自己比一个字高窄（「一」的字面比字身窄，宁静那个 0.94；行首的破折号「—」占满字身，
+      // 新编 247「—我属你」那道 1.06，收进来多出一格）
+      // （字高按块高的 85 分位量整字，中位数是偏旁高）
+      const rx0 = x0 + sp * 2, rx1 = x1 - sp * 2;
+      const fullH = quantile(row.map((c) => c.bbox.h), 0.85);
+      // 窗外那几笔还要落在字的中腰（「一」在字高正中）：059 圣灵歌一条并了两行的高行，行首上沿一截弧收进来多出一格
+      const midY = median(row.map((c) => c.cy));
       // 扁而宽的也留：「一」只有一道横
-      const cells = mergeToChars([...row, ...strokes], charH).filter((r) => r.h >= sp * CHAR_MIN * 0.5 || r.w >= sp * CHAR_MIN * 1.5);
+      const strokes = flat.filter((c) => c.cy > top && c.cy < bot && ((c.bbox.x >= x0 && rright(c.bbox) <= x1) || (c.bbox.w < fullH && Math.abs(c.cy - midY) <= fullH * 0.3 && rright(c.bbox) >= rx0 - fullH * 1.5 && c.bbox.x <= rx1 + fullH * 1.5)));
+      let merged = mergeToChars([...row, ...strokes], charH);
+      // **横跨两个字的扁笔并出了互相重叠的格**，就不让它参与并格：原语那步把相邻两字的底横拟合成一条线段
+      //（破碎 p8「乾渴」两字底横连成 82px），并进来「乾」连着「渴」的左半成了一格、「渴」的右半另成一格，两格叠着，
+      // 字数对不上，整行往后错一个音。只在并出叠格时才剔：并成的是不叠的宽格（新编「所以我」「今真实」底横连着），
+      // 后面按 OCR 字数等分得回来（`splitWideCells`），剔了反倒切乱（新编五首各 −1~3 步）
+      const overlap = (a: Rect, b: Rect) => Math.min(rright(a), rright(b)) - Math.max(a.x, b.x);
+      const sorted = [...merged].sort((a, b) => a.x - b.x);
+      const stacked = sorted.slice(1).some((r, k) => overlap(sorted[k], r) > fullH * 0.3);
+      const spans = stacked ? strokes.filter((c) => c.bbox.w > fullH * 1.2 && merged.some((r) => rright(r) >= rright(c.bbox) && r.x <= c.bbox.x && sorted.some((q) => q !== r && overlap(q, r) > fullH * 0.3))) : [];
+      if (spans.length) {
+        merged = mergeToChars([...row, ...strokes.filter((c) => !spans.includes(c))], charH);
+        // 剔了的仍撑开它压着的字格上下沿：条框一缩，条一变 OCR 跟着变（坚固保障「st rength」）
+        for (const c of spans)
+          for (const r of merged) {
+            if (r.x >= rright(c.bbox) || rright(r) <= c.bbox.x) continue;
+            const y = Math.min(r.y, c.bbox.y);
+            r.h = Math.max(rbottom(r), rbottom(c.bbox)) - y;
+            r.y = y;
+          }
+      }
+      const cells = merged.filter((r) => r.h >= sp * CHAR_MIN * 0.5 || r.w >= sp * CHAR_MIN * 1.5);
       if (cells.length < MIN_CELLS) continue;
       raw.push({ staffIndex: i, verse: 0, cells, charH, blocks: row });
     }
@@ -181,6 +238,12 @@ export function findLyricRows(blobs: Component[], staves: LyricStaff[], unit: Ra
     // 字宽取全页字宽、本行块高的 85 分位、本行字高三者最大：前两个都被碎偏旁拉低（《赞美一神》全页 25px、字 52px）
     const rowW = quantile(r.blocks.map((c) => c.bbox.h), 0.85);
     out.push({ ...r, charH, cells: squareCells(r.cells, Math.max(charW, rowW, charH)) });
+  }
+  // 孤行：字格按全页字宽并，调用方按音位、离谱表的远近判（`keepLone`）
+  const normal = [...out];
+  for (const r of loneRaw) {
+    const row = { ...r, cells: squareCells(r.cells, Math.max(charW, r.charH)) };
+    if (keepLone!(row, normal)) out.push(row);
   }
   // 同一个谱行下面的几行按 y 编 verse 号
   const byStaff = new Map<number, LyricRow[]>();
@@ -235,7 +298,7 @@ function squareCells(cells: Rect[], charW: number): Rect[] {
  * 半拉偏旁，OCR 出来是同一句词的两个残本（实测宁静 p3 那行「平安的夜已深」
  * 被切成 13 格与 12 格两条，都挂上了谱行 #9），字格宽度也全成了碎片。
  */
-function splitRows(band: Component[], sp: number): Component[][] {
+function splitRows(band: Component[], sp: number): { rows: Component[][]; lone: Component[][] } {
   const sorted = [...band].sort((a, b) => a.cy - b.cy);
   const rows: Component[][] = [];
   let cur: Component[] = [];
@@ -249,7 +312,8 @@ function splitRows(band: Component[], sp: number): Component[][] {
     prev = c.cy;
   }
   if (cur.length) rows.push(cur);
-  return rows.flatMap(splitTall).filter((r) => r.length >= MIN_CELLS);
+  const all = rows.flatMap(splitTall);
+  return { rows: all.filter((r) => r.length >= MIN_CELLS), lone: all.filter((r) => r.length < MIN_CELLS) };
 }
 
 
@@ -435,13 +499,21 @@ const LEAD_PUNCT = /[“‘（]/;
  *  不然就是真的歌词字。 */
 const SECTION_LABEL = /^(?:[(（](?:副歌|歌|和|合)[)）]|[(（]?副歌[)）]?)$/;
 
+/** 段落标记后面紧跟的演唱方式 */
+const SINGING_MODE = /^(?:合唱|齐唱|独唱|领唱|重唱|轮唱)$/;
+
 /** 去掉行首（段号之后）的段落标记（《所信有根基》副歌第一行「(歌)我不需要…」，「歌」挂上了第一个音）。 */
 function dropSectionLabel(chars: OcrChar[]): OcrChar[] {
   const s = [...chars].sort((a, b) => a.xFrac - b.xFrac);
   let k = 0;
   while (k < s.length && /^[0-9.．、\s]$/.test(s[k].ch)) k++;
-  for (let n = 2; n <= 4 && k + n <= s.length; n++)
-    if (SECTION_LABEL.test(s.slice(k, k + n).map((c) => c.ch).join(""))) return [...s.slice(0, k), ...s.slice(k + n)];
+  // 从长往短试：「（副歌」也认（括号缺一边），先试短的会把闭括号留下
+  for (let n = Math.min(4, s.length - k); n >= 2; n--)
+    if (SECTION_LABEL.test(s.slice(k, k + n).map((c) => c.ch).join(""))) {
+      // 紧跟着的演唱方式一起剔（以马内利来临歌「（副歌）合唱」，「合唱」挂上了头两个音）
+      const m = SINGING_MODE.test(s.slice(k + n, k + n + 2).map((c) => c.ch).join("")) ? 2 : 0;
+      return [...s.slice(0, k), ...s.slice(k + n + m)];
+    }
   return chars;
 }
 
@@ -776,15 +848,17 @@ export function lyricLayoutVerdict(strip: LyricStrip, noteXs: readonly number[],
  * 出来的东西交给 `makeTextObj` 造成文本对象，再由 `splitSyllables` 断成音节。
  * 盒的高度一律取整条的高：`xFrac` 只给得出 x，字的上下缘量不出来，
  * 而下游只拿 x 去对音符。
+ * `spaceGap`：词界的空白（字高的倍数）。短拉丁音节行（一行只一两个音节）传 1：字高是按小写字母量的，
+ * 字母被别处认领掉一截时（「Glo」的 G 只剩右半）按 0.7 会劈成两个词。
  */
-export function latinCells(strip: LyricStrip, chars: OcrChar[]): { box: Rect; ch: string }[] {
+export function latinCells(strip: LyricStrip, chars: OcrChar[], spaceGap = SPACE_GAP): { box: Rect; ch: string }[] {
   const keep = dropVerseNumber(chars).filter((c) => LATIN_CH.test(c.ch)).sort((a, b) => a.xFrac - b.xFrac);
   if (!keep.length) return [];
   // 条内的**空白列区间**（分数坐标），按 x 排：词界就在这些区间里
   const col = new Int32Array(strip.w);
   for (let y = 0; y < strip.h; y++)
     for (let x = 0; x < strip.w; x++) if (strip.data[y * strip.w + x]) col[x]++;
-  const minGap = Math.max(2, strip.charH * SPACE_GAP);
+  const minGap = Math.max(2, strip.charH * spaceGap);
   const blanksOf = (min: number): [number, number][] => {
     const out: [number, number][] = [];
     let run = 0;
