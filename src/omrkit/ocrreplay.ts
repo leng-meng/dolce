@@ -45,14 +45,18 @@ export function ocrReplay(inner: OcrBackend, mode: "record" | "replay", tape: Oc
     const fresh = todo.length ? await run(todo.map((i) => items[i]!)) : [];
     const out: R[] = [];
     let j = 0;
+    // 表里存、往外给的都是拷贝：管线会就地改 OCR 结果（页眉框的 text 改成简体之类），共用一个对象的话，
+    // 录进表的是改过的值，回放时拿到改过的值就少走一步，与现跑分叉
     keys.forEach((k, i) => {
-      let v: R;
       if (todo[j] === i) {
-        v = fresh[j++] as R;
+        const v = fresh[j++] as R;
         if (mode === "replay") misses.push(k);
-      } else v = tape[k] as R;
-      used[k] = v;
-      out.push(v);
+        used[k] = structuredClone(v);
+        out.push(v);
+      } else {
+        used[k] = tape[k];
+        out.push(structuredClone(tape[k]) as R);
+      }
     });
     return out;
   }
