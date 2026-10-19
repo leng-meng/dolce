@@ -741,6 +741,7 @@ export async function recognizeLyrics(
   // 故并入该音节字符串而非另立单元（保持单元↔音符对齐）。段号数字等非汉字非标点 → 直接丢弃、自然不占位。
   const perLine = new Map<string, Array<{ x: number; ch: string; region?: TextRegion; src?: CharSrc }>>();
   const rawByKey = new Map<string, string>();   // 每 (row,verse) 的 rec 原文（供和弦/段落标记行判定）
+  const bareByKey = new Map<string, string>();  // 同上，但不带单独读成「一」的弧线碎块
   const lineSeen = new Set<string>();
   // 行首边注块（分块时单独拿出来的那格）读出汉字 → 不进歌词；是单个中文数字就收作段号。
   // 「一」只是一横，单独 rec 常读成横线（含下划线 `_`，青年诗歌 4《陪我生活》）或「1」：横线一律认作「一」；「1」只在本页别的边注
@@ -792,11 +793,15 @@ export async function recognizeLyrics(
     // 和弦行判定当场失效（「主祢真伟大」的 C/G/Am 两行就这么丢的）。装配那一步照旧用改判后的
     // rawTexts，两者互不干扰；页脚版权那条判据看的是长中文句，用哪份都一样。
     if (!mark) rawByKey.set(`${rowIdx}:${verse}`, (rawByKey.get(`${rowIdx}:${verse}`) ?? "") + raw0);
+    // 单独一块只读出「一」的弧（青年诗歌 15《活神的家》第 4 行 `1̇⌒3̇` 那条扁弧夹在 `A(G)` 与 `D(C)A(G)` 之间，rec 直接读成「一」）：
+    // 判和弦行时另备一份不带这种单字块的原文
+    if (!mark && !/^[-‐‑–—一1]$/.test(raw0.trim())) bareByKey.set(`${rowIdx}:${verse}`, (bareByKey.get(`${rowIdx}:${verse}`) ?? "") + raw0);
   }
   // 和弦/段落标记行（Am、G/B、Gsus4、Chorus…）：判出后**不进歌词装配**，转走和弦通道。
   // 与旧版的差别只在时机——过去是装配完再 delete 整行，现在它根本没进来，于是它误捞的跳转
   // 记号（和弦行连写成 `G/D C` → 读出一个 `DC`）也不必再事后撤销。判据与阈值一字未改。
-  const chordKeys = new Set([...rawByKey.keys()].filter((k) => isAnnotationLine(rawByKey.get(k)!)));
+  const chordKeys = new Set([...rawByKey.keys()].filter((k) => isAnnotationLine(rawByKey.get(k)!) ||
+    (bareByKey.has(k) && bareByKey.get(k) !== rawByKey.get(k) && isAnnotationLine(bareByKey.get(k)!))));
 
   // ── 趟 2：段落标记/跳转记号就地捞取 + 歌词装配 ──
   for (let s = 0; s < chunks.length; s++) {

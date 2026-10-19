@@ -947,6 +947,29 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend, opts: { refL
       }
     }
   }
+  // **行首单独印的「前奏：」**（青年诗歌 15《活神的家》：首谱行「前奏：3 5 1̇ 3̇ | …」，不与页眉同排）读成 `0 1 0.`。
+  // 认法：行首连着两个以上近方、不比本行数字矮的核（字里的碎块中心落在已摘的字框里跟着摘），其后至少三个核、
+  // 其中七成不是近方的（本书数字 28×47，字 51×51）。摘下来交给下面同一段认字（认得出是汉字才挂段落词）。
+  if (!preludeLabel) {
+    for (const m of rowMeta) {
+      const rd = [...m.rd].sort((a, b) => a.bbox.x - b.bbox.x);
+      const hMed = median(rd.map((q) => q.bbox.h));
+      let k = 0, nSq = 0;
+      const inPrev = (q: DigitCore) => k > 0 && rd.slice(0, k).some((d) => rcx(q.bbox) >= d.bbox.x && rcx(q.bbox) <= rright(d.bbox));
+      while (k < rd.length && ((squareCore(rd[k]!) && rd[k]!.bbox.w >= rd[k]!.bbox.h * 0.85 && rd[k]!.bbox.h >= hMed * 0.95 && ++nSq) || inPrev(rd[k]!))) k++;
+      const rest = rd.slice(k);
+      if (nSq < 2 || rest.length < 3 || rest.filter((q) => !squareCore(q)).length < rest.length * 0.7) continue;
+      if (m.barlineXs.some((x) => x < rest[0]!.bbox.x)) continue;
+      probe("prelude.rowHead");
+      const lab = rd.slice(0, k).map((q) => q.bbox);
+      const lx = Math.min(...lab.map((q) => q.x)), ly = Math.min(...lab.map((q) => q.y));
+      preludeLabel = { x: lx, y: ly, w: Math.max(...lab.map((q) => rright(q))) - lx, h: Math.max(...lab.map((q) => rbottom(q))) - ly };
+      m.rd = rest;
+      m.topY = Math.min(...rest.map((q) => q.bbox.y));
+      m.botY = Math.max(...rest.map((q) => rbottom(q.bbox)));
+      break;
+    }
+  }
   // 系统通长线不算：它比普通小节线长好几倍，算进来就把中位数抬上去，只有短线的行过不了下面 withBars 的门（343）
   const medBarH = median(rowMeta.flatMap((m) => m.bars.filter((b) => !m.long.has(b)).map((b) => b.bbox.h)));
   if (medBarH > 0) {
