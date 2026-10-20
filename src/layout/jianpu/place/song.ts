@@ -256,12 +256,13 @@ export function layoutSong(
     firstTop = headerBottom + m.style.size.lyric - inkTop;
   }
   const otherTop = m.page.margin.top + m.page.firstSystemTop * 0.35;
-  // 展开档、成书：同旧简谱引擎 `Layout.layoutVertically`——块按占位盒紧挨着码（块间 `staffDist`），放不满的页把行距摊开到 `systemSpread`、整块居中
+  // 展开档、成书：同旧简谱引擎 `Layout.layoutVertically`——块按占位盒紧挨着码（块间 `staffDist`），放不满的页把行距摊开到 `systemSpread`，
+  // 剩下的空白留在页底（从页顶排下来，不竖向居中，issue 22）
   const laid = expanded ? paginate(blocks, {
     pageTop: () => m.page.margin.top,
     bottom: bottomLimit,
     gap: m.style.vertical.staffDist,
-    spread: { maxGap: m.style.vertical.systemSpread, center: () => true },
+    spread: { maxGap: m.style.vertical.systemSpread },
   }) : paginate(blocks, {
     pageTop: (i) => (i === 0 ? firstTop : otherTop),
     // 连续长图不按高度分页，页高随内容长

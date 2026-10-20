@@ -24,11 +24,11 @@ export interface PaginateSpec {
   /** 相邻两块占位盒之间至少留多少 */
   gap: number;
   /**
-   * 放不满的页把行距摊开（`.jpwabc` 那一路）：行距摊到 `maxGap` 为止，
-   * 剩下的空白在 `center(page)` 为真时整块居中，否则堆在页底。
+   * 放不满的页把行距摊开（`.jpwabc` 那一路）：行距摊到 `maxGap` 为止，剩下的空白堆在页底
+   *（谱从页顶排下来，不竖向居中——会众站着看投影，屏幕下半常被前排挡住，issue 22）。
    * 不给 = 各块按 `gap` 紧挨着排（文本谱）。
    */
-  spread?: { maxGap: number; center: (page: number) => boolean };
+  spread?: { maxGap: number };
 }
 
 export interface PlacedBlock<B extends SystemBlock> {
@@ -59,17 +59,13 @@ export function paginate<B extends SystemBlock>(blocks: readonly B[], spec: Pagi
     }
   }
   if (spec.spread && Number.isFinite(spec.bottom)) {
-    const { maxGap, center } = spec.spread;
+    const { maxGap } = spec.spread;
     pages.forEach((pg, i) => {
       if (pg.length < 2) return;
       const top = spec.pageTop(i);
       const total = pg.reduce((s, p) => s + (p.block.bottom - p.block.top), 0);
-      let dd = (spec.bottom - top - total) / (pg.length - 1);
+      const dd = Math.min(maxGap, (spec.bottom - top - total) / (pg.length - 1));
       let y = top;
-      if (dd > maxGap) {
-        if (center(i)) y += ((dd - maxGap) * (pg.length - 1)) / 2;
-        dd = maxGap;
-      }
       for (const p of pg) {
         p.y = y - p.block.top;
         y += p.block.bottom - p.block.top + dd;
