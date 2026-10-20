@@ -284,14 +284,20 @@ function settleEdgeSlurStarts(pages: SPage[], notesByStaff: Map<Staff, StaffNote
   for (let k = 1; k < pages.length; k++) {
     const ps = pages[k - 1].systems.filter((sy) => sy.staves.length);
     const prev = ps[ps.length - 1], cur = pages[k].systems.filter((sy) => sy.staves.length)[0];
-    // 两个系统行数不同（首系统隐藏了人声谱表之类）对不上行，跨页的半截留给写出端按声部接
-    if (!cur || !prev || prev.staves.length !== cur.staves.length) continue;
+    if (!cur) continue;
+    const dangles = (st: Staff) => (notesByStaff.get(st) ?? []).some((n) => n.slurOrphans?.some((o) => o.edge === "end"));
+    // 上一页末系统整个没有行尾半截：这一页行首的弧都不是接过来的，照补；有的话按行对，对上的那行没有行尾半截才补
+    const anyDangle = !!prev && prev.staves.some(dangles);
+    // 行数不同按从下往上对（多出、隐藏的多是最上面的人声谱表，钢琴总在最下）
+    const shift = prev ? cur.staves.length - prev.staves.length : 0;
     cur.staves.forEach((st, i) => {
       const ns = notesByStaff.get(st) ?? [];
       const firsts = ns.filter((n) => n.slurEdgeCands?.length);
       if (!firsts.length) return;
-      const ps = notesByStaff.get(prev.staves[i]) ?? [];
-      if (ps.some((n) => n.slurOrphans?.some((o) => o.edge === "end"))) return;
+      if (anyDangle) {
+        const pst = prev!.staves[i - shift];
+        if (!pst || dangles(pst)) return;
+      }
       for (const f of firsts)
         for (const c of f.slurEdgeCands!) {
           const to = ns.find((n) => n.slurOrphans?.some((o) => o.id === c.id && o.edge === "begin"));

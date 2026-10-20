@@ -287,7 +287,7 @@ const EDGE_END = 1.2;
 const EDGE_START = 2.5;
 
 /** 起端离首音外缘的纵向上限（格）。 */
-const EDGE_START_DY = 2.5;
+const EDGE_START_DY = 3.5;
 
 /** 量起端纵向距离时，首音右边几格内的音一起算（首拍那组十六分高低交替，弧贴着高的那个走）。 */
 const EDGE_START_SPAN = 2;
