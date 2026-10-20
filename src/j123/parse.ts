@@ -11,6 +11,7 @@
 //   - **`(N:` 的冒号必需**：简谱音符是数字，裸 `(3` 与圆滑线冲突，见规范「`(` 的歧义」。
 //   - 认不出的东西一律**报诊断、继续往下**——半截或写错的文本也要给出大部分结果。
 
+import { applyTupletTimeMods } from "../model/tuplets";
 import { lineStarts } from "../common/lines";
 import { jumpOrnamentName } from "../abcfamily/jumpmarks";
 import {
@@ -542,16 +543,6 @@ function buildMusicLine(
       for (const w of pb.wedgeCloseNext) closeWedge(w.type, el.id, w.source, true);
       pb.wedgeCloseNext = [];
     }
-    // 123：组内**所有**占时值的元素（音符、`0`、`x`、`X`）都按比例折算；嵌套的比例相乘
-    if (ctx.d.tupletClose === "paren" && el.kind === "chord" && !el.grace && openTuplets.length) {
-      let actual = 1;
-      let normal = 1;
-      for (const tp of openTuplets) {
-        actual *= tp.tupletActual!;
-        normal *= tp.tupletNormal!;
-      }
-      el.duration.timeMod = { actual, normal };
-    }
   };
 
   for (const t of tokens) {
@@ -589,11 +580,10 @@ function buildMusicLine(
         attach(ch);
         cur.sustainHost = ch;
         if (pb.voice === 1) pb.noteCount++;
-        // ABC：多连音按音符计数收尾，并给组内音符打 time-modification（123 在 `attach` 里打、由 `)` 收）
+        // ABC：多连音按音符计数收尾（组内各音的 `timeMod` 收尾时统一按 Mark 补，见 model/tuplets.ts）
         if (ctx.d.tupletClose === "count") for (let k = openTuplets.length - 1; k >= 0; k--) {
           const tp = openTuplets[k]!;
           tp.remaining = (tp.remaining ?? 0) - 1;
-          ch.duration.timeMod = { actual: tp.tupletActual ?? 3, normal: tp.tupletNormal ?? 2 };
           if (tp.remaining <= 0) {
             if (tp.start) {
               marks.push({
@@ -1351,6 +1341,8 @@ export function parseAbcFamily(
     for (const part of song.parts) breaksAfterToStart(part, ctx.breakAfter);
     ctx.breakAfter.clear();
     song.marks = marks;
+    // 多连音组内各音的 `timeMod`：与文本谱同一份（model/tuplets.ts）
+    for (const part of song.parts) applyTupletTimeMods(marks, part.measures.flatMap((m) => m.elements));
     if (rawPlay.length) song.playOrder = resolvePlayOrder(song, rawPlay);
     // `%%score [1 2]` / `{1 2}`（ABC §11.1）：声部分组的括号。原文仍留在 `style.raw` 里（写回照原样），
     // 这里只把最外层的 `[…]`（bracket）`{…}`（brace）落成 `partGroups`，五线谱、原样档据此画括号

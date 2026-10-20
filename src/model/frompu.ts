@@ -17,6 +17,7 @@
 // 行结构：`PuDoc` 的一个 `VoiceGroup` 是一个系统。每个声部在该组那一行的**首小节**上
 // 挂 `print.newSystem` + `print.system`（组序号）——一组不一定含全部声部，靠组序号对回去。
 
+import { applyTupletTimeMods } from "./tuplets";
 import type {
   BarlineElement,
   LyricLine as PuLyricLine,
@@ -304,6 +305,7 @@ function convertLine(
         const sub = convertLine(el.elements, voice, ids, 1, { last: null, home: carry.home });
         const marks: Mark[] = [];
         convertMarks(el.marks, sub, marks, { pending: new Map() }, sub.measures);
+        applyTupletTimeMods(marks, sub.measures.flatMap((m) => m.elements), puTupletRatio);
         pending.push({ kind: "layer", role: el.role, measures: sub.measures, marks, source: el.source });
         break;
       }
@@ -381,6 +383,9 @@ interface OpenVolta {
   start: NonNullable<Barline["ending"]> | null;
   lead?: { caption: string; level: number; placeholder: { mea: Measure; bar: Barline } };
 }
+
+/** 文本谱多连音的比例：写了显示数字照数字，没写按组内符号数 n；一律占 n−1 个（`topu.ts::planArcs` 同一口径） */
+const puTupletRatio = (mk: Mark, n: number) => ({ actual: mk.tupletActual ?? n, normal: (mk.tupletActual ?? n) - 1 });
 
 /** Mark：下标区间 → id 配对。房号另走 `applyVolta`（`ScoreDoc` 里是 `Barline.ending`）。 */
 function convertMarks(
@@ -749,6 +754,8 @@ export function puToScoreDoc(pu: PuDoc): ScoreDoc {
       for (let i = 0; i < part.measures.length; i++) part.measures[i]!.number = String(i + 1);
     }
     song.marks = marks;
+    // 多连音组内各音的 `timeMod`：与 123 同一份（model/tuplets.ts）。文本谱的组没写数字时 n 个符号占 n−1 个
+    for (const part of song.parts) applyTupletTimeMods(marks, part.measures.flatMap((m) => m.elements), puTupletRatio);
     markPlaceholders(song);
     doc.songs.push(song);
   }
