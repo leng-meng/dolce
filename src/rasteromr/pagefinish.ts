@@ -25,7 +25,7 @@ import { type Contour, candidateMap, traceContours, type ContourMap, type Repair
 import { findRasterArticulations } from "./artic";
 import { findRasterWedges, findFusedWedges, findStrippedWedges } from "./wedge";
 import { findRasterSlurs, findStubSlurs, findRasterDashedSlurs, findFusedSlurs, judgeArcUnion, extendArcEnds, traceSteepArcEnds, traceLongArcTails } from "./slur";
-import { type SlurArc, attachSlurs, reconnectSlurs, markSlurNotes } from "../staffomr/slur";
+import { type SlurArc, attachSlurs, reconnectSlurs, markSlurNotes, orphanEdge } from "../staffomr/slur";
 import { removeStaffLinesByRun, blobImage, type LineSeg, type RasterPrims } from "./prims";
 import { mergeArcPieces, bridgeArcPieces, attachSlursByStem, attachWideSlurs, attachEdgeSlurEnds, attachEdgeSlurStarts, snapSlurEndsToStems, completeSlurEnds, tieChords } from "./slurattach";
 import { touchesText } from "./pagetext";
@@ -1195,8 +1195,13 @@ export async function finishRasterPage(s: PageFinishInput): Promise<RasterPageRe
     if (next && Math.abs(a.lx - next.sym.box.left) < a.lx - n.sym.box.right) a.from = next;
   }
   { const D = (globalThis as any).process?.env?.SLDBG?.split(",").map(Number); if (D) for (const sl of slurs) if (sl.rx > D[0] && sl.lx < D[2] && Math.max(sl.ly, sl.ry) > D[1] && Math.min(sl.ly, sl.ry) < D[3]) console.log("SL", runArcs.has(sl), sl.lx, sl.ly, sl.rx, sl.ry, sl.above, sl.from?.sym.box, sl.to?.sym.box); }
-  // 按游程补出来的弧两端都要挂上音（同一个音不算）：挂不全的多是线上残留的别的墨
-  for (let i = slurs.length - 1; i >= 0; i--) if (runArcs.has(slurs[i]) && (!slurs[i].from || !slurs[i].to || slurs[i].from === slurs[i].to)) slurs.splice(i, 1);
+  // 按游程补出来的弧两端都要挂上音（同一个音不算）：挂不全的多是线上残留的别的墨。
+  // 跨系统的半截例外：只挂一端、另一端正伸到行尾 / 行首（`orphanEdge`）的留着（破碎 p2 m16 钢琴右手行尾那截，墨还被字典认成了保持音）
+  const runEdge = (sl: SlurArc) => {
+    const one = sl.from && !sl.to ? sl.from : !sl.from && sl.to ? sl.to : undefined;
+    return !!one && orphanEdge(sl, one) !== "mid";
+  };
+  for (let i = slurs.length - 1; i >= 0; i--) if (runArcs.has(slurs[i]) && !runEdge(slurs[i]) && (!slurs[i].from || !slurs[i].to || slurs[i].from === slurs[i].to)) slurs.splice(i, 1);
   reconnectSlurs(pg, slurs);
   // 跨行接上的同音两截先当圆滑线写：是不是延音线要看时间上是否紧挨着（同一声部本系统最后一个音、下一系统第一个音），
   // 声部到写出端才定，由 `toxml.ts::renumberSlurs` 判（宁静 p8 m97→m103 女高 E5…E5 是长圆滑线）
