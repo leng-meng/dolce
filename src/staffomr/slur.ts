@@ -23,6 +23,9 @@ export interface SlurArc {
   tie: boolean;
   /** 画成虚线（位图路 `findRasterDashedSlurs`）。 */
   dashed?: boolean;
+  /** 页上第一个系统行首起笔、只挂了止端的弧：几何上能挂首音（`slurattach.ts::attachEdgeSlurStarts`），
+   *  但可能接的是上一页末尾的半截，留到整曲拼页时再定（`song.ts`，记在首音的 `slurEdgeCands` 上）。 */
+  edgeFirst?: StaffNote;
 }
 
 /**
@@ -347,8 +350,9 @@ export function attachSlurs(arcs: SlurArc[], notes: StaffNote[], sp: number): vo
  */
 export function reconnectSlurs(pg: SPage, arcs: SlurArc[]): void {
   const staffOf = (a: SlurArc) => (a.from ?? a.to)?.staff;
-  const dangRight = arcs.filter((a) => a.from && !a.to);
-  const dangLeft = arcs.filter((a) => !a.from && a.to);
+  // 只接真在行尾、行首的半截（`orphanEdge`，写出端同此）：长弧拱顶没认出、左截悬在行中间的，接到下一系统去就成了一条跨行弧（宁静 p7 m89→m93 女高）
+  const dangRight = arcs.filter((a) => a.from && !a.to && orphanEdge(a, a.from) === "end");
+  const dangLeft = arcs.filter((a) => !a.from && a.to && orphanEdge(a, a.to) === "begin");
   const join = (a: SlurArc, b: SlurArc) => {
     a.to = b.to;
     b.from = undefined;
@@ -408,7 +412,7 @@ const pushId = (a: string[] | undefined, id: string) => (a?.includes(id) ? a : [
  * 跨行弧的后半，左端落在本行**第一小节的前半**（`begin`，谱号调号那段也算）；别处都是 `mid`（系统中间缺一端，多半是端点没挂上符头）。
  * 只有前两种才去接下一系统 / 上一系统的半截——光看「缺一端」就接，系统中间的半截会被接到隔着几十小节的另一个半截上（是爱 m1→m44）。
  */
-function orphanEdge(sl: SlurArc, n: StaffNote): "end" | "begin" | "mid" {
+export function orphanEdge(sl: SlurArc, n: StaffNote): "end" | "begin" | "mid" {
   const bars = n.staff.bars;
   if (!bars.length) return "mid";
   if (!sl.to) return sl.rx >= bars[bars.length - 1].left ? "end" : "mid";
@@ -441,6 +445,7 @@ export function markSlurNotes(arcs: SlurArc[], newId: () => string = () => Strin
       if (sl.to) sl.to.slurStopIds = pushId(sl.to.slurStopIds, id);
       const one = sl.from && !sl.to ? sl.from : !sl.from && sl.to ? sl.to : undefined;
       if (one && !one.slurOrphans?.some((o) => o.id === id)) (one.slurOrphans ??= []).push({ id, edge: orphanEdge(sl, one), above: sl.above });
+      if (one === sl.to && sl.edgeFirst && !sl.edgeFirst.slurEdgeCands?.some((o) => o.id === id)) (sl.edgeFirst.slurEdgeCands ??= []).push({ id, above: sl.above });
     }
     if (sl.from) {
       if (sl.tie) (sl.from.tieStart = true), (sl.from.tieAbove = sl.above);

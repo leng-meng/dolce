@@ -358,8 +358,7 @@ function readNotations(noteEl: Element, marks: MarkSink, id: number, into: Notat
       const type = s.getAttribute("type");
       const number = Number(s.getAttribute("number") ?? 1);
       const kind = tag === "tuplet" ? "tuplet" : tag === "tied" ? "tied" : "slur";
-      if (type === "start") marks.open(kind, number, id, s, noteIndex);
-      else if (type === "stop") marks.close(kind, number, id, s, noteIndex);
+      if (type === "start" || type === "stop") marks.push(type, kind, number, id, s, noteIndex);
     }
   }
   return Object.keys(n).length ? n : undefined;
@@ -367,28 +366,63 @@ function readNotations(noteEl: Element, marks: MarkSink, id: number, into: Notat
 
 /** 跨元素记号的配对池。MusicXML 用 `number` 属性配对，同类可重叠；**按声部配**（换声部时 `nextPart`）。
  *
- *  同一编号还没收口又起一个（原文出错，合唱谱 宁静的伯利恒 8 处）：slur / tuplet **后起点顶掉前起点**
- *  （与混排 musicpp 一致；按栈配会把落单的收口配给更早的起点，横跨几小节）。
+ *  同一编号还没收口又起一个（原文出错）：slur / tuplet **后起点顶掉前起点**
+ *  （与混排 musicpp 一致；按栈配会把落单的收口配给更早的起点，横跨几小节）。slur 只顶同谱表同声部的：
+ *  钢琴两行谱同时各开一条 1 号弧（右手跨小节线那条、左手小节里那条，宁静的伯利恒 m51 / m83）是常见写法，
+ *  同一行谱两个声部各开一条 1 号弧也是（识别稿的写出端按文档序发号，两个声部各从 1 起），各收各的。
+ *  slur 的止端先配同谱表同声部开着的，再同谱表，没有才配别的谱表的（跨谱表弧）。
  *  tied 仍按栈配：和弦里几个音同时 `<tied type="start"/>`（编号都缺省 1）是正常写法。 */
 class MarkSink {
   readonly marks: Mark[] = [];
-  private open_ = new Map<string, { id: number; el: Element; note: number }[]>();
+  private open_ = new Map<string, { id: number; el: Element; note: number; staff: number; voice: number }[]>();
+  /** 当前音的时刻（小节内 divisions）与谱表，`readMeasure` 读每个音的记号前设 */
+  at = 0;
+  staff = 1;
+  voice = 1;
+  private pending: { t: number; staff: number; voice: number; type: "start" | "stop"; kind: Mark["type"]; number: number; id: number; el: Element; note: number }[] = [];
 
   nextPart(): void {
     this.open_.clear();
   }
 
-  open(type: Mark["type"], number: number, id: number, el: Element, note: number): void {
+  /** slur 的起止先攒着，小节读完按**时刻**配（`flush`）：一小节里先写谱表 1 再 `<backup>` 写谱表 2，跨谱表弧的止端（谱表 1 小节后半的和弦）
+   *  在文档里排在起端（谱表 2 小节头的音）前面，按文档序配会把这个止端配给上一条、起端留给下一条的止端（宁静的伯利恒钢琴每小节一条）。
+   *  同一时刻的保持文档序（倚音的弧起在倚音、止在同一时刻的主音上） */
+  push(type: "start" | "stop", kind: Mark["type"], number: number, id: number, el: Element, note: number): void {
+    this.pending.push({ t: this.at, staff: this.staff, voice: this.voice, type, kind, number, id, el, note });
+  }
+
+  flush(): void {
+    // 只有 slur 按时刻排：tied 连相邻两个同音、tuplet 在一个声部里，文档序就是时序；tied 按栈配，和弦里几条同时起，换了序会配乱（是爱 m27、m39）
+    const evs = [
+      ...this.pending.filter((e) => e.kind !== "slur"),
+      ...this.pending.map((e, i) => ({ e, i })).filter(({ e }) => e.kind === "slur").sort((a, b) => a.e.t - b.e.t || a.i - b.i).map(({ e }) => e),
+    ];
+    this.pending = [];
+    for (const e of evs) (e.type === "start" ? this.open(e.kind, e.number, e.id, e.el, e.note, e.staff, e.voice) : this.close(e.kind, e.number, e.id, e.el, e.note, e.staff, e.voice));
+  }
+
+  private open(type: Mark["type"], number: number, id: number, el: Element, note: number, staff: number, voice: number): void {
     const k = `${type}#${number}`;
-    const list = type === "tied" ? this.open_.get(k) ?? [] : [];
-    list.push({ id, el, note });
+    const list = type === "tied" ? this.open_.get(k) ?? [] : type === "slur" ? (this.open_.get(k) ?? []).filter((o) => o.staff !== staff || o.voice !== voice) : [];
+    list.push({ id, el, note, staff, voice });
     this.open_.set(k, list);
   }
 
-  close(type: Mark["type"], number: number, id: number, el: Element, note: number): void {
+  private close(type: Mark["type"], number: number, id: number, el: Element, note: number, staff: number, voice: number): void {
     const k = `${type}#${number}`;
     const list = this.open_.get(k);
-    const started = list?.pop();
+    let at = list ? list.length - 1 : -1;
+    // slur：先同谱表同声部，再同谱表，再别的谱表（跨谱表弧）
+    if (type === "slur" && list) {
+      const pick = (ok: (o: { staff: number; voice: number }) => boolean) => {
+        for (let i = list.length - 1; i >= 0; i--) if (ok(list[i])) return i;
+        return -1;
+      };
+      const i = [pick((o) => o.staff === staff && o.voice === voice), pick((o) => o.staff === staff)].find((x) => x >= 0);
+      if (i !== undefined) at = i;
+    }
+    const started = at >= 0 ? list!.splice(at, 1)[0] : undefined;
     if (!started) return;
     const m: Mark = { type, number, start: started.id, end: id };
     if (started.note) m.startNote = started.note;
@@ -694,6 +728,9 @@ function readMeasure(
           // 和弦里后面那几个音上的歌词并到和弦上（同段号已有的不收）：有的软件把字挂在和弦的非首音上，只读首音会丢字
           const more = readLyrics(c).filter((l) => !last!.lyrics?.some((k) => k.number === l.number));
           if (more.length) last.lyrics = [...(last.lyrics ?? []), ...more];
+          marks.at = lastStart;
+          marks.staff = last.staff;
+          marks.voice = last.voice;
           const nots = readNotations(c, marks, last.id, last.notations, last.notes.length - 1);
           if (nots) last.notations = nots;
           break;
@@ -751,6 +788,9 @@ function readMeasure(
         }
         const lyr = readLyrics(c);
         if (lyr.length) ch.lyrics = lyr;
+        marks.at = cursor;
+        marks.staff = ch.staff;
+        marks.voice = ch.voice;
         const nots = readNotations(c, marks, ch.id, undefined);
         if (nots) ch.notations = nots;
         if (cursor !== end) ch.onset = cursor;
@@ -796,6 +836,7 @@ function readMeasure(
   });
   if (reach > maxEnd) m.duration = reach;
   if (m.attrs && firstAttrs) bindSurface(m.attrs, firstAttrs);
+  marks.flush();
   return m;
 }
 

@@ -842,6 +842,8 @@ export interface StaffNote {
    *  `begin` = 止在这个音、另一端起在本行第一小节前半（跨行弧的后半），`mid` = 系统中间缺一端。写出时 `renumberSlurs` 只把
    *  同一声部同一行谱上的 `end` 与这个声部下一个出现的系统里的 `begin` 接成一条，接不上的不写。 */
   slurOrphans?: { id: string; edge: "end" | "begin" | "mid"; above: boolean }[];
+  /** 页上第一个系统行首起笔的弧（`SlurArc.edgeFirst`）可以从这个音起：上一页末系统同一行谱没有行尾半截时，整曲拼页时补成起端。 */
+  slurEdgeCands?: { id: string; above: boolean }[];
   tieStart?: boolean;
   tieStop?: boolean;
   /** 起头的那条圆滑线 / 连音线画在音符上方（弧朝上，`SlurArc.above`）还是下方；没认出方向的不写。 */

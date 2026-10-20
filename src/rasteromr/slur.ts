@@ -545,3 +545,167 @@ export function extendArcEnds(arcs: SlurArc[], nl: Binary, onLine: (y: number) =
     }
   }
 }
+
+// ── 陡着收不住的弧端 ─────────────────────────────────────────────────────────
+//
+// 钢琴跨谱表的大弧从低音谱表陡着升上去、在高音谱表顶上拱过、落到右手和弦上（宁静的伯利恒 p1–p2 钢琴几乎每小节一条）。
+// 去线后拱顶那段压着、擦着高音谱表的线，碎成短块认不成弧，只剩下截（陡的那段），右端停在半空，`attachSlurs` 就近挂到中途某个右手音上。
+// 弧上方（∩）的右端还在陡升、左端还在陡降（弧下方反过来），说明弧在这儿没完：在**原图**上顺切线一步一像素往外追，
+// 垂直于走向 `TRACE_PERP` 格内找离预计位置最近的一段墨：细的（不过 `TRACE_THICK` 格）跟上、修切线；粗的（擦过音头、符杠，
+// 或平着贴在谱线上）照切线穿过去，连续不过 `TRACE_OCCLUDE` 格；没墨连续不过 `TRACE_MISS` 格。弯向要一路朝一侧弯
+//（∩ 往右走斜率只增不减，回头超过 `TRACE_BEND` 就停：那是顺着符干上去了）。追出 `TRACE_MIN` 格以上才改端点；
+// 追过的路上原先认出的别的截弧（拱顶那截有时认得出来）并掉。
+
+/** 端头算「陡」的切线竖向分量下限（单位向量）。 */
+const TRACE_STEEP = 0.6;
+/** 收尾往回陡下的上限（单位向量竖向分量）。 */
+const TRACE_STEEP_BACK = 0.85;
+/** 垂直于走向找墨的半宽（格）。 */
+const TRACE_PERP = 0.5;
+/** 细墨段的长度上限（格，沿垂线量）。 */
+const TRACE_THICK = 0.6;
+/** 连续穿过粗墨的上限（格）。 */
+const TRACE_OCCLUDE = 1.5;
+/** 连续没墨的上限（格）。 */
+const TRACE_MISS = 0.6;
+/** 斜率回头的容差。 */
+const TRACE_BEND = 0.8;
+/** 线带里的墨竖向比线宽多出几像素才算弧。 */
+const TRACE_ON_LINE = 2;
+/** 追出多远才算数（格）。 */
+const TRACE_MIN = 1.5;
+/** 一端最多追多远（格）。 */
+const TRACE_MAX = 30;
+
+export function traceSteepArcEnds(arcs: SlurArc[], bin: Binary, onLine: (y: number) => boolean, lineThick: number, sp: number): void {
+  const raw = (x: number, y: number) => x >= 0 && y >= 0 && x < bin.w && y < bin.h && bin.data[y * bin.w + x] === 1;
+  const vRun = (x: number, y: number) => {
+    let a = y, b = y;
+    while (raw(x, a - 1) && y - a < sp) a--;
+    while (raw(x, b + 1) && b - y < sp) b++;
+    return b - a + 1;
+  };
+  // 谱线行上的墨只在竖向比线粗（`TRACE_ON_LINE` 倍线宽）时算：斜穿谱线时线的那一小截也是细墨，跟上去就顺着线走了；
+  // 弧顶贴在线上的那段（宁静 p2 m16 钢琴 A2→C5 拱顶压着高音谱表第二线）线加弧比线粗
+  const ink = (x: number, y: number) => raw(x, y) && (!onLine(y) || vRun(x, y) >= lineThick + TRACE_ON_LINE);
+  const W = Math.max(3, Math.round(sp * TRACE_PERP));
+  for (const sl of [...arcs]) {
+    if (!arcs.includes(sl) || sl.dashed) continue;
+    const len = Math.hypot(sl.rx - sl.lx, sl.ry - sl.ly);
+    if (len < sp * 1.5) continue;
+    for (const dir of [-1, 1] as const) {
+      // 起步切线取整截的弦（陡的那截近乎直）
+      let vx = dir * (sl.rx - sl.lx), vy = dir * (sl.ry - sl.ly);
+      const n0 = Math.hypot(vx, vy);
+      vx /= n0;
+      vy /= n0;
+      // 往外（离开音符那侧）陡走：∩ 往上（vy<0）、∪ 往下
+      const out = sl.above ? -vy : vy;
+      if (out < TRACE_STEEP) continue;
+      let x = dir < 0 ? sl.lx : sl.rx, y = dir < 0 ? sl.ly : sl.ry;
+      // 起步切线按端头往里 `k` 列处的墨心（弦是整截的走向，端头那截常已拐平：拱顶前的那段）
+      {
+        const k = Math.max(3, Math.round(sp * 0.6)), bx = Math.round(x - dir * k), b = sl.obj.box;
+        let yIn: number | null = null;
+        for (let yy = Math.round(b.top); yy <= Math.round(b.bottom); yy++) if (ink(bx, yy) && (yIn === null || Math.abs(yy - y) < Math.abs(yIn - y))) yIn = yy;
+        if (yIn !== null) {
+          vx = dir * k;
+          vy = y - yIn;
+          const n1 = Math.hypot(vx, vy);
+          vx /= n1;
+          vy /= n1;
+        }
+      }
+      /** 走向上的「弯度」：∩ 往右走 vy/vx 只增，往左走 vy/(-vx) 只增；∪ 反过来。统一成只增的量 */
+      const bendOf = (ax: number, ay: number) => (sl.above ? 1 : -1) * (ay / Math.max(1e-3, Math.abs(ax)));
+      let maxBend = -Infinity;
+      let miss = 0, occl = 0, lineGap = 0, walked = 0;
+      const sx = x, sy = y, lag = Math.max(3, Math.round(sp * 0.3));
+      let last: { x: number; y: number; at: number } | null = null;
+      const path: { x: number; y: number }[] = [];
+      while (walked < sp * TRACE_MAX) {
+        const px = x + vx, py = y + vy;
+        walked++;
+        // 垂线上的墨段
+        const runs: { a: number; b: number }[] = [];
+        let cur: { a: number; b: number } | null = null;
+        for (let d = -W; d <= W; d++) {
+          if (ink(Math.round(px - vy * d), Math.round(py + vx * d))) {
+            if (cur && cur.b === d - 1) cur.b = d;
+            else runs.push((cur = { a: d, b: d }));
+          }
+        }
+        // 段要延到窗口边上的，量真长度（粗墨块常比窗口宽）
+        const extent = (r: { a: number; b: number }) => {
+          let a = r.a, b = r.b;
+          if (a === -W) while (a > -sp && ink(Math.round(px - vy * (a - 1)), Math.round(py + vx * (a - 1)))) a--;
+          if (b === W) while (b < sp && ink(Math.round(px - vy * (b + 1)), Math.round(py + vx * (b + 1)))) b++;
+          return { a, b };
+        };
+        const near = runs.map(extent).sort((p, q) => Math.min(Math.abs(p.a), Math.abs(p.b), p.a <= 0 && p.b >= 0 ? 0 : 99) - Math.min(Math.abs(q.a), Math.abs(q.b), q.a <= 0 && q.b >= 0 ? 0 : 99))[0];
+        if (!near) {
+          // 落在谱线行上：照切线走过去（同 `extendArcEnds` 的 `EXT_GAP`）
+          if (onLine(Math.round(py))) {
+            if (++lineGap > sp * EXT_GAP) break;
+            x = px;
+            y = py;
+            continue;
+          }
+          if (++miss > Math.max(2, sp * TRACE_MISS)) break;
+          x = px;
+          y = py;
+          continue;
+        }
+        miss = 0;
+        lineGap = 0;
+        if (near.b - near.a + 1 > sp * TRACE_THICK) {
+          if (++occl > sp * TRACE_OCCLUDE) break;
+          x = px;
+          y = py;
+          continue;
+        }
+        occl = 0;
+        const c = (near.a + near.b) / 2;
+        const hx = px - vy * c, hy = py + vx * c;
+        // 走向按几步之前那个墨点量（一步一像素，垂线上取中的半像素抖动会把单步方向甩到后头去）
+        const back = path[path.length - lag] ?? { x: sx, y: sy };
+        const ax = hx - back.x, ay = hy - back.y;
+        const an = Math.hypot(ax, ay) || 1;
+        let nvx = vx * 0.7 + (ax / an) * 0.3, nvy = vy * 0.7 + (ay / an) * 0.3;
+        const nn = Math.hypot(nvx, nvy);
+        nvx /= nn;
+        nvy /= nn;
+        // 往回（朝音符那侧）陡下去的是顺着符干、头的边走了：弧尾收得没这么陡
+        if (Math.sign(nvx) !== dir || (sl.above ? nvy : -nvy) > TRACE_STEEP_BACK) break;
+        // 弯度只在走出起步那一小段（`lag` 的两倍）之后才记：起步处端头墨心不准，切线左右晃
+        const bend = bendOf(nvx, nvy);
+        if (path.length > 2 * lag) {
+          if (bend < maxBend - TRACE_BEND) break;
+          maxBend = Math.max(maxBend, bend);
+        } else maxBend = bend;
+        vx = nvx;
+        vy = nvy;
+        x = hx;
+        y = hy;
+        last = { x: hx, y: hy, at: walked };
+        path.push(last);
+      }
+      if (!last || last.at < sp * TRACE_MIN) continue;
+      const b = sl.obj.box as { left: number; right: number; top: number; bottom: number };
+      if (dir < 0) (sl.lx = Math.round(last.x)), (sl.ly = Math.round(last.y));
+      else (sl.rx = Math.round(last.x)), (sl.ry = Math.round(last.y));
+      for (const p of path) {
+        b.left = Math.min(b.left, p.x);
+        b.right = Math.max(b.right, p.x);
+        b.top = Math.min(b.top, p.y);
+        b.bottom = Math.max(b.bottom, p.y);
+      }
+      // 路上原先认出的别的截：两端都贴着追过的路（半格内）的并掉
+      const onPath = (qx: number, qy: number) => path.some((p) => Math.hypot(p.x - qx, p.y - qy) <= sp * 0.5);
+      for (let i = arcs.length - 1; i >= 0; i--) {
+        const o = arcs[i];
+        if (o !== sl && o.above === sl.above && !o.dashed && onPath(o.lx, o.ly) && onPath(o.rx, o.ry)) arcs.splice(i, 1);
+      }
+    }
+  }
+}
