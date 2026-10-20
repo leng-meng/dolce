@@ -105,13 +105,14 @@ function partOfVoice(song: Song, voice: number): Part | undefined {
 }
 
 /** 曲中转调：模型小节上的调号（第二小节起，口径同 `jianpuinput.ts` 与 `playdoc.ts`）按元素 id 交给 `buildMeasures`。
- *  全曲没有转调时不给（`buildMeasures` 照头部调号算）。 */
+ *  全曲没有转调时不给（`buildMeasures` 照头部调号算）。文本谱后几组才出场的声部，头一小节上的调号也算（缺席时转了调，`frompu.ts` 补在它上面）。 */
 function keyChangesOf(view: ReturnType<typeof docView>, part: Part | undefined): { fifthsOf?: (el: MusicElement) => number | undefined } {
-  if (!part || !part.measures.some((m, i) => i > 0 && m.attrs?.key)) return {};
+  const changes = (m: Part["measures"][number], i: number): boolean => !!m.attrs?.key && (i > 0 || (m.print?.system ?? 0) > 0);
+  if (!part || !part.measures.some(changes)) return {};
   const byId = new Map<ElementId, number>();
   let fifths: number | undefined;
   part.measures.forEach((m, i) => {
-    if (i > 0 && m.attrs?.key) fifths = m.attrs.key.fifths;
+    if (changes(m, i)) fifths = m.attrs!.key!.fifths;
     if (fifths === undefined) return;
     for (const el of m.elements) if (el.kind === "chord") byId.set(el.id, fifths);
   });

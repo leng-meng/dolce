@@ -734,8 +734,8 @@ function measureXml(
   marksByStart: Map<number, Mark[]>,
   marksByEnd: Map<number, Mark[]>,
   cx: Ctx,
-  /** 共用时间轴上的写法（`partXml`）：`attrs` 已经提前写过就不再写；`shown` 见 `attributesXml`；`number` 按轴上的格编号 */
-  axis: { skipAttrs?: boolean; shown?: boolean; number?: string } = {},
+  /** 共用时间轴上的写法（`partXml`）：`shown` 见 `attributesXml`；`number` 按轴上的格编号；`attrs` 顶替小节自己的 */
+  axis: { shown?: boolean; number?: string; attrs?: MeasureAttrs | null } = {},
 ): void {
   const width = cx.layout?.widths.get(m);
   const mAttrs = (m.implicit ? ' implicit="yes"' : "") + (width !== undefined ? ` width="${width}"` : "");
@@ -743,7 +743,7 @@ function measureXml(
   // 顺序是硬要求：print → 左线 → attributes → direction → (harmony/note)* → 右线
   printXml(o, m.print, cx.layout?.prints.get(m));
   for (const b of m.barlines ?? []) if (b.location === "left") barlineXml(o, b);
-  const attrs = axis.skipAttrs ? undefined : m.attrs;
+  const attrs = axis.attrs === undefined ? m.attrs : axis.attrs ?? undefined;
   if (attrs || axis.shown !== undefined) attributesXml(o, attrs ?? {}, axis.shown);
   // 记号按 afterElements 插回原位（缺省在小节开头；超出元素个数的落到小节末）
   const count = m.elements.length;
@@ -860,6 +860,14 @@ function axisMeasuresXml(
   const first = part.measures[0];
   let shown = true;
   let firstWritten = false;
+  /** 轴上走到这一格时生效的调号、拍号（各格最前那个声部的小节上写的） */
+  let meterNow: Pick<MeasureAttrs, "key" | "time"> = {};
+  /** 这个 part 已经写出的调号、拍号：出场那一小节与它相同的不再写（免得谱表上多印一个拍号） */
+  let written: Pick<MeasureAttrs, "key" | "time"> = {};
+  const note = (a: MeasureAttrs | undefined): void => {
+    if (a?.key) written = { ...written, key: a.key };
+    if (a?.time) written = { ...written, time: a.time };
+  };
   for (const grp of axis.groups) {
     let present = false;
     for (let g = grp.start; g < grp.start + grp.length; g++) if (local[g]! >= 0) present = true;
@@ -867,23 +875,36 @@ function axisMeasuresXml(
       const toggle: boolean | undefined = g === grp.start && present !== shown ? present : undefined;
       if (toggle !== undefined) shown = toggle;
       const li = local[g]!;
+      const ref = other(g);
+      if (ref?.attrs?.key) meterNow = { ...meterNow, key: ref.attrs.key };
+      if (ref?.attrs?.time) meterNow = { ...meterNow, time: ref.attrs.time };
       if (li >= 0) {
-        // 声部头一小节的 `<attributes>`（divisions、调号、拍号、谱号）已经随前面的空小节写过了
-        const number = other(g)?.number;
-        measureXml(o, part.measures[li]!, byStart, byEnd, cx, { skipAttrs: li === 0 && firstWritten, shown: toggle, ...(number !== undefined ? { number } : {}) });
+        // 头一小节的 `<attributes>` 照写（前面空小节写的是曲首的调号拍号，出场时的转调转拍在它自己身上），与已写出的相同的那几项去掉
+        const m = part.measures[li]!;
+        let attrs = m.attrs;
+        if (li === 0 && firstWritten && attrs) {
+          // divisions、谱号等已随曲首空小节写过（就是这一小节的），只剩与已写出的不同的调号、拍号
+          const { key, time } = attrs;
+          const keyNew = key && key.fifths !== written.key?.fifths;
+          const timeNew = time && (time.beats !== written.time?.beats || time.beatType !== written.time?.beatType);
+          attrs = keyNew || timeNew ? { ...(keyNew ? { key } : {}), ...(timeNew ? { time } : {}) } : undefined;
+        }
+        note(attrs);
+        const number = ref?.number;
+        measureXml(o, m, byStart, byEnd, cx, { shown: toggle, ...(number !== undefined ? { number } : {}), ...(attrs !== m.attrs ? { attrs: attrs ?? null } : {}) });
         firstWritten = true;
         continue;
       }
-      const ref = other(g);
       o.open("measure", ` number="${escapeAttr(ref?.number ?? String(g + 1))}"`);
       const p = ref?.print;
       if (p?.newSystem || p?.newPage) printXml(o, { ...(p.newSystem ? { newSystem: true } : {}), ...(p.newPage ? { newPage: true } : {}) }, undefined);
-      // 声部还没写过小节：头一小节的 `<attributes>` 提前到这里（MusicXML 要先有 divisions 才能写时长）；
+      // 声部还没写过小节：先写 divisions、谱号（取头一小节的，MusicXML 要先有 divisions 才能写时长），调号拍号取轴上此刻生效的；
       // 之后的空小节只跟着轴上这一格的拍号、调号走（时长才对得上拍号）
       const meter = ref?.attrs && (ref.attrs.time || ref.attrs.key)
         ? { ...(ref.attrs.key ? { key: ref.attrs.key } : {}), ...(ref.attrs.time ? { time: ref.attrs.time } : {}) }
         : undefined;
-      const attrs = !firstWritten ? first?.attrs : meter;
+      const attrs = !firstWritten ? { ...(first?.attrs ?? {}), ...meterNow } : meter;
+      note(attrs);
       if (attrs || toggle !== undefined) attributesXml(o, attrs ?? {}, toggle);
       firstWritten = true;
       const len = ref ? measureLength(ref) : 0;
