@@ -347,7 +347,7 @@ const STEM_SNAP = 1;
 const STEM_TIP_DX = 2;
 
 /** 干背着弧时改挂：弧端离干端的纵向上限（格）。 */
-const STEM_TIP_DY = 1.5;
+const STEM_TIP_DY = 2;
 
 export function snapSlurEndsToStems(slurs: SlurArc[], notes: StaffNote[], sp: number): void {
   const stemX = (n: StaffNote) => {

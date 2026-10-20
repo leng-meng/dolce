@@ -1211,6 +1211,8 @@ export async function finishRasterPage(s: PageFinishInput): Promise<RasterPageRe
   }
   attachEdgeSlurStarts(slurs, notes, unit.space, new Set(index > 1 ? (pg.systems[0]?.staves ?? []) : []));
   completeSlurEnds(slurs, notes, unit.space);
+  // 补齐的端是按头中心就近挂的，弧在干那一侧时再按干挪一遍（破碎 p7 m72 钢琴左手 E2 八分那条）
+  snapSlurEndsToStems(slurs, notes, unit.space);
   const chordTies = tieChords(slurs, notes, unit.space, (x0, x1, y0, y1) => {
     const { bin } = raster;
     const xa = Math.max(0, Math.round(x0)), xb = Math.min(bin.w, Math.round(x1));
