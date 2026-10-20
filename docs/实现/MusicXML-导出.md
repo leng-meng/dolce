@@ -81,8 +81,12 @@ MusicXML 的 `beams` 是 `<beam>` 元素、`dots` 是 `<dot>`、长音是 `type=
 - **增时线上的和弦**：`<harmony>` 排在所辖音符之前，拍位写进 `Harmony.offset`。
 - **符杠**：文本谱/123 的 `beams` 是减时线层数的占位（全是 continue），一个 begin 都没有的声部按拍自动分组（见下「符杠」）。
 - **歌词**：段号区间（文本谱 `C1-2:`）展开成逐段的 `<lyric>`；副歌行（`refrain`）写 `number="chorus"`，与导入端互逆。
-- **各 part 按组对齐**：文本谱一组不一定含全部声部，投影开头先 `alignparts.ts::alignPartsBySystem` 补无声小节（缺席的组、同组偏短的段尾），
-  否则 part 小节数不等、后出现的声部被挤到开头（issue 11；《同一首歌》三个 part 由 53/41/12 小节对齐到 53）。
+- **各 part 按共用时间轴逐格写**（`toxml.ts::axisMeasuresXml`，轴见 `model/timeaxis.ts`）：文本谱一组不一定含全部声部，投影不补小节、
+  只留各小节的组号（`print.system`，不写进 `<print>`），写出端按轴逐格写，各 part 小节数才一致（issue 11；《同一首歌》三个 part 53/41/12 小节写成各 53）。
+  某格这个声部没有小节：写一个只有 `<forward>`（整小节时长，取这一格最前那个声部的小节）的空 `<measure>`，不带音、小节线、房号、跳转，
+  只跟着轴上这一格的拍号/调号、换行（`new-system`/`new-page`）走；声部头一小节的 `<attributes>` 提前到它前面的空小节（要先有 divisions）。
+  整组缺席的声部在该组首小节写 `<staff-details print-object="no">` 把谱表藏起（同原样档一组不印这个声部），回到有它的组写 `yes`；
+  小节号按格统一。后几组才出场的声部，头一小节照样起新系统（只有曲首那组的不写 `new-system`）。
 - **`<voice>` 一律写 1**：简谱来源一个 part 就是一个声部，文本谱 `Q2:` 的声部号是 part 的事；写 2 导入端读不出音符。
 - **头部**：没有 `<credit>` 时由副标题、作者、`TR/TL` 生成（空串不写）；数字速度写首小节 metronome。
 

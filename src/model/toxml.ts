@@ -46,6 +46,7 @@ import type {
 import { harmonyXml as chordTextXml } from "../score/harmonyxml";
 import { escapeAttr, escapeXml } from "../score/xmlutil";
 import { projectForMusicXml, type ProjectOptions } from "./xmlproject";
+import { axisOfSong, type TimeAxis } from "./timeaxis";
 import { SOURCE_ID_PREFIX } from "./helpers";
 import { surfaceOf, type EngravedLayout, type Position, type PrintLayout } from "./xmlsurface";
 import { t as tr } from "../i18n";
@@ -685,6 +686,8 @@ function printXml(o: Out, p: Print | undefined, lay: PrintLayout | undefined): v
   const a: string[] = [];
   if (p?.newSystem) a.push('new-system="yes"');
   if (p?.newPage) a.push('new-page="yes"');
+  // 只剩组号（文本谱投影留给共用时间轴用的）：没有要写的
+  if (!a.length && !lay && !(p && surfaceOf(p))) return;
   o.open("print", a.length ? " " + a.join(" ") : "", p ? surfaceOf(p) : undefined);
   if (lay?.systemLayout) writeSystemLayout(o, lay.systemLayout, false);
   for (const sl of lay?.staffLayouts ?? []) {
@@ -700,7 +703,8 @@ function printXml(o: Out, p: Print | undefined, lay: PrintLayout | undefined): v
   o.close();
 }
 
-function attributesXml(o: Out, attrs: MeasureAttrs): void {
+/** `shown`：本小节起这个声部的谱表显示与否（`<staff-details print-object>`，共用时间轴上整组缺席的声部藏起来，见 `partXml`） */
+function attributesXml(o: Out, attrs: MeasureAttrs, shown?: boolean): void {
   o.open("attributes", "", surfaceOf(attrs));
   if (attrs.divisions !== undefined) o.text("divisions", attrs.divisions);
   if (attrs.key) writeKey(o, attrs.key);
@@ -713,6 +717,7 @@ function attributesXml(o: Out, attrs: MeasureAttrs): void {
     if (c.octaveChange !== undefined) o.text("clef-octave-change", c.octaveChange);
     o.close();
   }
+  if (shown !== undefined) o.leaf("staff-details", ` print-object="${shown ? "yes" : "no"}"`);
   if (attrs.transpose) {
     o.open("transpose");
     if (attrs.transpose.diatonic !== undefined) o.text("diatonic", attrs.transpose.diatonic);
@@ -729,14 +734,17 @@ function measureXml(
   marksByStart: Map<number, Mark[]>,
   marksByEnd: Map<number, Mark[]>,
   cx: Ctx,
+  /** 共用时间轴上的写法（`partXml`）：`attrs` 已经提前写过就不再写；`shown` 见 `attributesXml`；`number` 按轴上的格编号 */
+  axis: { skipAttrs?: boolean; shown?: boolean; number?: string } = {},
 ): void {
   const width = cx.layout?.widths.get(m);
   const mAttrs = (m.implicit ? ' implicit="yes"' : "") + (width !== undefined ? ` width="${width}"` : "");
-  o.open("measure", ` number="${escapeAttr(m.number)}"${mAttrs}`, surfaceOf(m));
+  o.open("measure", ` number="${escapeAttr(axis.number ?? m.number)}"${mAttrs}`, surfaceOf(m));
   // 顺序是硬要求：print → 左线 → attributes → direction → (harmony/note)* → 右线
   printXml(o, m.print, cx.layout?.prints.get(m));
   for (const b of m.barlines ?? []) if (b.location === "left") barlineXml(o, b);
-  if (m.attrs) attributesXml(o, m.attrs);
+  const attrs = axis.skipAttrs ? undefined : m.attrs;
+  if (attrs || axis.shown !== undefined) attributesXml(o, attrs ?? {}, axis.shown);
   // 记号按 afterElements 插回原位（缺省在小节开头；超出元素个数的落到小节末）
   const count = m.elements.length;
   const dirAt = (dir: Direction): number => Math.min(dir.afterElements ?? 0, count);
@@ -815,7 +823,7 @@ function measureXml(
   o.close();
 }
 
-function partXml(o: Out, part: Part, song: Song, cx: Ctx): void {
+function partXml(o: Out, part: Part, song: Song, cx: Ctx, axis?: TimeAxis): void {
   const byStart = new Map<number, Mark[]>();
   const byEnd = new Map<number, Mark[]>();
   const add = (map: Map<number, Mark[]>, id: number, m: Mark): void => {
@@ -830,8 +838,79 @@ function partXml(o: Out, part: Part, song: Song, cx: Ctx): void {
     add(byEnd, m.end, m);
   }
   o.open("part", ` id="${escapeAttr(part.id)}"`, surfaceOf(part));
-  for (const m of part.measures) measureXml(o, m, byStart, byEnd, cx);
+  if (axis?.grouped) axisMeasuresXml(o, part, song, axis, byStart, byEnd, cx);
+  else for (const m of part.measures) measureXml(o, m, byStart, byEnd, cx);
   o.close();
+}
+
+/** 按各声部共用的时间轴（`timeaxis.ts`）逐格写：MusicXML 各 part 小节数须一致，这个声部在某格没有小节（文本谱一组没写它、
+ *  或这组里它短几小节）就写一个只有 `<forward>`（整小节时长）的空小节——不带音、小节线、房号、跳转，只在这里写、模型里没有。
+ *  整组缺席的那几组把谱表藏起来（`<staff-details print-object="no">`，同原样档一组不印这个声部），回到有它的组再显示。 */
+function axisMeasuresXml(
+  o: Out, part: Part, song: Song, axis: TimeAxis,
+  byStart: Map<number, Mark[]>, byEnd: Map<number, Mark[]>, cx: Ctx,
+): void {
+  const pi = song.parts.indexOf(part);
+  const local = axis.local[pi]!;
+  /** 轴上这一格排在最前的声部的小节：各 part 的小节号照它；空小节的时长、换行也照它 */
+  const other = (g: number): Measure | undefined => {
+    for (const [k, p] of song.parts.entries()) if (axis.local[k]![g]! >= 0) return p.measures[axis.local[k]![g]!];
+    return undefined;
+  };
+  const first = part.measures[0];
+  let shown = true;
+  let firstWritten = false;
+  for (const grp of axis.groups) {
+    let present = false;
+    for (let g = grp.start; g < grp.start + grp.length; g++) if (local[g]! >= 0) present = true;
+    for (let g = grp.start; g < grp.start + grp.length; g++) {
+      const toggle: boolean | undefined = g === grp.start && present !== shown ? present : undefined;
+      if (toggle !== undefined) shown = toggle;
+      const li = local[g]!;
+      if (li >= 0) {
+        // 声部头一小节的 `<attributes>`（divisions、调号、拍号、谱号）已经随前面的空小节写过了
+        const number = other(g)?.number;
+        measureXml(o, part.measures[li]!, byStart, byEnd, cx, { skipAttrs: li === 0 && firstWritten, shown: toggle, ...(number !== undefined ? { number } : {}) });
+        firstWritten = true;
+        continue;
+      }
+      const ref = other(g);
+      o.open("measure", ` number="${escapeAttr(ref?.number ?? String(g + 1))}"`);
+      const p = ref?.print;
+      if (p?.newSystem || p?.newPage) printXml(o, { ...(p.newSystem ? { newSystem: true } : {}), ...(p.newPage ? { newPage: true } : {}) }, undefined);
+      // 声部还没写过小节：头一小节的 `<attributes>` 提前到这里（MusicXML 要先有 divisions 才能写时长）；
+      // 之后的空小节只跟着轴上这一格的拍号、调号走（时长才对得上拍号）
+      const meter = ref?.attrs && (ref.attrs.time || ref.attrs.key)
+        ? { ...(ref.attrs.key ? { key: ref.attrs.key } : {}), ...(ref.attrs.time ? { time: ref.attrs.time } : {}) }
+        : undefined;
+      const attrs = !firstWritten ? first?.attrs : meter;
+      if (attrs || toggle !== undefined) attributesXml(o, attrs ?? {}, toggle);
+      firstWritten = true;
+      const len = ref ? measureLength(ref) : 0;
+      if (len > 0) {
+        o.open("forward");
+        o.text("duration", len);
+        o.close();
+      }
+      o.close();
+    }
+  }
+}
+
+/** 小节时长（divisions），同 `measureXml` 的游标走法 */
+function measureLength(m: Measure): number {
+  let cursor = 0;
+  let end = 0;
+  let max = 0;
+  for (const el of m.elements) {
+    const onset = el.onset ?? end;
+    if ((el.kind === "chord" && !el.grace) || (el.kind === "space" && el.spacer === "x" && el.duration)) {
+      cursor = onset + Math.max(0, Math.round(el.duration!.divisions));
+      end = cursor;
+      max = Math.max(max, cursor);
+    }
+  }
+  return Math.max(max, m.duration ?? 0);
 }
 
 export interface ToXmlOptions extends ProjectOptions {
@@ -916,7 +995,9 @@ export function scoreDocToMusicXml(doc: ScoreDoc, options: ToXmlOptions = {}): s
   });
   o.close();
 
-  for (const p of song.parts) partXml(o, p, song, cx);
+  // 文本谱一组不一定含全部声部：按共用时间轴逐格写（`axisMeasuresXml`）
+  const axis = projected ? axisOfSong(song) : undefined;
+  for (const p of song.parts) partXml(o, p, song, cx, axis);
   o.close();
   return o.toString() + "\n";
 }

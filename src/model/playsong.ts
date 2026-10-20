@@ -3,7 +3,8 @@
 //
 // 与 `playdoc.ts`（MusicXML 形状）分工同断句那一对（`pu/phrasesong.ts` / `phrasedoc.ts`），
 // 小节序列与断句共用 `pu/phrasesong.ts::buildMeasures`，行视图取 `pu/slots.ts::docView`。**口径同简谱输入模型 `jianpuinput.ts::jianpuInputOfDoc`**：
-//   - 每个有曲行的声部都算一份（歌词段数取各声部最大值），反复与跳转只看第一份；
+//   - 每个有曲行的声部都算一份（歌词段数取各声部最大值），反复与跳转只看第一份（它在某格没有小节就看那一格的代表小节）；
+//     各份叠在共用时间轴上（`timeaxis.ts`，文本谱一组不一定含全部声部）；
 //     `forExpanded` 时带歌词的声部排第一、同号歌词顺延（同 `ToScoreOptions.forExpanded`）。
 //     试听输入（`playSourceOfSong`）推完演唱顺序后把声部排回模型顺序、主旋律记进 `PlaySource.lead`；
 //     编辑器试听不论哪一档都传 `forExpanded`（`App.playable`）
@@ -28,7 +29,7 @@ import { buildMeasures, type JumpOut, type MeasureOut } from "../pu/phrasesong";
 import { docView } from "../pu/slots";
 import { playSourceOfDoc } from "./playdoc";
 import { hasVoiceOverlay, isXmlShaped, projectForMusicXml } from "./xmlproject";
-import { alignPartsBySystem, maxId } from "./alignparts";
+import { axisOfSong, spreadOnAxis } from "./timeaxis";
 import { breaksOf } from "./breaks";
 
 export interface PlaySongOptions {
@@ -38,8 +39,7 @@ export interface PlaySongOptions {
 
 /** **试听/MIDI 的统一入口**（各格式共用）：MusicXML 形状走 `playdoc.ts::playSourceOfDoc`（全部声部、voice 与力度），
  *  简谱形状走 `playSourceOfSong`。拼不出（这首没有曲行）返回 null。
- *  多声部先按组对齐（`alignparts.ts`：缺席/偏短的声部补无声小节，否则各声部按小节序号叠起来会错位）——
- *  对齐的是克隆，元素 id 不变，高亮照样认得；补出来的休止是新 id、不当光标锚点。 */
+ *  多声部按各声部共用的时间轴叠（`timeaxis.ts`：文本谱一组不一定含全部声部，按组号落格，缺席处不补任何东西）。 */
 export function playSourceOf(doc: ScoreDoc, songIdx = 0, options: PlaySongOptions = {}): PlaySource | null {
   const song = doc.songs[songIdx];
   if (!song) return null;
@@ -47,18 +47,14 @@ export function playSourceOf(doc: ScoreDoc, songIdx = 0, options: PlaySongOption
   // ABC `&` 的临时多声部：简谱那条路一个声部行只走一条旋律，会把并行的分支当成接着唱的音。
   // 先投成 MusicXML 形状（元素 id 不变，高亮照样认得）再按 voice 分轨播（`playdoc.ts`）。
   if (hasVoiceOverlay(song)) return playSourceOfDoc(projectForMusicXml(song));
-  if (song.parts.length > 1) {
-    const aligned: ScoreDoc = structuredClone(doc);
-    const floor = Math.max(...doc.songs.map(maxId));
-    if (alignPartsBySystem(aligned.songs[songIdx]!, floor)) return playSourceOfSong(aligned, songIdx, options);
-  }
   return playSourceOfSong(doc, songIdx, options);
 }
 
-/** 演唱顺序（`measures` / `isSimpple` / `hasRepeat` 与跳转表；速度不在这里）。这首没有曲行时返回 null。 */
+/** 演唱顺序（`measures` / `isSimpple` / `hasRepeat` 与跳转表；速度不在这里）。这首没有曲行时返回 null。
+ *  在共用时间轴上推，小节下标折回第一份声部（`forExpanded` 时是带歌词的那个）自己的小节序：展开档、`.jpwabc` 只排它。 */
 export function playDataOfSong(doc: ScoreDoc, songIdx = 0, options: PlaySongOptions = {}): PlayData | null {
   const built = songMeasures(doc, songIdx, options, false);
-  return built && playDataOf(doc, songIdx, built);
+  return built && foldToFirstPart(playDataOf(doc, songIdx, built), built);
 }
 
 /** 试听/MIDI 的输入（`score/timeline.ts::PlaySource`）：各声部小节序列 + 演唱顺序 + 速度，和弦带元素 id。
@@ -77,7 +73,7 @@ export function playSourceOfSong(doc: ScoreDoc, songIdx = 0, options: PlaySongOp
   // 演唱顺序按「带歌词的声部在前」推好了；交出去时声部排回模型的顺序（声部面板、MIDI 轨序按它），主旋律另记
   const order = built.parts.map((_, i) => i).sort((a, b) => built.docRank[a]! - built.docRank[b]!);
   return {
-    parts: order.map((i) => ({ measures: built.parts[i]!, name: built.names[i] })),
+    parts: order.map((i) => ({ measures: spreadOnAxis(built.parts[i]!, built.slots[i]!, built.length), name: built.names[i] })),
     playData,
     lead: order.indexOf(0),
   };
@@ -137,8 +133,13 @@ interface SongMeasures {
   names: (string | undefined)[];
   /** 与 `parts` 平行：在模型声部序里排第几（`forExpanded` 把带歌词的声部挪到了第一份） */
   docRank: number[];
+  /** 第一份声部的跳转记号（小节是它自己的小节序） */
   jumps: JumpOut[];
+  /** 第一份声部的和弦 → 轴上第几格、小节内第几个 */
   idToChord: Map<ElementId, { measure: number; index: number }>;
+  /** 共用时间轴：`slots[k][i]` = 第 k 份第 i 小节落在第几格；一共 `length` 格，每格至少有一份有小节 */
+  slots: number[][];
+  length: number;
 }
 
 function songMeasures(doc: ScoreDoc, songIdx: number, options: PlaySongOptions, withPitch: boolean): SongMeasures | null {
@@ -160,6 +161,7 @@ function songMeasures(doc: ScoreDoc, songIdx: number, options: PlaySongOptions, 
   const fifths = doc.songs[songIdx]!.key?.fifths;
   key.fifths = meta.mode === undefined && fifths !== undefined ? fifths : (fifthsOfSpelling(meta.mode ?? "C", meta.tonic) ?? MusicCommon.keyNameToFifth(meta.mode ?? "C"));
   const parts: MeasureOut[][] = [];
+  const models: (Part | undefined)[] = [];
   const names: (string | undefined)[] = [];
   const docRank: number[] = [];
   let jumps: JumpOut[] = [];
@@ -181,22 +183,103 @@ function songMeasures(doc: ScoreDoc, songIdx: number, options: PlaySongOptions, 
     if (oc) {
       for (const m of built.measures) for (const ch of m.entries) for (const n of ch.notes) if (n.pitch > 0) n.pitch += 12 * oc;
     }
-    if (first) {
-      jumps = built.jumps;
-      built.measures.forEach((m, measure) => m.entries.forEach((ch, index) => {
-        if (ch.id !== undefined) idToChord.set(ch.id, { measure, index });
-      }));
-    }
+    if (first) jumps = built.jumps;
     parts.push(built.measures);
+    models.push(partOfVoice(doc.songs[songIdx]!, v));
     names.push(partOfVoice(doc.songs[songIdx]!, v)?.name);
     docRank.push(docVoices.indexOf(v));
   }
   if (parts.length === 0) return null;
-  return { song, key, time, voices, parts, names, docRank, jumps, idToChord };
+  const { slots, length } = axisOfMeasures(doc.songs[songIdx]!, models, parts);
+  parts[0]!.forEach((m, measure) => m.entries.forEach((ch, index) => {
+    if (ch.id !== undefined) idToChord.set(ch.id, { measure: slots[0]![measure]!, index });
+  }));
+  return { song, key, time, voices, parts, names, docRank, jumps, idToChord, slots, length };
 }
 
-function playDataOf(doc: ScoreDoc, songIdx: number, { song, voices, parts, jumps, idToChord }: SongMeasures): PlayData {
-  const main = parts[0]!;
+/** 各份小节序列在共用时间轴（`timeaxis.ts`）上的格：小节按首个和弦的元素 id 找回模型小节、取它的格。
+ *  不按组排的谱（非文本谱、单声部）各份照自己的小节序号一一对应（行视图切的小节与模型小节不一定一一对应，不去对）。
+ *  一格都没有小节的（模型小节没切出行视图小节）压掉，保证每格至少有一份。 */
+function axisOfMeasures(song: Song, models: readonly (Part | undefined)[], parts: readonly MeasureOut[][]): { slots: number[][]; length: number } {
+  const axis = axisOfSong(song);
+  if (!axis.grouped) return { slots: parts.map((ms) => ms.map((_, i) => i)), length: Math.max(0, ...parts.map((ms) => ms.length)) };
+  const raw = parts.map((ms, k) => {
+    const pi = models[k] ? song.parts.indexOf(models[k]!) : -1;
+    const slotOf = new Map<ElementId, number>();
+    song.parts[pi]?.measures.forEach((m, i) => {
+      for (const el of m.elements) slotOf.set(el.id, axis.slot[pi]![i]!);
+    });
+    let prev = -1;
+    return ms.map((m) => {
+      const hit = m.entries.find((ch) => ch.id !== undefined && slotOf.has(ch.id));
+      prev = Math.max(hit ? slotOf.get(hit.id!)! : prev + 1, prev + 1);
+      return prev;
+    });
+  });
+  const used = [...new Set(raw.flat())].sort((a, b) => a - b);
+  const rank = new Map(used.map((g, i) => [g, i]));
+  return { slots: raw.map((s) => s.map((g) => rank.get(g)!)), length: used.length };
+}
+
+/** 轴上每一格的「代表小节」：第一份的，第一份在这一格没有小节就取后面第一个有的。推演唱顺序时读小节线、反复、房号用（引用原小节，不复制）。 */
+function leadOnAxis({ parts, slots, length }: SongMeasures): MeasureOut[] {
+  const out = new Array<MeasureOut | undefined>(length).fill(undefined);
+  parts.forEach((ms, k) => ms.forEach((m, i) => {
+    const g = slots[k]![i]!;
+    out[g] ??= m;
+  }));
+  return out as MeasureOut[];
+}
+
+/** 轴上推的演唱顺序 → 第一份声部自己的小节序（它每格都有小节时原样返回）。
+ *  第一份在某格没有小节：一项只留它有小节的那几格（首尾换了小节就不再截半小节），一格都没有的项丢掉（换页挪给前一项）；
+ *  跳转落点挪到它往后第一个有的小节。 */
+function foldToFirstPart(pd: PlayData, { slots, length }: SongMeasures): PlayData {
+  const mine = slots[0]!;
+  if (mine.length === length) return pd;
+  const local = new Array<number>(length).fill(-1);
+  mine.forEach((g, i) => (local[g] = i));
+  /** 第 g 格往后（含）第一个有小节的格，没有就是小节总数 */
+  const nextLocal = (g: number): number => {
+    for (let s = g; s < length; s++) if (local[s]! >= 0) return local[s]!;
+    return mine.length;
+  };
+  const out = new PlayData();
+  out.hasRepeat = pd.hasRepeat;
+  out.isSimpple = pd.isSimpple;
+  out.tempo = pd.tempo;
+  for (const it of pd.measures) {
+    const have: number[] = [];
+    for (let g = it.mid; g < it.end; g++) if (local[g]! >= 0) have.push(g);
+    if (have.length === 0) {
+      const prev = out.measures[out.measures.length - 1];
+      if (prev && it.endOfPass) prev.endOfPass = true;
+      continue;
+    }
+    const c = it.clone();
+    c.mid = local[have[0]!]!;
+    c.end = local[have[have.length - 1]!]! + 1;
+    if (have[0] !== it.mid) {
+      c.offset = new Fraction(0);
+      c.skip = 0;
+    }
+    if (have[have.length - 1] !== it.end - 1) c.limit = -1;
+    if (it.glueFrom >= 0) c.glueFrom = Math.min(nextLocal(it.glueFrom), c.end);
+    out.measures.push(c);
+  }
+  const move = (t: TimePosition): TimePosition => {
+    const m = nextLocal(t.mid);
+    return local[t.mid]! >= 0 ? new TimePosition(m, t.offset) : new TimePosition(m, new Fraction(0));
+  };
+  for (const [k, t] of pd.segno) out.segno.set(k, move(t));
+  for (const [k, t] of pd.coda) out.coda.set(k, move(t));
+  for (const [t, v] of pd.jumpTo) out.jumpTo.set(move(t), v);
+  return out;
+}
+
+function playDataOf(doc: ScoreDoc, songIdx: number, built: SongMeasures): PlayData {
+  const { song, voices, parts, jumps, idToChord, slots, length } = built;
+  const main = leadOnAxis(built);
   const pd = new PlayData();
   const docSong = doc.songs[songIdx]!;
   if (docSong.playOrder?.length) {
@@ -216,9 +299,9 @@ function playDataOf(doc: ScoreDoc, songIdx: number, { song, voices, parts, jumps
     return pd;
   }
 
-  applyJumps(pd, main, jumps);
+  applyJumps(pd, main, jumps.map((j) => ({ ...j, measure: slots[0]![j.measure]! })));
   try {
-    const order = playOrderOf(parts.map((measures) => ({ measures })), pd);
+    const order = playOrderOf([{ measures: main }, ...parts.slice(1).map((ms, k) => ({ measures: spreadOnAxis(ms, slots[k + 1]!, length) }))], pd);
     pd.isSimpple = order.isSimple;
     // `.jpwabc` 读进来按反复记号推的顺序，重读时照样推得出来：不算「有反复」，写出端就不另补 `.Repeat`（往返定点）
     pd.hasRepeat = order.hasRepeat && doc.sourceFormat !== "jpwabc";
@@ -291,7 +374,7 @@ function applyJumps(pd: PlayData, measures: readonly MeasureOut[], jumps: readon
 export function jpwInputOfSong(doc: ScoreDoc, songIdx = 0): JpwScoreIn | null {
   const built = songMeasures(doc, songIdx, {}, false);
   if (!built) return null;
-  const playData = playDataOf(doc, songIdx, built);
+  const playData = foldToFirstPart(playDataOf(doc, songIdx, built), built);
   const meta = built.song.metadata;
   for (const tempo of meta.tempos) {
     if (typeof tempo === "number" && tempo >= 20 && tempo <= 400) {

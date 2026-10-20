@@ -119,7 +119,9 @@ export interface PlayMeasure {
 }
 
 export interface PlayPart {
-  readonly measures: readonly PlayMeasure[];
+  /** 按各声部共用的时间轴排（`model/timeaxis.ts`）：这一声部在某格没有小节就是 undefined。
+   *  `parts[0]` 读反复、房号、小节线，须每格都有（简谱形状给的是「每格的代表小节」，见 `model/playsong.ts`） */
+  readonly measures: readonly (PlayMeasure | undefined)[];
 }
 
 /** 跳转记号与其落点。键的**插入次序**有意义（同一小节几个记号按它先后判）。 */
@@ -170,7 +172,7 @@ export function playOrderOf(parts: readonly PlayPart[], jumps: PlayJumps): PlayO
   // 已按房展开；不能再按歌词段数把整份结果整体乘一遍（沧海一声笑会被乘成 6 倍）。
   let hasVolta = false;
   for (const m of measures) {
-    if (m.endingNum && [...m.endingNum].some((n) => n > 1)) hasVolta = true;
+    if (m?.endingNum && [...m.endingNum].some((n) => n > 1)) hasVolta = true;
   }
   // D.C./D.S. 同理：跳转记号本身就把曲子展开成了多遍（本曲 `D.C. al Fine`＝全曲唱一遍、
   // 回头唱到 Fine 为止，两遍正好配两段词），再按歌词段数整体乘一遍就成了四遍。
@@ -184,7 +186,7 @@ export function playOrderOf(parts: readonly PlayPart[], jumps: PlayJumps): PlayO
   if (!hasVolta && !hasJump) implicitVoltas(parts, out);
   if (!hasJump) lastVerseTail(parts, out);
   if (!hasJump) glueCoda(parts, out);
-  return { measures: out, isSimple, hasRepeat: measures.some((m) => m.repeatBackward) };
+  return { measures: out, isSimple, hasRepeat: measures.some((m) => m?.repeatBackward) };
 }
 
 /** 接到末行的结尾最多几小节（「阿们」一两小节） */
@@ -290,7 +292,7 @@ function implicitVoltas(parts: readonly PlayPart[], items: PlayItem[]): void {
  *  （从前 D.C. 只多唱一遍，第 3、4 段整个丢掉；直接按段数整体乘又会把 A 唱成四遍）。 */
 function jumpByVerse(parts: readonly PlayPart[], jumps: PlayJumps): PlayItem[] | null {
   const measures = parts[0]!.measures;
-  if (measures.some((m) => m.repeatBackward || m.endingNum)) return null;
+  if (measures.some((m) => m?.repeatBackward || m?.endingNum)) return null;
   let back: { at: TimePosition; spec: JumpSpec } | null = null;
   let fine: TimePosition | null = null;
   for (const [t, v] of jumps.jumpTo) {
@@ -374,7 +376,7 @@ function labelPasses(parts: readonly PlayPart[], items: PlayItem[]): void {
   const labels = new Map<number, number[]>();
   for (const part of parts) {
     for (const m of part.measures) {
-      for (const ent of m.entries) {
+      for (const ent of m?.entries ?? []) {
         if (!isPlayChord(ent)) continue;
         for (const n of ent.notes) {
           for (const l of n.lyrics) {
@@ -439,7 +441,7 @@ function verseNumbers(part: PlayPart, beg: number, end: number): Set<number> {
   const num = new Set<number>();
   part.measures.forEach((m, idx) => {
     if (idx < beg || idx >= end) return;
-    for (const ent of m.entries) {
+    for (const ent of m?.entries ?? []) {
       if (!isPlayChord(ent)) continue;
       for (const n of ent.notes) for (const l of n.lyrics) num.add(l.number);
     }
@@ -794,7 +796,7 @@ function chordsOf(m: PlayMeasure): PlayChord[] {
 /** 二房开头「与一房同位的结束音」个数：按一房的和弦数算，封顶到二房首节留一个音给副歌起拍。
  *  这几个音属于本段主歌（一房/二房各写一次的段末音），断句、分页都跟主歌走。
  *  跨连线/延音时返回 0（不把带连线的音切开）。 */
-function voltaLead(measures: readonly PlayMeasure[], volta1Beg: number, volta1End: number, tailBeg: number): number {
+function voltaLead(measures: readonly (PlayMeasure | undefined)[], volta1Beg: number, volta1End: number, tailBeg: number): number {
   let n = 0;
   for (let i = volta1Beg; i < volta1End; i++) n += chordsOf(measures[i]!).length;
   const tail = chordsOf(measures[tailBeg]!);

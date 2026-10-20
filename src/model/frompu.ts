@@ -18,6 +18,7 @@
 // 挂 `print.newSystem` + `print.system`（组序号）——一组不一定含全部声部，靠组序号对回去。
 
 import { applyTupletTimeMods } from "./tuplets";
+import { axisOfSong } from "./timeaxis";
 import type {
   BarlineElement,
   LyricLine as PuLyricLine,
@@ -739,15 +740,19 @@ export function puToScoreDoc(pu: PuDoc): ScoreDoc {
       });
     });
     song.parts = [...byVoice.entries()].sort((a, b) => a[0] - b[0]).map(([, v]) => v.part);
-    // 转调是全曲的：只在某一声部写了 `"k:…"` 的，别的声部同一小节一起转
+    // 转调是全曲的：只在某一声部写了 `"k:…"` 的，别的声部同一时刻（共用时间轴的同一格）一起转
+    const axis = axisOfSong(song);
     const keyAt = new Map<number, Key>();
-    for (const part of song.parts) part.measures.forEach((m, i) => { if (m.attrs?.key && !keyAt.has(i)) keyAt.set(i, m.attrs.key); });
-    for (const part of song.parts) {
-      for (const [i, k] of keyAt) {
-        const m = part.measures[i];
+    song.parts.forEach((part, pi) => part.measures.forEach((m, i) => {
+      const g = axis.slot[pi]![i]!;
+      if (m.attrs?.key && !keyAt.has(g)) keyAt.set(g, m.attrs.key);
+    }));
+    song.parts.forEach((part, pi) => {
+      for (const [g, k] of keyAt) {
+        const m = part.measures[axis.local[pi]![g]!];
         if (m && !m.attrs?.key) m.attrs = { ...m.attrs, key: { ...k } };
       }
-    }
+    });
     // 文本谱每行行尾都换行：123 写出时最后一行也带 `$`
     for (const part of song.parts) part.endBreak = "system";
     for (const part of song.parts) {

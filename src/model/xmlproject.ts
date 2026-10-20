@@ -25,7 +25,6 @@ import { Fraction, lcm } from "../common/fraction";
 import { AccidentalCarry, quarterTempos } from "./jianpu";
 import { typeOfDuration } from "../score/xmlutil";
 import { DYNAMICS, TERMS } from "../pu/glyph";
-import { alignPartsBySystem } from "./alignparts";
 import { applyPageMetaToDefaults } from "./pagemeta";
 import { decoKey } from "./deconames";
 import { applyBreaks } from "./breaks";
@@ -83,8 +82,7 @@ export function projectForMusicXml(src: Song, options: ProjectOptions = {}): Son
   const song: Song = structuredClone(src);
   // 123/ABC 里 `I:meta page …` 写的纸还原成 `<page-layout>`
   applyPageMetaToDefaults(song);
-  // 多声部按组对齐：一组不一定含全部声部，缺席/偏短的补无声小节，各 part 小节才对得上（issue 11）
-  alignPartsBySystem(song);
+  // 多声部不对齐、不补小节：一组不一定含全部声部，写出端按共用时间轴逐格写（`toxml.ts::axisMeasuresXml`，issue 11）
   if (options.lineStarts?.size) applyLineStarts(song, options.lineStarts, options.midLineStarts ?? false);
   const fifths = songFifths(song);
   const hosts = sustainHosts(song);
@@ -97,6 +95,7 @@ export function projectForMusicXml(src: Song, options: ProjectOptions = {}): Son
   const tupletInner = tupletInnerChords(song, tuplets, hosts);
   /** 拆出来的后半小节的编号（`X1`、`X2`…）；各声部同步拆，各自从头数 */
   let xno: { n: number };
+  const firstSystem = Math.min(...song.parts.map((p) => p.measures[0]?.print?.system ?? 0));
   for (const [pi, part] of song.parts.entries()) {
     xno = { n: 0 };
     if (pi === 0) applyVoltas(part, voltasOfPlayOrder(song));
@@ -114,11 +113,14 @@ export function projectForMusicXml(src: Song, options: ProjectOptions = {}): Son
     };
     for (const [i, m] of part.measures.entries()) {
       if (!m.print) continue;
-      if (i === 0) {
+      // 声部头一小节在曲首才不另起系统（文本谱后几组才出场的声部，头一小节照样起新系统）
+      if (i === 0 && (m.print.system === undefined || m.print.system === firstSystem)) {
         delete m.print.newSystem;
         delete m.print.newPage;
       }
-      if (!m.print.newSystem && !m.print.newPage) delete m.print;
+      // 组号留着：写出端按它排共用时间轴（`toxml.ts::axisMeasuresXml`），本身不写进 `<print>`
+      if (!m.print.newSystem && !m.print.newPage) m.print = m.print.system !== undefined ? { system: m.print.system } : undefined;
+      if (!m.print) delete m.print;
     }
     projectPart(part, fifths, factor, tuplets);
     wedgeDirections(song, part);

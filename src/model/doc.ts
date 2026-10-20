@@ -669,7 +669,7 @@ export type DirectionPart = Pick<
 export interface Print {
   newSystem?: boolean;
   newPage?: boolean;
-  /** 本系统是全曲第几个系统（0 基）。文本谱**一组不一定含全部声部**，多声部时靠它把各声部的行对回同一组 */
+  /** 本系统是全曲第几个系统（0 基）。文本谱**一组不一定含全部声部**，多声部时靠它把各声部的行对回同一组（各声部共用的时间轴，`timeaxis.ts`） */
   system?: number;
   /** 印在本系统上方的说明文字行（文本谱 `W:`）。挂在该系统第一个声部的首小节 */
   texts?: string[];

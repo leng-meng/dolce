@@ -77,7 +77,8 @@ export interface TimelineMeasure {
 }
 
 export interface TimelinePart {
-  readonly measures: readonly TimelineMeasure[];
+  /** 按各声部共用的时间轴排（`model/timeaxis.ts`）：这一声部在某格没有小节（文本谱一组没写这个声部）就是 undefined */
+  readonly measures: readonly (TimelineMeasure | undefined)[];
   /** 声部名（MIDI 轨名） */
   readonly name?: string;
 }
@@ -157,6 +158,11 @@ export interface Timeline {
   duration: number; // total length in quarter notes
 }
 
+/** 轴上第 `mid` 格的「代表小节」：主旋律的，主旋律在这一格没有小节就取第一个有的声部（拍号、按和弦截断都看它）。 */
+function leadMeasure(src: PlaySource, mid: number): TimelineMeasure | undefined {
+  return src.parts[src.lead ?? 0]?.measures[mid] ?? src.parts.find((p) => p.measures[mid])?.measures[mid];
+}
+
 /** Measure length in quarter notes, max across parts, with a time-signature fallback. */
 function measureLen(src: PlaySource, mid: number): number {
   let len = 0;
@@ -189,13 +195,13 @@ function playRanges(
     }));
   }
   // No expansion computed: linear single pass over all measures.
-  const n = src.parts[src.lead ?? 0]?.measures.length ?? 0;
+  const n = Math.max(0, ...src.parts.map((p) => p.measures.length));
   return n > 0 ? [{ mid: 0, end: n, offset: 0, pass: 1, until: Number.POSITIVE_INFINITY }] : [];
 }
 
 /** 第 `limit` 个和弦唱完时的小节内位置（四分音符为单位；数的是主旋律声部的和弦，同演唱顺序）。 */
 function chordEnd(src: PlaySource, mid: number, limit: number): number {
-  const m = src.parts[src.lead ?? 0]?.measures[mid];
+  const m = leadMeasure(src, mid);
   if (!m) return Number.POSITIVE_INFINITY;
   let n = 0;
   for (const ent of m.entries) {
@@ -226,7 +232,7 @@ export function buildTimeline(src: PlaySource): Timeline {
   /** 各声部各段整首最后一个字落在哪（小节、条目下标），借词判「这一段唱完了」用 */
   const verseEnd = src.parts.map((part) => {
     const end = new Map<number, [number, number]>();
-    part.measures.forEach((m, mid) => m.entries.forEach((ent, i) => {
+    part.measures.forEach((m, mid) => m?.entries.forEach((ent, i) => {
       if (!isTimelineChord(ent)) return;
       for (const l of ent.notes[0]?.lyrics ?? []) if (l.text.replace(VERSE_PREFIX, "").trim()) end.set(l.number, [mid, i]);
     }));
@@ -295,7 +301,7 @@ export function buildTimeline(src: PlaySource): Timeline {
         }
       }
       const len = Math.min(measureLen(src, mid), endOffset);
-      const time = src.parts[lead]?.measures[mid]?.time;
+      const time = leadMeasure(src, mid)?.time;
       if (time) {
         const compound = time.beatType === 8 && time.beats % 3 === 0 && time.beats > 3;
         const beat = (4 / time.beatType) * (compound ? 3 : 1);
