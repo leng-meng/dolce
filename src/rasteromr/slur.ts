@@ -718,9 +718,10 @@ export function traceSteepArcEnds(arcs: SlurArc[], bin: Binary, onLine: (y: numb
 // 碰上粗墨（过 `TAIL_THICK` 格，头、干、符杠）就停；断口容 `TAIL_GAP` 格，断着时按最近的转弯速度续着弯；最多追 `TAIL_MAX` 格。
 
 /** 长弧的宽度下限（格）。 */
-const TAIL_LONG = 5;
-/** 找墨的半宽（格）。 */
+const TAIL_LONG = 3.5;
+/** 找墨的半宽（格）；起步一格内的半宽。 */
 const TAIL_PERP = 0.3;
+const TAIL_PERP_START = 0.7;
 /** 细墨的上限（格）。 */
 const TAIL_THICK = 0.4;
 /** 断口上限（格）。 */
@@ -731,6 +732,8 @@ const TAIL_MIN = 0.4;
 /** 长延伸最多追多远、落点离另一行谱音头的上限（格）。 */
 const TAIL_MAX_CROSS = 15;
 const TAIL_CROSS_HEAD = 1.5;
+/** 续尾连续穿过粗墨的上限（格）。 */
+const TAIL_OCCLUDE = 1;
 /** 端头离音头多近就不追、追到离音头多近就停（格）。 */
 const TAIL_AT_HEAD = 0.4;
 const TAIL_STOP_HEAD = 0.5;
@@ -767,7 +770,9 @@ export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: numb
       for (let yy = Math.round(b.top); yy <= Math.round(b.bottom); yy++) if (raw(bx, yy) && (yIn === null || Math.abs(yy - y) < Math.abs(yIn - y))) yIn = yy;
       if (yIn === null) continue;
       let ang = Math.atan2(y - yIn, dir * k), turn = 0;
-      let miss = 0, walked = 0;
+      let miss = 0, walked = 0, occl = 0, crossed = false;
+      /** 第一次穿粗墨前的落点（验收不过退回这里） */
+      let preCross: { x: number; y: number; at: number } | null = null, preCrossPts = 0;
       let last: { x: number; y: number; at: number } | null = null;
       /** 追满 `TAIL_MAX` 格时的落点：往后的长延伸只有落到另一行谱的音头跟前才采用，否则退回这里 */
       let check: { x: number; y: number; at: number } | null | undefined;
@@ -792,7 +797,9 @@ export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: numb
           return b - a + 1;
         };
         let best: number | null = null, thick = false;
-        for (let d = 0; d <= W && best === null; d++)
+        // 起步一格内窗口放宽：端头往里那段常已拐平，起步切线是平的，真弧在端头处陡着往下（宁静 p2 m22 钢琴跨谱表大弧上截的左端）
+        const Wn = walked <= sp ? Math.max(W, Math.round(sp * TAIL_PERP_START)) : W;
+        for (let d = 0; d <= Wn && best === null; d++)
           for (const sg of d ? [-1, 1] : [1]) {
             const qx = Math.round(px - vy * d * sg), qy = Math.round(py + vx * d * sg);
             if (!ink(qx, qy)) continue;
@@ -801,13 +808,22 @@ export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: numb
             break;
           }
         if (best === null) {
-          if (thick) break;
+          // 粗墨（擦过音头、符干）照切线穿过去，连续不过 `TAIL_OCCLUDE` 格；穿过粗墨的延伸要按长延伸验收
+          if (thick) {
+            if (++occl > sp * TAIL_OCCLUDE) break;
+            if (!crossed) (preCross = last), (preCrossPts = pts.length);
+            crossed = true;
+            x = px;
+            y = py;
+            continue;
+          }
           if (++miss > sp * TAIL_GAP) break;
           x = px;
           y = py;
           continue;
         }
         miss = 0;
+        occl = 0;
         const hx = px - vy * best, hy = py + vx * best;
         if (staffAt(hy) === home && (hx < xLo || hx > xHi)) break;
         // 追到了音头跟前：尾巴到了它的音，停
@@ -826,12 +842,14 @@ export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: numb
       }
       // 长延伸（跨谱表大弧近竖的下半截一路下到低音谱表）要落到另一行谱的音头跟前（`TAIL_CROSS_HEAD` 格内）才算，
       // 否则多半是追进了谱号调号、符杠，退回 `TAIL_MAX` 格时的落点
-      if (check !== undefined && last && last.at > sp * TAIL_MAX) {
+      if (last && ((check !== undefined && last.at > sp * TAIL_MAX) || crossed)) {
         const other = staffAt(last.y);
         const ok = other >= 0 && other !== home && headDist(last.x, last.y) <= sp * TAIL_CROSS_HEAD;
         if (!ok) {
-          last = check;
-          pts.length = checkPts;
+          // 退回 4 格时的落点、第一次穿粗墨前的落点里较早的那个
+          const useCross = crossed && (check === undefined || (preCross?.at ?? 0) <= (check?.at ?? Infinity));
+          last = useCross ? preCross : check ?? null;
+          pts.length = useCross ? preCrossPts : checkPts;
         }
       }
       if (!last || last.at < sp * TAIL_MIN) continue;
