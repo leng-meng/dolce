@@ -59,7 +59,12 @@ export class FormatSwitch {
   bind(el: HTMLSelectElement): void {
     this.selectEl = el;
     this.fieldEl = el.closest<HTMLElement>(".pane-select-field, .toolbar-select-field") ?? el;
-    el.addEventListener("change", () => void this.choose(el.value));
+    // 等 change 事件整个返回再切：WKWebView 的原生下拉在回调里还拿着选项，切格式同步重建选项会让 WebContent 进程崩掉
+    // （页面随即自动重载，启动时就问「恢复未保存的内容」）
+    el.addEventListener("change", () => {
+      const value = el.value;
+      setTimeout(() => void this.choose(value), 0);
+    });
     this.render();
   }
 
@@ -88,16 +93,20 @@ export class FormatSwitch {
 
   private render(): void {
     const el = this.selectEl;
-    if (el) {
+    const opts = this.src?.options() ?? [];
+    const same = el !== null && el.options.length === opts.length
+      && opts.every((o, i) => el.options[i].value === o.value && el.options[i].textContent === o.label);
+    if (el && !same) {
+      // 选项没变就不重建
       el.replaceChildren();
-      for (const { value, label } of this.src?.options() ?? []) {
+      for (const { value, label } of opts) {
         const opt = document.createElement("option");
         opt.value = value;
         opt.textContent = label;
         el.appendChild(opt);
       }
-      this.sync();
     }
+    this.sync();
     this.host.setContextControl(this.fieldEl, this.src !== null);
     this.host.syncFormatLabel();
   }
