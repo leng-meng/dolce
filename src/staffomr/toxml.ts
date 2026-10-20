@@ -377,7 +377,8 @@ function emitVoices(inBar: StaffNote[], ticks: (d: number) => number, staffNo: n
       }
       for (const w of n.words ?? []) {
         const wy = withSourceLayout && w.baseY !== undefined ? ` default-y="${staffY(n.staff, n.sym.box.left, w.baseY)}"` : "";
-        body += `<direction placement="${w.above ? "above" : "below"}"><direction-type><words${wy}${fontAttr(textPt(n, w.size))}>${escapeXml(w.text)}</words></direction-type>${dirStaff}</direction>`;
+        const el = w.rehearsal ? "rehearsal" : "words";
+        body += `<direction placement="${w.above ? "above" : "below"}"><direction-type><${el}${w.rehearsal ? ' enclosure="square"' : ""}${wy}${fontAttr(textPt(n, w.size))}>${escapeXml(w.text)}</${el}></direction-type>${dirStaff}</direction>`;
       }
       if (n.dynamic) body += dynamicXml(n, dirStaff);
       // 松叶：**止排在起之前**——同一个音符上前一条松叶收尾、下一条起头是常事，
@@ -652,6 +653,7 @@ export function renumberSlurs(body: string, sysOfBar?: number[], crossTies = fal
   const alias = new Map<string, string>(); // 后半截的弧号 → 接上的前半截弧号
   const orphan = new Set<string>();
   const pending = new Map<string, Tok[]>(); // 谱表号 → 还没接上的 `end` 半截
+  const pairedTies = new Set<string>(); // 矢量路几条同处断开时先配上的延音线（前半截弧号）
   for (const t of toks) {
     if (t.type === "start" && !stops.has(t.arc)) {
       orphan.add(t.arc);
@@ -665,7 +667,10 @@ export function renumberSlurs(body: string, sysOfBar?: number[], crossTies = fal
       const q = (pending.get(t.staff) ?? []).filter((p) => (sysOfBar ? sysOfBar[t.bar - 1] === nextSys(p.bar) : t.bar - p.bar <= 1));
       // 先配延音线（同音高、紧挨着），再按朝向配：行尾行首各有一条延音线、一条圆滑线的半截时，
       // 按朝向先到先得会配串（破碎 p2→p3 m16–17 钢琴右手：E4 延音线的后半截排在圆滑线前面，抢走了朝向相同的圆滑线前半截）
-      const hit = (crossTies ? q.find((p) => tieLike(p, t)) : undefined) ?? q.find((p) => p.above === t.above) ?? q[0];
+      // 矢量路：同一行同一处断开的不止一条（一条延音线外面罩着一条圆滑线）时也先配延音线，配上的记下来、写成延音线（见下 `tieArcs`）
+      const tieHit = crossTies || q.length >= 2 ? q.find((p) => tieLike(p, t)) : undefined;
+      if (tieHit && !crossTies) pairedTies.add(tieHit.arc);
+      const hit = tieHit ?? q.find((p) => p.above === t.above) ?? q[0];
       pending.set(t.staff, q.filter((p) => p !== hit));
       if (hit) {
         alias.set(t.arc, hit.arc);
@@ -677,9 +682,12 @@ export function renumberSlurs(body: string, sysOfBar?: number[], crossTies = fal
   // **接上的两个半截两头同音高、紧挨着的是延音线**（页内跨行的已在 `slur.ts::reconnectSlurs` 按音级判过，这里是跨页的：
   // 破碎 p2→p3 m16–17、p5→p6 m59–60、p10→p11 m93–94 钢琴右手）
   const tieArcs = new Set<string>();
+  // 矢量路不开 `crossTies`（同音高相邻两音间也有记圆滑线的），但**起音上同时起着两个跨行半截**的，其中接到同音高下一音的那条是延音线：
+  // 同两个音之间不会有两条圆滑线（牵我的手 W m36→37 F4）
+  const twoOn = (a: Tok) => toks.some((o) => o !== a && o.type === a.type && o.edge === a.edge && orphan.has(o.arc) === orphan.has(a.arc) && noteStart(o.at) === noteStart(a.at));
   for (const [stopArc, startArc] of alias) {
     const a = toks.find((t) => t.type === "start" && t.arc === startArc), b = toks.find((t) => t.type === "stop" && t.arc === stopArc);
-    if (crossTies && a && b && tieLike(a, b)) tieArcs.add(startArc);
+    if (a && b && tieLike(a, b) && (crossTies || twoOn(a) || pairedTies.has(startArc))) tieArcs.add(startArc);
   }
   // **页内跨行接上的同音两截**（位图路 `pagefinish.ts` 先一律当圆滑线写）：起音是这个声部本系统最后一个音、止音是它下一系统第一个音、
   // 同音高——时间上紧挨着，是延音线；中间隔着别的音的是跨行的长圆滑线（宁静 p8 m97→m103 女高 E5…E5）

@@ -78,7 +78,7 @@ export async function recognizeStaffPage(
   const wedges = findWedges(pg);
   // 一条弧在这批 PDF 里画成左右两半两个对象，挂音符之前先并回一条
   const slurs = mergeArcHalves(findSlurs(pg), pg.normalStaffSpace || pg.space);
-  attachSlurs(slurs, notes, pg.normalStaffSpace || pg.space);
+  attachSlurs(slurs, notes, pg.normalStaffSpace || pg.space, { stemEnds: true });
   reconnectSlurs(pg, slurs);
   markSlurNotes(slurs);
   // 八度移位要在音高算完之后、文本层之前：它直接改音符的八度

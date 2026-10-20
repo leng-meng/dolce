@@ -2,7 +2,7 @@
 //
 // musicpp 到「打标」为止就结束了（它的 toxml.cpp 不导出这些）；
 // 「挂到音符上、写进 MusicXML」是本仓新加的。
-import { SPage, Seg, Sym, type Staff } from "./model";
+import { SPage, Seg, Sym, type PObj, type Staff } from "./model";
 import type { BeamShape, StaffNote, StemInfo } from "./notedata";
 import { objText } from "./textanalyze";
 import { subPaths } from "./vecgeom";
@@ -206,7 +206,9 @@ export function findTuplets(pg: SPage, beams: BeamShape[], stems: StemInfo[], no
       const grp = bracketGroup(pg, num, notes, sp);
       if (!grp) continue;
       found++;
-      applyTuplet(grp, num.n);
+      // 括号两截打上标：折线画的那截（「横线 + 一截钩」三点）不打标会被 `findWedges` 当成松叶（牵我的手 W/M/Vln 共 14 处）
+      for (const o of grp.objs) if (!o.hasAnyTag()) o.addTag("Tuplet");
+      applyTuplet(grp.notes, num.n);
       continue;
     }
     found++;
@@ -243,7 +245,7 @@ export function applyTuplet(marked: Iterable<StaffNote>, n: number): void {
  * 只有正好 `n` 个才认——多了少了都说明括号找错了，宁可不认（不认只是这一组
  * 时值偏长，认错会把邻组的时值一起改坏）。
  */
-function bracketGroup(pg: SPage, num: { n: number; cx: number; cy: number; w: number; h: number }, notes: StaffNote[], sp: number): StaffNote[] | null {
+function bracketGroup(pg: SPage, num: { n: number; cx: number; cy: number; w: number; h: number }, notes: StaffNote[], sp: number): { notes: StaffNote[]; objs: PObj[] } | null {
   let left: Seg | null = null;
   let right: Seg | null = null;
   // **括号可以是斜的**：Finale 让它顺着音高走（牵我的手 W 声部 `G F E` 一路往下，两截各斜 1.8~2.8pt），
@@ -305,7 +307,7 @@ function bracketGroup(pg: SPage, num: { n: number; cx: number; cy: number; w: nu
     if (num.cy < stf.box.top - h || num.cy > stf.box.bottom + h) continue;
     if (!best || arr.length < best.length) best = arr;
   }
-  return best;
+  return best && { notes: best, objs: [left.obj, right.obj] };
 }
 
 /** SMuFL 力度名 → MusicXML `<dynamics>` 的子元素名。 */
@@ -530,7 +532,9 @@ export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[],
         if (best && bd < sp * 4) return best;
         if (only && owner) {
           // 那一带在唱长音：取它左边最近的音（长音中间起的松叶，GT 挂在长音上）
-          const left = notes.filter((n) => n.staff === owner && n.sym.px <= x && x - n.sym.px <= sp * WEDGE_LONG_REACH).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
+          // 同一小节里的不设远近（牵我的手 m51、m87 小提琴全音符，渐强从小节后半起、离音头 14 格）
+          const ownBars = owner ? pg.segsWithTag("BarLine").filter((b) => b.top <= owner.box.bottom && b.bottom >= owner.box.top).map((b) => b.cx) : [];
+          const left = notes.filter((n) => n.staff === owner && n.sym.px <= x && (x - n.sym.px <= sp * WEDGE_LONG_REACH || !ownBars.some((bx) => bx > n.sym.px && bx < x))).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
           if (left) return left;
         }
         if (only && !owner) continue;
@@ -572,7 +576,10 @@ export function attachWedges(pg: SPage, notes: StaffNote[], wedges: WedgeSpan[],
     }
     if (!b) {
       b = [a, ...row].filter((n) => n.sym.px <= x1 && !barBetween(n.sym.px, x1)).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
-      after = !!b;
+      // 收在末音与小节线（行尾是谱表右端）之间：离小节线近才是「收在小节末」；离末音音头近的是收在这个长音中途，挂它
+      //（牵我的手 m45 小提琴渐强压过小节线、收在全音符下面三分之一处，GT 挂这个全音符）
+      const end = Math.min(...bars.filter((x) => x > x1), a.staff.box.right);
+      after = !!b && end - x1 <= x1 - b.sym.px;
     }
     b ??= row.filter((n) => n.sym.px <= wg.x1 + sp * 4).reduce<StaffNote | undefined>((m, n) => (!m || n.sym.px > m.sym.px ? n : m), undefined);
     // **跨系统的松叶**：上一系统末那一截不写止、下一系统行首那一截不写起，MusicXML 里同号的起止跨行自然接上（弧线同此）。

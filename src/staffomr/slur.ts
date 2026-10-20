@@ -117,6 +117,7 @@ export function wedgeSpans(objs: PObj[]): import("./notations").WedgeSpan[] {
  */
 export function findSlurs(pg: SPage): SlurArc[] {
   const syslines: Seg[] = pg.segsWithTag("SysLine");
+  const stems: Seg[] = pg.segsWithTag("Stem");
   const sp = pg.normalStaffSpace || pg.space;
   const out: SlurArc[] = [];
   for (const o of pg.objs) {
@@ -167,7 +168,15 @@ export function findSlurs(pg: SPage): SlurArc[] {
     // 四条 A4 的连音线一条都没读到（音符全对、弧线只有 79.5%）。
     // 改成 0.9 格：全书弧数 415 → **423，与 GT 的 423 分毫不差**，弧线档 93.7% → 95.3%。
     // 再往下放（0.7/0.5）弧数反而多出一条，且挡小圆点全靠下面那条长宽比了——就停在 0.9。
-    if (w < sp * 0.9 || w < h * 1.5) continue;
+    // **陡弧**（宽过一格半、宽 ≥ 高）不贴着任何符干端头、也不圈着字的也收（符尾贴着干；排练号的框带圆角曲线、圈着字）：
+    // 牵我的手 m53 / m89 钢琴左手八度下行两个八分之间那种，行首续过来的长弧尾巴（从上方一路落到首音，p2 钢琴左手 m13 那截 8.8×6.3 点）。
+    // 赞美之泉弧线档 95.5% → 95.7%
+    const steep = () =>
+      w > sp * 1.5 &&
+      w >= h &&
+      !pg.objs.some((t) => t.run && t.box.left >= o.box.left && t.box.right <= o.box.right && t.box.top >= o.box.top && t.box.bottom <= o.box.bottom) &&
+      !stems.some((sg) => sg.cx >= o.box.left - sp * 0.5 && sg.cx <= o.box.right + sp * 0.5 && [sg.top, sg.bottom].some((y) => y >= o.box.top - sp * 0.5 && y <= o.box.bottom + sp * 0.5));
+    if (w < sp * 0.9 || (w < h * 1.5 && !steep())) continue;
     let isBracket = false;
     for (const l of syslines) {
       // y 向下：纵向相交 = 不在彼此的上下之外
@@ -307,7 +316,7 @@ export function validateSlurNote(isEnd: boolean, nt: Box, px: number, py: number
  *
  * 连音线的判据照 `SlurTie::checkTie`：两端**在谱表上的音级相同**。
  */
-export function attachSlurs(arcs: SlurArc[], notes: StaffNote[], sp: number): void {
+export function attachSlurs(arcs: SlurArc[], notes: StaffNote[], sp: number, opts: { stemEnds?: boolean } = {}): void {
   const pitched = notes.filter((n) => !n.rest);
   for (const sl of arcs) {
     let bestL: StaffNote | undefined;
@@ -326,6 +335,29 @@ export function attachSlurs(arcs: SlurArc[], notes: StaffNote[], sp: number): vo
         dr = vr;
         bestR = nt;
       }
+    }
+    // 两端都没挂上的再按「符头 + 符干」的盒找一遍：弧画在符杠外侧（朝上的弧压在上翘的符杠之上），离符头四五格，
+    // 按符头量够不着（牵我的手 W m58 / m94 末两个八分 G4→F4）。只收两端都这样挂上、落在同一行谱上的：
+    // 只缺一端就按符干补，赞美之泉多出二十几条弧、弧线档反降。只矢量路开（`stemEnds`）：位图路的干端不准，破碎、独唱各多一两步
+    if (opts.stemEnds && !bestL && !bestR) {
+      const stemBox = (nt: StaffNote): Box | null => {
+        if (nt.stemTip === undefined || nt.stemUp === null || nt.stemUp !== sl.above) return null;
+        const b = nt.sym.box;
+        return nt.stemUp ? { ...b, top: Math.min(b.top, nt.stemTip) } : { ...b, bottom: Math.max(b.bottom, nt.stemTip) };
+      };
+      let sl0: StaffNote | undefined, sr0: StaffNote | undefined;
+      let d0 = Infinity, d1 = Infinity;
+      for (const nt of pitched) {
+        const b = stemBox(nt);
+        if (!b) continue;
+        const vl = validateSlurNote(false, b, sl.lx, sl.ly, sp, sl.above);
+        const vr = validateSlurNote(true, b, sl.rx, sl.ry, sp, sl.above);
+        if (vl !== null && vl < d0) (d0 = vl), (sl0 = nt);
+        if (vr !== null && vr < d1) (d1 = vr), (sr0 = nt);
+      }
+      // 两端都贴着符干端（一格半以内）：离干端还远的是别的东西（赞美之泉几处短弧、长弧挂到远处的干上）
+      const nearTip = (nt: StaffNote, y: number) => Math.abs(y - nt.stemTip!) <= sp * 1.5;
+      if (sl0 && sr0 && sl0 !== sr0 && sl0.staff === sr0.staff && nearTip(sl0, sl.ly) && nearTip(sr0, sl.ry)) (bestL = sl0), (bestR = sr0);
     }
     if (bestL && bestL === bestR) {
       // 两端落到同一个音符上：按 x 判掉不合理的那一端（照原文）
@@ -366,17 +398,51 @@ export function reconnectSlurs(pg: SPage, arcs: SlurArc[]): void {
   const systems = pg.systems.filter((sy) => sy.staves.length);
   if (systems.length) {
     const rel = (a: SlurArc, y: number) => y - staffOf(a)!.box.top;
+    const sp = pg.normalStaffSpace || pg.space;
     for (let i = 0; i + 1 < systems.length; i++) {
       const A = systems[i].staves, B = systems[i + 1].staves;
       if (A.length !== B.length) continue;
       for (let k = 0; k < A.length; k++) {
+        // 同一条弧常画两份（Finale 填充、描边各一个对象，牵我的手）：两端重合的并成一簇，按簇配，配上了一簇里每份都接
+        const clusters = (xs: SlurArc[]) => {
+          const out: SlurArc[][] = [];
+          for (const a of xs) {
+            const c = out.find((q) => q[0].above === a.above && Math.abs(q[0].lx - a.lx) < sp * 0.2 && Math.abs(q[0].rx - a.rx) < sp * 0.2 && Math.abs(q[0].ly - a.ly) < sp * 0.2 && Math.abs(q[0].ry - a.ry) < sp * 0.2);
+            if (c) c.push(a);
+            else out.push([a]);
+          }
+          return out;
+        };
+        const joinAll = (r: SlurArc[], l: SlurArc[]) => {
+          const to = l[0].to;
+          for (const b of l) (b.from = undefined), (b.to = undefined);
+          for (const a of r) join(a, { ...l[0], to } as SlurArc);
+        };
         // 行尾悬空的取最靠右的、行首悬空的取最靠左的（行里别处也有悬空的弧：另一端没挂上的），各取同样几条再按高低配
-        let rs = dangRight.filter((a) => staffOf(a) === A[k]).sort((p, q) => q.rx - p.rx);
-        let ls = dangLeft.filter((b) => staffOf(b) === B[k]).sort((p, q) => p.lx - q.lx);
+        let rs = clusters(dangRight.filter((a) => staffOf(a) === A[k])).sort((p, q) => q[0].rx - p[0].rx);
+        let ls = clusters(dangLeft.filter((b) => staffOf(b) === B[k])).sort((p, q) => p[0].lx - q[0].lx);
         const n = Math.min(rs.length, ls.length);
-        rs = rs.slice(0, n).sort((p, q) => rel(p, p.ry) - rel(q, q.ry));
-        ls = ls.slice(0, n).sort((p, q) => rel(p, p.ly) - rel(q, q.ly));
-        for (let j = 0; j < n; j++) join(rs[j], ls[j]);
+        rs = rs.slice(0, n);
+        ls = ls.slice(0, n);
+        // **同一个音上既有延音线又有圆滑线**（跨行时两截都在行尾、行首叠着）：两端高低差不多，按高低配常配错（牵我的手 Syn 左手 m30→31）。
+        // 先配延音线：同音级、同朝向的一对里取两截加起来最短的（延音线只从末音画到谱表尽头、从行首画到首音，比圆滑线短）
+        const width = (c: SlurArc[]) => c[0].rx - c[0].lx;
+        while (rs.length >= 2) {
+          let best: [number, number] | undefined;
+          for (let x = 0; x < rs.length; x++)
+            for (let y = 0; y < ls.length; y++) {
+              const r = rs[x][0], l = ls[y][0];
+              if (r.above !== l.above || r.from!.diatonic !== l.to!.diatonic) continue;
+              if (!best || width(rs[x]) + width(ls[y]) < width(rs[best[0]]) + width(ls[best[1]])) best = [x, y];
+            }
+          if (!best) break;
+          joinAll(rs[best[0]], ls[best[1]]);
+          rs.splice(best[0], 1);
+          ls.splice(best[1], 1);
+        }
+        rs.sort((p, q) => rel(p[0], p[0].ry) - rel(q[0], q[0].ry));
+        ls.sort((p, q) => rel(p[0], p[0].ly) - rel(q[0], q[0].ly));
+        for (let j = 0; j < rs.length; j++) joinAll(rs[j], ls[j]);
       }
     }
     return;
@@ -430,15 +496,23 @@ export function markSlurNotes(arcs: SlurArc[], newId: () => string = () => Strin
   // 还有一头挂在和弦的不同成员上的（我灵镇静 m4 E4→A4、E4→F4，A4/F4 同一个和弦）。
   // 原来只记布尔值，又按谱表号编号，两条同号、读入端只留一条，碰巧是对的；按弧号逐条写出就成了两条。
   // 「同一处」= 同一个音，或同一行谱上横向差不到半个符头宽（同一和弦）。两份总在同一批里，按这一批去重
-  const ends: { id: string; from?: StaffNote; to?: StaffNote }[] = [];
+  // 只挂了一端的半截还要比几何（朝向、两端横坐标差不到符头宽的 0.15——同一条画两份的外框差零点几点，叠着的两个半截差一点多）：同一个音上既起延音线又起圆滑线、跨行各剩半截时，
+  // 两条都只挂着这个音，光比音就并成一条（牵我的手 W m36→37 F4 的延音线与圆滑线、Syn 左手 m24→25）
+  const ends: { id: string; from?: StaffNote; to?: StaffNote; sl: SlurArc }[] = [];
   const near = (a?: StaffNote, b?: StaffNote) =>
     a === b || (!!a && !!b && a.staff === b.staff && Math.abs(a.x - b.x) < (a.sym.box.right - a.sym.box.left) * 0.5);
+  const sameHalf = (a: SlurArc, b: SlurArc) => {
+    const n = a.from && a.to ? undefined : (a.from ?? a.to);
+    if (!n) return true;
+    const w = n.sym.box.right - n.sym.box.left;
+    return a.above === b.above && Math.abs(a.lx - b.lx) < w * 0.15 && Math.abs(a.rx - b.rx) < w * 0.15;
+  };
   for (const sl of arcs) {
     if (!sl.tie) {
       let id = slurIdOf.get(sl);
       if (id === undefined) {
-        id = ends.find((e) => near(e.from, sl.from) && near(e.to, sl.to))?.id;
-        if (id === undefined) ends.push({ id: (id = newId()), from: sl.from, to: sl.to });
+        id = ends.find((e) => near(e.from, sl.from) && near(e.to, sl.to) && sameHalf(sl, e.sl))?.id;
+        if (id === undefined) ends.push({ id: (id = newId()), from: sl.from, to: sl.to, sl });
         slurIdOf.set(sl, id);
       }
       if (sl.from) sl.from.slurStartIds = pushId(sl.from.slurStartIds, id);

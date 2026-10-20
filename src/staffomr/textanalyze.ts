@@ -438,14 +438,24 @@ export function analyzeText(pg: SPage): TextAnalysis {
   }
 
   // ── findBoxedText ─────────────────────────────────────────────────────────
-  // 描边矩形里圈住的文字（段落名「Chorus」之类）。
+  // 矩形里圈住的文字（排练号 `[A]`、段落名「Chorus」之类）。框可以是描边的，也可以是**填充**的（外矩形套内矩形的一圈，牵我的手）。
+  // 要整个圈住字：原来只要盒相交，压在谱线上的乐器音色名（牵我的手 Syn「Roland PE20 Morning Lite」）也被当成了框里的字
   for (const o of pg.objs) {
     if (o.hasAnyTag() || !o.path) continue;
-    if (!o.path.paint.toLowerCase().includes("stroke")) continue;
     if (o.path.curves) continue;
-    const inside = texts.filter((t) => !kind.has(t) && overlapX(t.box, o.box) && overlapY(t.box, o.box));
+    const inside = texts.filter((t) => !kind.has(t) && o.box.left <= t.box.left && o.box.right >= t.box.right && o.box.top <= t.box.top && o.box.bottom >= t.box.bottom);
     if (!inside.length) continue;
     for (const t of inside) kind.set(t, "boxed");
+  }
+
+  // ── 谱表正上方的其余文字：演奏指示（`sul G`）、音色名（`Roland PE20 Morning Lite`）──────────────
+  // 别的类都没认领、纵向落在某行谱顶线上方五格（牵我的手 p6 `sul A` 中线高出 4.3 格）到顶线下一格之间、横向在谱表里，又不是纯数字（小节号）的，当文字指示
+  for (const t of texts) {
+    if (kind.has(t)) continue;
+    const s0 = objText(t).trim();
+    if (s0.length < 2 || /^[\d\s-]+$/.test(s0) || !/[A-Za-z]/.test(s0)) continue;
+    const cy = (t.box.top + t.box.bottom) / 2;
+    if (pg.staves.some((st) => t.box.left >= st.box.left && t.box.right <= st.box.right && cy >= st.box.top - sp * 5 && cy <= st.box.top + sp)) kind.set(t, "expression");
   }
 
   // ── findTextFrames ────────────────────────────────────────────────────────
@@ -1004,7 +1014,7 @@ const TEMPO_JOIN_GAP = 3;
  */
 export function attachDirectionTexts(
   pg: SPage,
-  notes: { staff: Staff; x: number; chordExtra?: boolean; grace?: boolean; words?: { text: string; above: boolean; size?: number }[]; metronome?: StaffNote["metronome"]; tempoText?: string; tempoSize?: number }[],
+  notes: { staff: Staff; x: number; chordExtra?: boolean; grace?: boolean; words?: { text: string; above: boolean; size?: number; rehearsal?: boolean }[]; metronome?: StaffNote["metronome"]; tempoText?: string; tempoSize?: number }[],
   text: TextAnalysis,
 ): void {
   const sp = pg.normalStaffSpace || pg.space;
@@ -1018,8 +1028,12 @@ export function attachDirectionTexts(
     if (line) line.push(o);
     else lines.push([o]);
   }
-  const items = [...lines.map((l) => ({ objs: l, tempo: true })), ...text.expression.map((o) => ({ objs: [o], tempo: false }))];
-  for (const { objs, tempo: isTempo } of items) {
+  const items = [
+    ...lines.map((l) => ({ objs: l, tempo: true, boxed: false })),
+    ...text.expression.map((o) => ({ objs: [o], tempo: false, boxed: false })),
+    ...text.boxed.map((o) => ({ objs: [o], tempo: false, boxed: true })),
+  ];
+  for (const { objs, tempo: isTempo, boxed } of items) {
     // 没有 ToUnicode 的字体抽出来是控制字符（牵我的手 `= 60` 的数字读成 `\u0018\u0012`）：剥掉，解不出数的等号也不留
     const parts = objs.map((o) => objText(o).replace(/[\u0000-\u001f]/g, "").replace(/\s+/g, " ").trim()).filter(Boolean);
     if (!parts.length) continue;
@@ -1036,6 +1050,8 @@ export function attachDirectionTexts(
     let bd = Infinity;
     for (const st of pg.staves) {
       if (cx < st.box.left - sp * 2 || cx > st.box.right + sp * 2) continue;
+      // 排练号印在系统顶上，归下面那行谱（离上一系统末行反倒更近：牵我的手 p4 `B`）
+      if (boxed && st.box.bottom < cy) continue;
       const d = cy < st.box.top ? st.box.top - cy : cy > st.box.bottom ? cy - st.box.bottom : 0;
       if (d < bd) (bd = d), (stf = st);
     }
@@ -1059,6 +1075,6 @@ export function attachDirectionTexts(
     }
     const plain = isTempo ? s.replace(/\s*=\s*$/, "") : s;
     if (!plain) continue;
-    (note.words ??= []).push({ text: plain, above: cy < (stf.box.top + stf.box.bottom) / 2, ...(size > 0 ? { size } : {}) });
+    (note.words ??= []).push({ text: plain, above: cy < (stf.box.top + stf.box.bottom) / 2, ...(size > 0 ? { size } : {}), ...(boxed ? { rehearsal: true } : {}) });
   }
 }
