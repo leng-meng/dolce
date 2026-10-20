@@ -1183,6 +1183,12 @@ export async function finishRasterPage(s: PageFinishInput): Promise<RasterPageRe
   // 按游程补出来的弧两端都要挂上音（同一个音不算）：挂不全的多是线上残留的别的墨
   for (let i = slurs.length - 1; i >= 0; i--) if (runArcs.has(slurs[i]) && (!slurs[i].from || !slurs[i].to || slurs[i].from === slurs[i].to)) slurs.splice(i, 1);
   reconnectSlurs(pg, slurs);
+  // 跨行接上的同音两截先当圆滑线写：是不是延音线要看时间上是否紧挨着（同一声部本系统最后一个音、下一系统第一个音），
+  // 声部到写出端才定，由 `toxml.ts::renumberSlurs` 判（宁静 p8 m97→m103 女高 E5…E5 是长圆滑线）
+  {
+    const sysOf = (st: Staff) => pg.systems.findIndex((sy) => sy.staves.includes(st));
+    for (const sl of slurs) if (sl.tie && sl.from && sl.to && sysOf(sl.from.staff) !== sysOf(sl.to.staff)) sl.tie = false;
+  }
   attachEdgeSlurStarts(slurs, notes, unit.space, new Set(index > 1 ? (pg.systems[0]?.staves ?? []) : []));
   completeSlurEnds(slurs, notes, unit.space);
   const chordTies = tieChords(slurs, notes, unit.space, (x0, x1, y0, y1) => {

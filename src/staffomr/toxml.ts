@@ -681,6 +681,15 @@ export function renumberSlurs(body: string, sysOfBar?: number[], crossTies = fal
     const a = toks.find((t) => t.type === "start" && t.arc === startArc), b = toks.find((t) => t.type === "stop" && t.arc === stopArc);
     if (crossTies && a && b && tieLike(a, b)) tieArcs.add(startArc);
   }
+  // **页内跨行接上的同音两截**（位图路 `pagefinish.ts` 先一律当圆滑线写）：起音是这个声部本系统最后一个音、止音是它下一系统第一个音、
+  // 同音高——时间上紧挨着，是延音线；中间隔着别的音的是跨行的长圆滑线（宁静 p8 m97→m103 女高 E5…E5）
+  if (crossTies && sysOfBar)
+    for (const a of toks) {
+      if (a.type !== "start" || orphan.has(a.arc) || alias.has(a.arc)) continue;
+      const b = toks.find((t) => t.type === "stop" && t.arc === a.arc);
+      if (!b || sysOfBar[b.bar - 1] !== nextSys(a.bar)) continue;
+      if (tieLike(a, b)) tieArcs.add(a.arc);
+    }
   // **只找到一半的跨系统弧**：另一半没认出来，但相邻系统同声部紧挨着的那个音同音高，就当延音线，那一头补上
   //（行尾的延音线头常只有半格多宽、贴着谱线，行首那截又常与圆滑线起笔粘在一起）
   /** 补到别的音上的延音线：插入点（原文位置）→ 文本 */
@@ -749,7 +758,7 @@ export function renumberSlurs(body: string, sysOfBar?: number[], crossTies = fal
       const d = out.indexOf("</duration>", k);
       if (d >= 0) out = out.slice(0, d + 11) + `<tie type="${t.type}"/>` + out.slice(d + 11);
       // 弧的上下方照抄成延音线的朝向（读入端照 `orientation` 定方向，不写就由排版去猜）
-      const ori = t.type === "start" ? ` orientation="${t.above ? "over" : "under"}"` : "";
+      const ori = t.type === "start" ? ` orientation="${t.above || t.rest.includes('placement="above"') ? "over" : "under"}"` : "";
       out += `<tied type="${t.type}"${ori}/>`;
       continue;
     }
