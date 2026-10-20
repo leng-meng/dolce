@@ -1179,6 +1179,20 @@ export async function finishRasterPage(s: PageFinishInput): Promise<RasterPageRe
       .reduce<StaffNote | undefined>((x, m) => (!x || m.sym.px > x.sym.px ? m : x), undefined);
     if (prev) a.to = prev;
   }
+  // 对称的一条：一条止在 n、下一条又从 n 起，而后一条的左端已越过 n 的音头——后一条起在 n 后面那个音
+  //（宁静 p5 m68 钢琴右手：前一条收在 B5，后一条从 B5 右边、正对着下一个 A4 起笔，按头盒量挂到了 B5）
+  for (const a of slurs) {
+    const n = a.from;
+    // 前一条两头同音高的是延音线（这时还没判 tie）：延音线止在 n、圆滑线从 n 起是常规写法（破碎 p3 m19 钢琴右手 C5）
+    if (a.tie || !n || !a.to || a.to === n || !slurs.some((b) => b !== a && !b.tie && b.to === n && b.from?.diatonic !== n.diatonic)) continue;
+    // 越过 n 的头右缘半格以上才算（首尾共用一个音的两条弧，后一条常从那个头的右半起笔，破碎 p2 m12、p3 m19）
+    if (a.lx < n.sym.box.right + unit.space * 0.5) continue;
+    const next = notes
+      .filter((m) => m.staff === n.staff && !m.rest && !m.chordExtra && !m.grace && m.sym.px > n.sym.px + unit.space * 0.3 && m.sym.px < a.to!.sym.px)
+      .reduce<StaffNote | undefined>((x, m) => (!x || m.sym.px < x.sym.px ? m : x), undefined);
+    // 起点还要离那个音的头比离 n 的头更近（破碎 p3 m19、p6 m60 起点在 n 右边一格来远、离下一个头更远，GT 起在 n）
+    if (next && Math.abs(a.lx - next.sym.box.left) < a.lx - n.sym.box.right) a.from = next;
+  }
   { const D = (globalThis as any).process?.env?.SLDBG?.split(",").map(Number); if (D) for (const sl of slurs) if (sl.rx > D[0] && sl.lx < D[2] && Math.max(sl.ly, sl.ry) > D[1] && Math.min(sl.ly, sl.ry) < D[3]) console.log("SL", runArcs.has(sl), sl.lx, sl.ly, sl.rx, sl.ry, sl.above, sl.from?.sym.box, sl.to?.sym.box); }
   // 按游程补出来的弧两端都要挂上音（同一个音不算）：挂不全的多是线上残留的别的墨
   for (let i = slurs.length - 1; i >= 0; i--) if (runArcs.has(slurs[i]) && (!slurs[i].from || !slurs[i].to || slurs[i].from === slurs[i].to)) slurs.splice(i, 1);
