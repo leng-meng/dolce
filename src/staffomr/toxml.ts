@@ -5,7 +5,7 @@
 import { barlineXml, escapeXml, scorePartXml, workXml, wrapPartwise } from "../score/xmlutil";
 import { harmonyXml } from "../score/harmonyxml";
 import type { StaffNote } from "./notedata";
-import { clefFor, fifthsAt, timeSignatures, type StaffContext } from "./notedata";
+import { clefFor, fifthsAt, timeSignatures, timeXml, type StaffContext } from "./notedata";
 import { Bar, type SPage, type Staff } from "./model";
 import type { StaffScore } from "./score";
 
@@ -203,9 +203,9 @@ export function toMusicXml(lines: StaffLineResult[], opts: StaffXmlOptions = {})
       }
       while (tc < timeChanges.length && timeChanges[tc].x < bar.right) {
         const t = timeChanges[tc++];
-        const key = `${t.beats}/${t.beatType}`;
+        const key = `${t.beats}/${t.beatType}${t.symbol ?? ""}`;
         if (key !== prevTime) {
-          attrs += `<time><beats>${t.beats}</beats><beat-type>${t.beatType}</beat-type></time>`;
+          attrs += timeXml(t);
           prevTime = key;
         }
       }
@@ -934,9 +934,9 @@ function scoreToMusicXmlRaw(
         }
         while (bar0 && tc < timeChanges.length && timeChanges[tc].x < bar0.right) {
           const t = timeChanges[tc++];
-          const k = `${t.beats}/${t.beatType}`;
+          const k = `${t.beats}/${t.beatType}${t.symbol ?? ""}`;
           if (k !== prevTime) {
-            attrs += `<time><beats>${t.beats}</beats><beat-type>${t.beatType}</beat-type></time>`;
+            attrs += timeXml(t);
             prevTime = k;
           }
         }
@@ -953,7 +953,7 @@ function scoreToMusicXmlRaw(
           }
         }
         attrs += staffDetails(Array(nStaves).fill(false));
-        const [beats, beatType] = (prevTime ?? "4/4").split("/").map(Number);
+        const [beats, beatType] = (prevTime ?? "4/4").split("/").map((v) => parseInt(v));
         const pickup = pickupTicks(entry, bi, ticks(beats / beatType));
         const dur = pickup ?? ticks(beats / beatType);
         let notes = "";
@@ -993,9 +993,9 @@ function scoreToMusicXmlRaw(
         }
         while (bar0 && tc < timeChanges.length && timeChanges[tc].x < bar0.right) {
           const t = timeChanges[tc++];
-          const k = `${t.beats}/${t.beatType}`;
+          const k = `${t.beats}/${t.beatType}${t.symbol ?? ""}`;
           if (k !== prevTime) {
-            attrs += `<time><beats>${t.beats}</beats><beat-type>${t.beatType}</beat-type></time>`;
+            attrs += timeXml(t);
             prevTime = k;
           }
         }
@@ -1016,7 +1016,7 @@ function scoreToMusicXmlRaw(
         }
         // 被系统换行劈开的小节的后半截：系统里任一行谱配得上就算（一行认漏了音、凑不满，别的行照样配得上，232 主也爱我歌）
         const splitTail = entry.sys.staves.some((st) => st.bars[bi]?.splitTail);
-        const [beats, beatType] = (prevTime ?? "4/4").split("/").map(Number);
+        const [beats, beatType] = (prevTime ?? "4/4").split("/").map((v) => parseInt(v));
         const pickup = pickupTicks(entry, bi, ticks(beats / beatType));
         body += `<measure number="${measureNo}"${splitTail || pickup ? ' implicit="yes"' : ""}>`;
         if (bi === 0 && layout) body += layout.print(si, pi);

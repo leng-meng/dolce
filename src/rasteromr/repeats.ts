@@ -122,6 +122,36 @@ export function markRepeatsAndVoltas(pg: SPage, bin: Binary, map: ContourMap, sp
       }
     }
   }
+  // 终止线的粗笔过不了竖段的宽度闸、自己成不了小节线（破碎 p12 末系统那根上下贯通大谱表、贴着页图右缘），
+  // 细线就只记成普通线：细线右边一格内原图上有一道贯穿谱表、够粗的竖墨，就是终止线
+  for (const st of pg.staves) {
+    if (st.lineYs.length !== 5) continue;
+    for (const b of st.bars) {
+      if (b.rightStyle || b.rightRepeat) continue;
+      const ys = st.lineYsAt?.(b.right) ?? st.lineYs;
+      const y0 = Math.round(ys[0]), y1 = Math.round(ys[4]);
+      const full = (x: number) => {
+        let ink = 0;
+        for (let y = y0; y <= y1; y++) if (bin.data[y * bin.w + x]) ink++;
+        return ink >= (y1 - y0 + 1) * FULL;
+      };
+      // 细线要就在小节右界上（两像素内）：先跨过细线自己，再找隔着白缝、比它粗得多的那一道墨
+      //（右界没落在线上时，不先认出细线，那根线自己就被当成粗笔：万福泉源歌 m4 行末普通线）
+      let x = Math.round(b.right) - 2;
+      while (x <= Math.round(b.right) + 2 && !full(x)) x++;
+      if (x > Math.round(b.right) + 2) continue;
+      const x0 = x;
+      while (x < bin.w && full(x)) x++;
+      const thin = x - x0;
+      const xb = Math.min(bin.w - 1, Math.round(b.right + sp * PAIR));
+      let run = 0, best = 0;
+      for (; x <= xb; x++) {
+        run = full(x) ? run + 1 : 0;
+        best = Math.max(best, run);
+      }
+      if (best >= Math.max(2, sp * THICK, thin * 1.8)) b.rightStyle = "light-heavy";
+    }
+  }
   // 终止线、复纵线同系统各行拉齐：有一行在这个 x 认出样式，没认出的各行照它
   for (const sys of pg.systems) {
     for (const st of sys.staves)

@@ -10,7 +10,7 @@ import { makeTextObj, makeSymObj } from "./adapt";
 import { attachHarmonies, type LyricLine, buildLyricLines, attachLyrics } from "../staffomr/textanalyze";
 import { liftHarmonies, lyricsBelongBelow, keepGapRowOrder, foldBilingualLyrics, splitSmallEchoes, moveEchoLines, splitVoiceLyrics, numberVersesByScript, liftLyrics } from "./lyricpost";
 import { type LyricStrip, type LyricRow, findLyricRows, stripOf, stripKey, lyricLayoutVerdict, isLatinRow, LATIN_MIN_CHAINED, type OcrChar, foldLyricChars, splitMixedChars, latinCells, mapCharsToCells, stripWithout } from "./lyric";
-import type { Staff, PObj, SPage } from "../staffomr/model";
+import type { Staff, PObj, SPage, Sym } from "../staffomr/model";
 import type { Component, Rect, Binary } from "../omrkit/types";
 import { type StaffNote, keyFifths, checkBars, lastTimeSignature, type BeamShape, type StaffContext } from "../staffomr/notedata";
 import type { SmuflName } from "../staffomr/glyphs";
@@ -183,6 +183,10 @@ function mergeLayerLines(ocr: readonly WordLine[], layer: readonly WordLine[]): 
 }
 /** 延音线中间夹着的音，离两端几个音级以内才算同一声部。 */
 const TIE_BETWEEN_STEPS = 5;
+/** 延音线弧端离那头音头最远多少格（真延音线实测 ≤1.05，从中间音起、止在中间音的圆滑线 ≥1.4）。 */
+const TIE_HUG = 1.2;
+/** 弧端改挂到中间音时，那个音头离弧端的纵向距离上限（格）：挂对的实测 ≤1.05（破碎扫描 m31），不该挂的 ≥1.8。 */
+const TIE_MID_REACH = 1.3;
 /** 弧右端离小节线至少这么多格，才算「止在线左边」（`attachSlurs` 之后的跨小节线检查） */
 const SLUR_BAR_CLEAR = 0.3;
 
@@ -209,7 +213,10 @@ export async function finishRasterPage(s: PageFinishInput): Promise<RasterPageRe
   // 贴着符头的那几样（保持音、断奏、重音）不按「x 最近」挂：字典里叫 `articTenuto*` 的九成是谱线残段，
   // 留给后面的 `findRasterArticulations` 按与符头的关系判
   const articSyms = marks.marks.filter((m) => /^artic/.test(m.code));
-  attachNotations(pg, notes, marks.marks.filter((m) => !/^artic/.test(m.code)));
+  // 颤音波浪线是横着走的一截；字典认成 `wiggleTrill` 的竖块（高过宽）是被谱线切下来的符尾下半截、
+  // 琶音的一段之类（宁静 p3 m39 八分符尾、破碎扫描 p1 m7），不当颤音挂
+  const isUprightWiggle = (m: Sym) => m.code.startsWith("wiggleTrill") && m.box.bottom - m.box.top > m.box.right - m.box.left;
+  attachNotations(pg, notes, marks.marks.filter((m) => !/^artic/.test(m.code) && !isUprightWiggle(m)));
   // 琶音记号挂到它右边那一列和弦上：纵向落在波浪线范围里（上下各容半格多）、横向在线右 `ARP_REACH` 格内最靠左的那一列
   for (const b of arpeggios) {
     const sp = unit.space;
@@ -1076,6 +1083,26 @@ export async function finishRasterPage(s: PageFinishInput): Promise<RasterPageRe
     const opp = (m: StaffNote) => notes.some((n) => !n.rest && n.staff === m.staff && n.stemUp !== null && m.stemUp !== null && n.stemUp !== m.stemUp && Math.abs(n.x - m.x) < pad);
     const twoVoices = opp(from) || opp(to);
     if (notes.some((n) => !n.rest && n.staff === from.staff && n.stemUp !== null && (!twoVoices || from.stemUp === null || n.stemUp === from.stemUp) && Math.abs(n.diatonic - from.diatonic) <= TIE_BETWEEN_STEPS && n.x > from.x + pad && n.x < to.x - pad)) sl.tie = false;
+    // 终点音前印了临时记号：音高变了，是圆滑线（破碎 p8 m81、p12 m100 钢琴右手 G4→♮G4）
+    else if (to.accidental !== null && to.staff === from.staff) sl.tie = false;
+    // 延音线两端贴着音头；弧端离那头的音头 `TIE_HUG` 格以外、中间夹着别的音的，弧其实从（到）那个音
+    //（破碎 m31/m72/m91 钢琴左手：八分 C♯3、干朝下的 G3、八分 C3，弧从 G3 起止在 C3，起端被挂到同音高的 C♯3 上；
+    // m62 钢琴右手：D4/A4 和弦下方的短弧往上收在 D5 八分音符下，止端被挂到后面和弦的 D4 上）
+    else {
+      const between = notes.filter((n) => !n.rest && !n.grace && n.staff === from.staff && n.sym.box.left > from.sym.box.right && n.sym.box.right < to.sym.box.left);
+      const nearest = (ns: StaffNote[], x: (n: StaffNote) => number, at: number) => ns.reduce<StaffNote | undefined>((a, n) => (!a || Math.abs(x(n) - at) < Math.abs(x(a) - at) ? n : a), undefined);
+      const mx = (sl.lx + sl.rx) / 2;
+      // 中间那个音的头要在纵向贴着弧端（`TIE_MID_REACH` 格内）：长音之间的真延音线弧端也会离音头一格半，中间的音却在两格开外（新编 329 m3、264 m10、f16 m3）
+      // 或者弧明显斜着往那个音去（两端高差过弧宽三成；真延音线两端等高：m62 那条短弧左低右高，收在 D5 下方两格）
+      const tilt = (sl.ry - sl.ly) / Math.max(1, sl.rx - sl.lx);
+      const hugs = (n: StaffNote, y: number, dir: number) =>
+        Math.max(n.sym.box.top - y, y - n.sym.box.bottom, 0) <= unit.space * TIE_MID_REACH || (Math.abs(tilt) > 0.3 && Math.sign(n.sym.py - y) === Math.sign(tilt) * dir);
+      const a = sl.lx - from.sym.box.right > unit.space * TIE_HUG ? nearest(between.filter((n) => n.sym.px < mx && hugs(n, sl.ly, -1)), (n) => n.sym.box.left, sl.lx) : undefined;
+      const b = to.sym.box.left - sl.rx > unit.space * TIE_HUG ? nearest(between.filter((n) => n.sym.px > mx && hugs(n, sl.ry, 1)), (n) => n.sym.px, sl.rx) : undefined;
+      if (a) sl.from = a;
+      if (b) sl.to = b;
+      if (a || b) sl.tie = false;
+    }
   }
   // **弧止端不跨小节线**：弧的右端在本谱表一条小节线左边（离线 `SLUR_BAR_CLEAR` 格以上）、止端的音却在线右边——
   // 弧端越过末音的头与干（十六分音群上的长弧常这样），`validateSlurNote` 把末音拒了，只剩线右边那个音（破碎 p7 m70→71 钢琴右手，

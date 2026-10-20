@@ -254,13 +254,20 @@ export function timeSignature(time: Sym[], sp?: number): { beats: number; beatTy
   return all.length ? { beats: all[0].beats, beatType: all[0].beatType } : null;
 }
 
+/** 一处拍号。`symbol`：印的是 C / ¢ 记号而不是数字（MusicXML `<time symbol>`）。 */
+export interface TimeSig { x: number; beats: number; beatType: number; symbol?: "common" | "cut" }
+
+/** 一处拍号的 MusicXML `<time>`。 */
+export const timeXml = (t: TimeSig): string =>
+  `<time${t.symbol ? ` symbol="${t.symbol}"` : ""}><beats>${t.beats}</beats><beat-type>${t.beatType}</beat-type></time>`;
+
 /** 一行谱上的**全部**拍号，按 x 从左到右。曲中变拍时会有好几处。 */
-export function timeSignatures(time: Sym[], sp?: number): { x: number; beats: number; beatType: number }[] {
+export function timeSignatures(time: Sym[], sp?: number): TimeSig[] {
   if (!time.length) return [];
-  const out: { x: number; beats: number; beatType: number }[] = [];
+  const out: TimeSig[] = [];
   const marks = time.filter((s) => s.code === "timeSigCommon" || s.code === "timeSigCutCommon");
   for (const m of marks) {
-    out.push(m.code === "timeSigCommon" ? { x: m.px, beats: 4, beatType: 4 } : { x: m.px, beats: 2, beatType: 2 });
+    out.push(m.code === "timeSigCommon" ? { x: m.px, beats: 4, beatType: 4, symbol: "common" } : { x: m.px, beats: 2, beatType: 2, symbol: "cut" });
   }
   const digits = time.filter((s) => timeSigDigit(s.code) >= 0).sort((a, b) => a.px - b.px);
   if (digits.length) {
