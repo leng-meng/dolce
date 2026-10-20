@@ -25,6 +25,8 @@ export interface StaffXmlOptions {
   noteId?: (n: StaffNote) => string | undefined;
   /** 页眉各条（位图路 OCR 读出的标题、词曲作者），写成曲首页的 `<credit>`；`size` 是字号（pt），
    *  `box` 是它在首个系统那一页上的位置（页面单位），写源谱版面时折成 `default-x` / `default-y` */
+  /** 小节号印在哪（`<measure-numbering>`，写在第一声部首小节的 `<print>` 里），见 `score.ts::measureNumbering` */
+  measureNumbering?: "system";
   /** `page`：第几页（缺省 1，页脚每页一份） */
   credits?: { text: string; type?: string; justify?: string; size?: number; box?: { x: number; y: number; w: number; h: number }; page?: number }[];
   /** 写源谱版面（`<defaults>` 的纸与谱表大小、各系统首小节的 `<print>`），缺省写。见 `sourceLayout` */
@@ -872,6 +874,13 @@ function scoreToMusicXmlRaw(
   const partList: string[] = [];
   const bodies: string[] = [];
   const layout = opts.layout === false ? null : sourceLayout(score);
+  /** 系统首小节的 `<print>`：源谱版面那份，第一声部首小节再带上 `<measure-numbering>`（子元素次序里排在 `staff-layout` 之后） */
+  const printXml = (si: number, pi: number): string => {
+    const p = layout ? layout.print(si, pi) : "";
+    if (si !== 0 || pi !== 0 || !opts.measureNumbering) return p;
+    const mn = `<measure-numbering>${opts.measureNumbering}</measure-numbering>`;
+    return p ? p.replace(/<\/print>$/, `${mn}</print>`) : `<print>${mn}</print>`;
+  };
   const defaults = (layout?.defaults ?? "") + fontDefaults(score, notesOf);
   score.parts.forEach((part, pi) => {
     const id = `P${pi + 1}`;
@@ -985,7 +994,7 @@ function scoreToMusicXmlRaw(
           if (k) notes += `<backup><duration>${dur}</duration></backup>`;
           notes += `<note><rest measure="yes"/><duration>${dur}</duration><voice>${k * 4 + 1}</voice>${nStaves > 1 ? `<staff>${k + 1}</staff>` : ""}</note>`;
         }
-        out += `<measure number="${measureNo}"${pickup ? ' implicit="yes"' : ""}>${bi === 0 && layout ? layout.print(si, pi) : ""}${attrs ? `<attributes>${attrs}</attributes>` : ""}${notes}</measure>`;
+        out += `<measure number="${measureNo}"${pickup ? ' implicit="yes"' : ""}>${bi === 0 ? printXml(si, pi) : ""}${attrs ? `<attributes>${attrs}</attributes>` : ""}${notes}</measure>`;
       }
       return out;
     };
@@ -1043,7 +1052,7 @@ function scoreToMusicXmlRaw(
         const [beats, beatType] = (prevTime ?? "4/4").split("/").map((v) => parseInt(v));
         const pickup = pickupTicks(entry, bi, ticks(beats / beatType));
         body += `<measure number="${measureNo}"${splitTail || pickup ? ' implicit="yes"' : ""}>`;
-        if (bi === 0 && layout) body += layout.print(si, pi);
+        if (bi === 0) body += printXml(si, pi);
         if (attrs) body += `<attributes>${attrs}</attributes>`;
         if (bar0)
         body += barlineXml("left", {

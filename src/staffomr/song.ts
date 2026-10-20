@@ -8,7 +8,7 @@ import { musicFamily } from "./symbolmap";
 import type { StaffGlyphLookup } from "./staffglyphs";
 import type { TextGlyphLookup } from "./textglyphs";
 import { recognizeStaffPage, vectorPageCredits, vectorPageFooters } from "./pagerun";
-import { buildScore, restructureSystems, type StaffProfile, type SystemOp } from "./score";
+import { buildScore, measureNumbering, restructureSystems, type StaffProfile, type SystemOp } from "./score";
 import { pageTextPt, scoreToMusicXml, type StaffXmlOptions } from "./toxml";
 import type { StaffNote } from "./notedata";
 import type { Staff } from "./model";
@@ -116,7 +116,8 @@ export async function recognizeStaffDoc(
     for (const { text, type, justify, size, box } of vectorPageFooters(page, i + 1)) credits.push({ text, type, justify, box, size: pageTextPt(page, size), page: i + 1 });
   });
   const title = opts.title ?? credits.find((c) => c.type === "title")?.text;
-  const xmlOpts = { title, credits, ...(opts.noteIds ? { noteId: (n: StaffNote) => n.omrId } : {}) };
+  const numbering = measureNumbering(score);
+  const xmlOpts = { title, credits, ...(numbering ? { measureNumbering: numbering } : {}), ...(opts.noteIds ? { noteId: (n: StaffNote) => n.omrId } : {}) };
   const musicxml = scoreToMusicXml(score, notesOf, xmlOpts);
   let notes = 0;
   for (const v of notesByStaff.values()) notes += v.length;
