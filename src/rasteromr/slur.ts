@@ -709,3 +709,114 @@ export function traceSteepArcEnds(arcs: SlurArc[], bin: Binary, onLine: (y: numb
     }
   }
 }
+
+// ── 长弧末端的细尾 ─────────────────────────────────────────────────────────
+//
+// 长弧两头收成发丝细的尾巴，二值化后断成几截，过谱线那几列还被去线抹掉，认出的端点停在尾巴前头，挂到前一个音上
+//（宁静 p1 m6–8 钢琴右手 A4 起的长弧，尾巴过第一线后画到 m8 F4 前，认出的右端停在 E4 上方）。
+// 宽过 `TAIL_LONG` 格的弧，两端都在原图上顺切线往外追：垂直于走向 `TAIL_PERP` 格内找细墨（线行上的墨照 `traceSteepArcEnds` 的规矩），
+// 碰上粗墨（过 `TAIL_THICK` 格，头、干、符杠）就停；断口容 `TAIL_GAP` 格，断着时按最近的转弯速度续着弯；最多追 `TAIL_MAX` 格。
+
+/** 长弧的宽度下限（格）。 */
+const TAIL_LONG = 5;
+/** 找墨的半宽（格）。 */
+const TAIL_PERP = 0.3;
+/** 细墨的上限（格）。 */
+const TAIL_THICK = 0.4;
+/** 断口上限（格）。 */
+const TAIL_GAP = 0.8;
+/** 最多追多远、至少追出多远（格）。 */
+const TAIL_MAX = 4;
+const TAIL_MIN = 0.4;
+/** 端头离音头多近就不追、追到离音头多近就停（格）。 */
+const TAIL_AT_HEAD = 0.4;
+const TAIL_STOP_HEAD = 0.25;
+/** 判像不像延音线时，弧端找最近音头的范围（格）。 */
+const TAIL_TIE_NEAR = 1.5;
+
+export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: number) => boolean, heads: readonly { left: number; right: number; top: number; bottom: number }[], sp: number): void {
+  const headDist = (x: number, y: number) => Math.min(Infinity, ...heads.map((h) => Math.hypot(Math.max(0, h.left - x, x - h.right), Math.max(0, h.top - y, y - h.bottom))));
+  const raw = (x: number, y: number) => x >= 0 && y >= 0 && x < bin.w && y < bin.h && bin.data[y * bin.w + x] === 1;
+  const vRun = (x: number, y: number) => {
+    let a = y, b = y;
+    while (raw(x, a - 1) && y - a < sp) a--;
+    while (raw(x, b + 1) && b - y < sp) b++;
+    return b - a + 1;
+  };
+  // 谱线行上的墨一概不用：尾巴斜着过线，线加弧那几列竖向一长条，会把走向拽成竖直往下；过线当断口照切线走过去
+  const ink = (x: number, y: number) => raw(x, y) && !onLine(y);
+  const W = Math.max(2, Math.round(sp * TAIL_PERP));
+  const nearestHead = (x: number, y: number) => {
+    let best: (typeof heads)[number] | undefined, bd = sp * TAIL_TIE_NEAR;
+    for (const h of heads) {
+      const d = Math.hypot(Math.max(0, h.left - x, x - h.right), Math.max(0, h.top - y, y - h.bottom));
+      if (d <= bd) (bd = d), (best = h);
+    }
+    return best;
+  };
+  for (const sl of arcs) {
+    if (sl.dashed || sl.rx - sl.lx < sp * TAIL_LONG) continue;
+    // 像延音线的不追：两端各自最近的音头同高（延音线两头同音高，是爱 p3 m37、p4 m47 长延音线追过了头）
+    const hl = nearestHead(sl.lx, sl.ly), hr = nearestHead(sl.rx, sl.ry);
+    if (hl && hr && hl !== hr && Math.abs((hl.top + hl.bottom) / 2 - (hr.top + hr.bottom) / 2) <= sp * 0.3) continue;
+    for (const dir of [-1, 1] as const) {
+      let x = dir < 0 ? sl.lx : sl.rx, y = dir < 0 ? sl.ly : sl.ry;
+      // 端头已贴着音头的不追（长延音线两头本就挨着头，再追就越过头、挂不上了，是爱 p3 m37、p5 m65）
+      if (headDist(x, y) <= sp * TAIL_AT_HEAD) continue;
+      // 起步切线：端头往里 k 列处离端头最近的墨
+      const k = Math.max(3, Math.round(sp * 0.6)), bx = Math.round(x - dir * k), b = sl.obj.box;
+      let yIn: number | null = null;
+      for (let yy = Math.round(b.top); yy <= Math.round(b.bottom); yy++) if (raw(bx, yy) && (yIn === null || Math.abs(yy - y) < Math.abs(yIn - y))) yIn = yy;
+      if (yIn === null) continue;
+      let ang = Math.atan2(y - yIn, dir * k), turn = 0;
+      let miss = 0, walked = 0;
+      let last: { x: number; y: number; at: number } | null = null;
+      const pts: { x: number; y: number; ang: number }[] = [];
+      while (walked < sp * TAIL_MAX) {
+        if (miss) ang += turn;
+        const vx = Math.cos(ang), vy = Math.sin(ang);
+        const px = x + vx, py = y + vy;
+        walked++;
+        let best: number | null = null, thick = false;
+        for (let d = 0; d <= W && best === null; d++)
+          for (const sg of d ? [-1, 1] : [1]) {
+            const qx = Math.round(px - vy * d * sg), qy = Math.round(py + vx * d * sg);
+            if (!ink(qx, qy)) continue;
+            if (vRun(qx, qy) > sp * TAIL_THICK) thick = true;
+            else best = d * sg;
+            break;
+          }
+        if (best === null) {
+          if (thick) break;
+          if (++miss > sp * TAIL_GAP) break;
+          x = px;
+          y = py;
+          continue;
+        }
+        miss = 0;
+        const hx = px - vy * best, hy = py + vx * best;
+        // 追到了音头跟前：尾巴到了它的音，停
+        if (headDist(hx, hy) <= sp * TAIL_STOP_HEAD) break;
+        const na = Math.atan2(hy - y, hx - x);
+        // 方向慢慢跟，转弯速度按近几步量
+        const a2 = ang + 0.3 * Math.atan2(Math.sin(na - ang), Math.cos(na - ang));
+        pts.push({ x: hx, y: hy, ang: a2 });
+        if (pts.length > 4) turn = (a2 - pts[pts.length - 5].ang) / 4;
+        ang = a2;
+        x = hx;
+        y = hy;
+        last = { x: hx, y: hy, at: walked };
+      }
+      if (!last || last.at < sp * TAIL_MIN) continue;
+      const bb = sl.obj.box as { left: number; right: number; top: number; bottom: number };
+      if (dir < 0) (sl.lx = Math.round(last.x)), (sl.ly = Math.round(last.y));
+      else (sl.rx = Math.round(last.x)), (sl.ry = Math.round(last.y));
+      for (const p of pts) {
+        bb.left = Math.min(bb.left, p.x);
+        bb.right = Math.max(bb.right, p.x);
+        bb.top = Math.min(bb.top, p.y);
+        bb.bottom = Math.max(bb.bottom, p.y);
+      }
+    }
+  }
+}
