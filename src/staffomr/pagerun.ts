@@ -8,7 +8,7 @@ import type { SPage, Staff } from "./model";
 import { buildNotes, checkBars, findBeams, findClefKeyTime, lastTimeSignature, staffOmrOptions, type BarCheck, type BeamShape, type StaffContext, type StaffNote, type StemInfo } from "./notedata";
 import { analyzeText, attachDirectionTexts, attachHarmonies, attachLyrics, buildLyricLines, type LyricLine, type TextAnalysis } from "./textanalyze";
 import type { TextGlyphLookup } from "./textglyphs";
-import { attachSlurs, findSlurs, mergeArcHalves, findWedges, markSlurNotes, reconnectSlurs, wedgeSpans, type SlurArc } from "./slur";
+import { attachSlurs, findSlurs, mergeArcHalves, findWedges, markSlurNotes, reconnectSlurs, retimeTies, wedgeSpans, type SlurArc } from "./slur";
 import { attachDynamics, attachNotations, attachWedges, findNotations, findTuplets, takeArpeggios } from "./notations";
 import { applyOctaveShifts, attachVoltas, findOctaveShifts, findVoltas, type OctaveShift, type Volta } from "./octave";
 import { headerCredits, type HeaderCredit, type WordLine } from "../omrkit/headertext";
@@ -78,7 +78,7 @@ export async function recognizeStaffPage(
   const wedges = findWedges(pg);
   // 一条弧在这批 PDF 里画成左右两半两个对象，挂音符之前先并回一条
   const slurs = mergeArcHalves(findSlurs(pg), pg.normalStaffSpace || pg.space);
-  attachSlurs(slurs, notes, pg.normalStaffSpace || pg.space, { stemEnds: true });
+  attachSlurs(slurs, notes, pg.normalStaffSpace || pg.space, { stemEnds: true, tieNeighbors: true });
   reconnectSlurs(pg, slurs);
   markSlurNotes(slurs);
   // 八度移位要在音高算完之后、文本层之前：它直接改音符的八度
@@ -104,7 +104,10 @@ export async function recognizeStaffPage(
   attachHarmonies(pg, notes, text.harmony);
   attachDirectionTexts(pg, notes, text);
   removeWhite(pg);
-  return { page: pg, hasStaff: true, unknown: unknownObjs(pg).length, ctx, beams, notes, text, lyricLines, slurs, octaves, voltas, bars: checkBars(pg, ctx, notes, opts.carryTime), carryTime: lastTimeSignature(pg, ctx, opts.carryTime) };
+  const bars = checkBars(pg, ctx, notes, opts.carryTime);
+  // 延音线要时间上紧挨着：各音的起点要等小节自检定下来（见 `retimeTies`）
+  retimeTies(slurs, notes);
+  return { page: pg, hasStaff: true, unknown: unknownObjs(pg).length, ctx, beams, notes, text, lyricLines, slurs, octaves, voltas, bars, carryTime: lastTimeSignature(pg, ctx, opts.carryTime) };
 }
 
 function emptyText(): TextAnalysis {

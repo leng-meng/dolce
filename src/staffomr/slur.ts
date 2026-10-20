@@ -316,7 +316,11 @@ export function validateSlurNote(isEnd: boolean, nt: Box, px: number, py: number
  *
  * 连音线的判据照 `SlurTie::checkTie`：两端**在谱表上的音级相同**。
  */
-export function attachSlurs(arcs: SlurArc[], notes: StaffNote[], sp: number, opts: { stemEnds?: boolean } = {}): void {
+/**
+ * @param opts.stemEnds 两端都挂不上符头时按符干端补挂（只矢量路开，见下）
+ * @param opts.tieNeighbors 两端同音级还要过 `notTie` 才判延音线（矢量路开；位图路挂完弧端、修过几轮之后在 `pagefinish.ts` 里另判）
+ */
+export function attachSlurs(arcs: SlurArc[], notes: StaffNote[], sp: number, opts: { stemEnds?: boolean; tieNeighbors?: boolean } = {}): void {
   const pitched = notes.filter((n) => !n.rest);
   for (const sl of arcs) {
     let bestL: StaffNote | undefined;
@@ -366,8 +370,68 @@ export function attachSlurs(arcs: SlurArc[], notes: StaffNote[], sp: number, opt
     }
     sl.from = bestL;
     sl.to = bestR;
-    if (bestL && bestR && bestL.staff === bestR.staff && bestL.diatonic === bestR.diatonic) sl.tie = true;
+    if (bestL && bestR && bestL.staff === bestR.staff && bestL.diatonic === bestR.diatonic && !(opts.tieNeighbors && notTie(bestL, bestR, pitched, sp, sl.above))) sl.tie = true;
   }
+}
+
+/** 延音线中间夹着的音，离两端几个音级以内才算同一声部。 */
+const TIE_BETWEEN_STEPS = 5;
+
+/**
+ * 两端同音高的弧**不是延音线**的两种情形（位图路 `pagefinish.ts` 与矢量路 `attachSlurs` 共用）：
+ *   · 延音线只连相邻两个音：中间夹着同一行谱上别的音的，是跨几个音的圆滑线（宁静的伯利恒 p2 m25 钢琴右手 C5…C5；
+ *     牵我的手 Syn 左手 m106 B3 → m108 B3、小提琴 m39 G♯4–F♯4–G♯4）。
+ *     只数音高相近（`TIE_BETWEEN_STEPS` 个音级内）的：一行谱两个声部时，延音线中间常夹着另一声部的音（是爱 p4 m54 F5 下面的 F4、G4）。
+ *     无干的（全音符）多是另一声部，不算（是爱 p5 m65）；两个声部并存时干向与起点相反的也不算（晨曦破晓 m5 D4 延音线下面的 B3）。
+ *     起点或终点同一时刻有反向干的音（这行谱上两个声部并存）才按干向分；单声部旋律的干随音高翻（破碎低音），不分。
+ *   · 终点音前印了临时记号：音高变了，是圆滑线（破碎 p8 m81、p12 m100 钢琴右手 G4→♮G4）。
+ *
+ * `above`（弧朝向，矢量路给）：夹着的音还要在弧那一侧、越过两端（弧朝上的比两端高）。钢琴上声部一条延音线保持着、
+ * 底下内声部同干向的八分照走是常规写法（牵我的手 p1 m8 右手 B4 延音线下面的 E4、Syn 右手 A5 下面的 E5），不加这条误判 24 处；
+ * 真圆滑线夹着的音都在弧那一侧（G♯4–F♯4–G♯4 弧在下、F♯2–C♯3–F♯2 弧在上）。位图路弧向不总可靠，不给。
+ */
+export function notTie(from: StaffNote, to: StaffNote, notes: StaffNote[], sp: number, above?: boolean): boolean {
+  const pad = sp * 0.6;
+  const opp = (m: StaffNote) => notes.some((n) => !n.rest && n.staff === m.staff && n.stemUp !== null && m.stemUp !== null && n.stemUp !== m.stemUp && Math.abs(n.x - m.x) < pad);
+  const twoVoices = opp(from) || opp(to);
+  const side = (n: StaffNote) => above === undefined || (above ? n.diatonic > from.diatonic : n.diatonic < from.diatonic);
+  if (notes.some((n) => !n.rest && n.staff === from.staff && n.stemUp !== null && (!twoVoices || from.stemUp === null || n.stemUp === from.stemUp) && Math.abs(n.diatonic - from.diatonic) <= TIE_BETWEEN_STEPS && side(n) && n.x > from.x + pad && n.x < to.x - pad)) return true;
+  return to.accidental !== null && to.staff === from.staff;
+}
+
+/**
+ * **延音线要时间上紧挨着**：前一个音的终点正是后一个音的起点（同一小节），或者前一个音收在小节末、后一个音在下一小节头（跨小节线、跨行）。
+ * 同音高、几何上也像延音线的弧，中间隔着拍点的是圆滑线（牵我的手 p1 m8 钢琴右手 B4 四分 → B4 附点四分，底下内声部走着八分）。
+ * 要等 `checkBars` 定了各音的起点（`StaffChord.offset`）才判得了，两端都凑满了小节（`timed`）才判，其余照几何的结论。
+ * 改判的弧把两端的延音线标记换成圆滑线（`markSlurNotes` 已经打过标）。
+ */
+export function retimeTies(arcs: SlurArc[], notes: StaffNote[]): void {
+  const eps = 1e-6;
+  const barOf = (n: StaffNote) => n.staff.bars.findIndex((b) => n.x >= b.left && n.x <= b.right);
+  const end = (n: StaffNote) => n.group!.offset + n.duration;
+  const barEnd = (n: StaffNote, bi: number) =>
+    Math.max(...notes.filter((m) => m.staff === n.staff && m.group?.timed && !m.grace && barOf(m) === bi).map(end));
+  const flipped: SlurArc[] = [];
+  for (const sl of arcs) {
+    const { from, to } = sl;
+    if (!sl.tie || !from || !to || !from.group?.timed || !to.group?.timed) continue;
+    const bf = barOf(from), bt = barOf(to);
+    if (bf < 0 || bt < 0) continue;
+    let adjacent: boolean;
+    if (from.staff === to.staff && bf === bt) adjacent = Math.abs(end(from) - to.group.offset) < eps;
+    else {
+      const next = from.staff === to.staff ? bt === bf + 1 : bf === from.staff.bars.length - 1 && bt === 0;
+      adjacent = next && to.group.offset < eps && end(from) >= barEnd(from, bf) - eps;
+    }
+    if (adjacent) continue;
+    sl.tie = false;
+    from.tieStart = false;
+    from.tieAbove = undefined;
+    to.tieStop = false;
+    flipped.push(sl);
+  }
+  // 一批标：同一条弧画两份的按一批去重（见 `markSlurNotes`）
+  if (flipped.length) markSlurNotes(flipped);
 }
 
 /**

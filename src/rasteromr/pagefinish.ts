@@ -25,7 +25,7 @@ import { type Contour, candidateMap, traceContours, type ContourMap, type Repair
 import { findRasterArticulations } from "./artic";
 import { findRasterWedges, findFusedWedges, findStrippedWedges } from "./wedge";
 import { findRasterSlurs, findStubSlurs, findRasterDashedSlurs, findFusedSlurs, judgeArcUnion, extendArcEnds, traceSteepArcEnds, traceLongArcTails } from "./slur";
-import { type SlurArc, attachSlurs, reconnectSlurs, markSlurNotes, orphanEdge } from "../staffomr/slur";
+import { type SlurArc, attachSlurs, reconnectSlurs, markSlurNotes, orphanEdge, notTie } from "../staffomr/slur";
 import { removeStaffLinesByRun, blobImage, type LineSeg, type RasterPrims } from "./prims";
 import { mergeArcPieces, bridgeArcPieces, attachSlursByStem, attachWideSlurs, attachEdgeSlurEnds, attachEdgeSlurStarts, snapSlurEndsToStems, completeSlurEnds, tieChords } from "./slurattach";
 import { touchesText } from "./pagetext";
@@ -191,8 +191,6 @@ function mergeLayerLines(ocr: readonly WordLine[], layer: readonly WordLine[]): 
   }
   return out;
 }
-/** 延音线中间夹着的音，离两端几个音级以内才算同一声部。 */
-const TIE_BETWEEN_STEPS = 5;
 /** 延音线弧端离那头音头最远多少格（真延音线实测 ≤1.05，从中间音起、止在中间音的圆滑线 ≥1.4）。 */
 const TIE_HUG = 1.2;
 /** 弧端改挂到中间音时，那个音头离弧端的纵向距离上限（格）：挂对的实测 ≤1.05（破碎扫描 m31），不该挂的 ≥1.8。 */
@@ -1125,19 +1123,11 @@ export async function finishRasterPage(s: PageFinishInput): Promise<RasterPageRe
     const far = (n: StaffNote | undefined, y: number) => !!n && (sl.above ? edge(n) - y : y - edge(n)) > unit.space * LYRIC_ARC_REACH;
     if (far(sl.from, sl.ly) || far(sl.to, sl.ry)) (sl.from = undefined), (sl.to = undefined), (sl.tie = false);
   }
-  // 延音线只连相邻两个音：两端同音高、中间却夹着同一行谱上别的音的，是跨几个音的圆滑线（宁静的伯利恒 p2 m25 钢琴右手 C5…C5）
+  // 延音线只连相邻两个音、终点前没有临时记号（判据两路共用，见 `staffomr/slur.ts::notTie`）
   for (const sl of slurs) {
     if (!sl.tie || !sl.from || !sl.to) continue;
     const { from, to } = sl;
-    const pad = unit.space * 0.6;
-    // 只数音高相近（`TIE_BETWEEN_STEPS` 个音级内）的：一行谱两个声部时，延音线中间常夹着另一声部的音（是爱 p4 m54 F5 下面的 F4、G4）。
-    // 无干的（全音符）多是另一声部，不算（是爱 p5 m65）；两个声部并存时干向与起点相反的也不算（晨曦破晓 m5 D4 延音线下面的 B3）
-    // 起点或终点同一时刻有反向干的音（这行谱上两个声部并存）才按干向分；单声部旋律的干随音高翻（破碎低音），不分
-    const opp = (m: StaffNote) => notes.some((n) => !n.rest && n.staff === m.staff && n.stemUp !== null && m.stemUp !== null && n.stemUp !== m.stemUp && Math.abs(n.x - m.x) < pad);
-    const twoVoices = opp(from) || opp(to);
-    if (notes.some((n) => !n.rest && n.staff === from.staff && n.stemUp !== null && (!twoVoices || from.stemUp === null || n.stemUp === from.stemUp) && Math.abs(n.diatonic - from.diatonic) <= TIE_BETWEEN_STEPS && n.x > from.x + pad && n.x < to.x - pad)) sl.tie = false;
-    // 终点音前印了临时记号：音高变了，是圆滑线（破碎 p8 m81、p12 m100 钢琴右手 G4→♮G4）
-    else if (to.accidental !== null && to.staff === from.staff) sl.tie = false;
+    if (notTie(from, to, notes, unit.space)) sl.tie = false;
     // 延音线两端贴着音头；弧端离那头的音头 `TIE_HUG` 格以外、中间夹着别的音的，弧其实从（到）那个音
     //（破碎 m31/m72/m91 钢琴左手：八分 C♯3、干朝下的 G3、八分 C3，弧从 G3 起止在 C3，起端被挂到同音高的 C♯3 上；
     // m62 钢琴右手：D4/A4 和弦下方的短弧往上收在 D5 八分音符下，止端被挂到后面和弦的 D4 上）
