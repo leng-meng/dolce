@@ -105,6 +105,8 @@ function fakeRun(id: number, box: Rect, sizeDev: number, font = RASTER_FONT): Ve
 export interface RasterSym {
   box: Rect;
   code: SmuflName;
+  /** 全音符**按本页字形样本确认过**（`notehead.ts::markShapeWholes`）：不是「干没挂上的二分」，建和弦时不往带干的和弦里并。 */
+  shapeWhole?: boolean;
 }
 
 /** 位图 OCR 出来的一行文本（歌词）：逐字格的盒 + 字符。 */
@@ -171,6 +173,7 @@ export function makeSymObj(id: number, s: RasterSym, staffHeight: number): { obj
   run.glyphs.push(glyph);
   const obj = new PObj(id, null, run);
   const sym = new Sym(obj, 0, glyph, s.code);
+  if (s.shapeWhole) sym.shapeWhole = true;
   obj.symbols.push(sym);
   obj.addTag("Symbol");
   return { obj, sym };

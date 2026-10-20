@@ -12,6 +12,11 @@ import { type RasterUnit } from "./staffline";
 /** 同音两声部只挂上一根干时，头另一侧的竖墨至少这么多格才算另一根干（`splitUnisons`）。 */
 const UNISON_REACH = 2.0;
 
+/** 另一根干够得上 `UNISON_REACH` 时，头缘内反方向的竖墨照旧不过半格（贴头路过的小节线、邻头的干一伸就是几格）；
+ *  **已挂上的那根干带符尾**的放到这么多格：符尾常弯回头底下（是爱 p3 m36 女高女低同音 C4，朝下的干带八分尾，尾尖在头右下 0.54 格）。
+ *  不分带不带尾一律放宽会误拆向主唱新歌 m2 的 B3。 */
+const UNISON_BACK = 1.0;
+
 /** 另一根干够不上 `UNISON_REACH` 时，贴着头缘、反方向（放到头外）也没墨的，这么多格就算（我灵镇静 m26 F4，歌词挤得干只伸出头外 1.1 格）。 */
 const UNISON_SHORT = 1.0;
 
@@ -110,12 +115,15 @@ export function splitUnisons(notes: StaffNote[], stems: StemInfo[], beams: BeamS
   // 切成两段，下面那段对上面那个头来说也「朝下」，但它还在右缘，不算。
   const up = new Set<Sym>();
   const down = new Set<Sym>();
+  /** 挂着的那根干带符尾的头（见 `UNISON_BACK`）。 */
+  const flagged = new Set<Sym>();
   for (const st of stems) {
     const cx = (st.seg.box.left + st.seg.box.right) / 2;
     for (const s of st.notes) {
       const w = s.box.right - s.box.left;
       if (st.up && cx > s.box.left + w * 0.6) up.add(s);
       if (!st.up && cx < s.box.left + w * 0.4) down.add(s);
+      if (st.flags > 0) flagged.add(s);
     }
   }
   /** 从 y0 起往 dir 方向，x 在 [x0, x1] 内最长的一段竖墨（像素行数；断口 ≤2 行，逐行可左右挪一列）。
@@ -201,12 +209,12 @@ export function splitUnisons(notes: StaffNote[], stems: StemInfo[], beams: BeamS
     }
     if (up.has(n.sym)) {
       const x1 = b.left + w * 0.3;
-      const len = reach(Math.min(b.left - out, bl - 1), x1, b.bottom, 1) >= sp * UNISON_REACH && reach(b.left - 1, x1, b.top, -1) < sp * 0.5 ? sp * UNISON_REACH
+      const len = reach(Math.min(b.left - out, bl - 1), x1, b.bottom, 1) >= sp * UNISON_REACH && reach(b.left - 1, x1, b.top, -1) < sp * (flagged.has(n.sym) ? UNISON_BACK : 0.5) ? sp * UNISON_REACH
         : reach(bl - 1, x1, b.bottom, 1) >= sp * UNISON_SHORT && reach(Math.min(b.left - out, bl - 1), x1, b.top, -1) < sp * 0.5 && headRows(bl - 1, x1, b.bottom + 2, b.bottom + sp * UNISON_SHORT, 0.4, 3) < sp * 0.2 ? sp * UNISON_SHORT : 0;
       if (len && clear(n.sym, Math.min(b.left - out, bl - 1), x1, b.bottom + 1, b.bottom + len) && headRows(Math.min(b.left - out, bl - 1), x1, b.bottom + 2, b.bottom + len) < sp * 0.3 && !passes(Math.min(b.left - out, bl - 1), b.left - 1, b, 1)) down.add(n.sym);
     } else {
       const x0 = b.right - w * 0.3;
-      const len = reach(x0, Math.max(b.right + out, br + 1), b.top, -1) >= sp * UNISON_REACH && reach(x0, b.right + 1, b.bottom, 1) < sp * 0.5 ? sp * UNISON_REACH
+      const len = reach(x0, Math.max(b.right + out, br + 1), b.top, -1) >= sp * UNISON_REACH && reach(x0, b.right + 1, b.bottom, 1) < sp * (flagged.has(n.sym) ? UNISON_BACK : 0.5) ? sp * UNISON_REACH
         : reach(x0, br + 1, b.top, -1) >= sp * UNISON_SHORT && reach(x0, Math.max(b.right + out, br + 1), b.bottom, 1) < sp * 0.5 && headRows(x0, br + 1, b.top - sp * UNISON_SHORT, b.top - 2, 0.4, 3) < sp * 0.2 ? sp * UNISON_SHORT : 0;
       if (len && clear(n.sym, x0, Math.max(b.right + out, br + 1), b.top - len, b.top - 1) && headRows(x0, Math.max(b.right + out, br + 1), b.top - len, b.top - 2) < sp * 0.3 && !passes(b.right + 1, Math.max(b.right + out, br + 1), b, -1)) up.add(n.sym);
     }

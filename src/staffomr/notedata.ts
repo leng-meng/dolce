@@ -511,10 +511,14 @@ export function buildStems(pg: SPage, sp: number): StemInfo[] {
       notes.push(nt);
     }
     if (!notes.length) continue;
-    // `Stem::up`：符干伸到符头**上方**就是朝上
-    const top = Math.min(...notes.map((n) => n.box.top));
-    const bottom = Math.max(...notes.map((n) => n.box.bottom));
-    const up = seg.top < top ? true : seg.bottom > bottom ? false : false;
+    // `Stem::up`：符干伸到符头**上方**就是朝上。高出头顶不到 `STEM_UP_SLACK` 格的不算：干端齐着头顶、
+    // 扫描件上高出一两个像素的朝下干会被当成朝上（是爱 p2 m30 女低 F4 二分，干上端比头顶高 1px、往下伸 2.5 格，
+    // 分声部时上方 C5 全音符的「上下两声部」豁免因此不成立，三个音排成了一串）。
+    // 改成「往哪头伸得多」更差：穿过两声部交叉处的干（望十架 p3 m26）方向跟着翻
+    // 两头都没伸出头去的短干（破碎扫描 p9 m93，夹在二度两个头之间）照旧：上端高过头顶就算朝上
+    const above = Math.min(...notes.map((n) => n.box.top)) - seg.top;
+    const below = seg.bottom - Math.max(...notes.map((n) => n.box.bottom));
+    const up = above > sp * STEM_UP_SLACK || (above > 0 && below <= sp * STEM_UP_SLACK);
     let flags = 0;
     for (const f of flagSyms) {
       if (Math.abs(f.box.left - seg.cx) > sp / 4) continue;
@@ -1137,6 +1141,9 @@ function attachDots(notes: StaffNote[], dots: Sym[], sp: number): void {
 const STEM_JOIN_X = 0.3;
 /** 同上，两段之间允许的断口（线距的倍数）。 */
 const STEM_JOIN_GAP = 1.0;
+/** 干上端高出头顶不到这么多格（线距的倍数）不算朝上（见 `findStems` 那一段 `Stem::up`）。 */
+const STEM_UP_SLACK = 0.15;
+
 /** 断成两段的干，断口不过这个数（线距的倍数）才统一两段的时值（见 `inheritDur`）。 */
 const STEM_SPLIT_DUR_GAP = 0.4;
 
@@ -1312,8 +1319,9 @@ function initChords(notes: StaffNote[], stems: StemInfo[], sp: number): StaffCho
   const orphan = notes.filter((n) => !byNote.has(n) && !n.rest);
   // **真字体的全音符头不并**：矢量路的符头直接来自字形，`noteheadWhole` 就是全音符，不会是「干没挂上的二分」。
   // 并进去的话下面「带干的和弦里没有全音符」那条还会把它改成二分——宣主荣耀钢琴右手 m16 上声部 D4 全音符
-  // 并进了下声部的二分，成了「D4+F3 二分」一个和弦。位图路的符号挂在合成字体（`#raster`）上，照旧并
-  const glyphWhole = (n: StaffNote) => n.sym.code === "noteheadWhole" && !(n.sym.parent.run?.font ?? "#").startsWith("#");
+  // 并进了下声部的二分，成了「D4+F3 二分」一个和弦。位图路的符号挂在合成字体（`#raster`）上，照旧并——
+  // 除非形状已按本页样本确认是全音符（`shapeWhole`，爱是从神而来 p2 m23 钢琴右手 D4 全音符被并成 A4/D4 二分）
+  const glyphWhole = (n: StaffNote) => n.sym.code === "noteheadWhole" && (n.sym.shapeWhole || !(n.sym.parent.run?.font ?? "#").startsWith("#"));
   for (const n of orphan) {
     if (glyphWhole(n)) continue;
     let best: StaffChord | null = null;
@@ -2020,3 +2028,4 @@ export function lastTimeSignature(
   }
   return out;
 }
+

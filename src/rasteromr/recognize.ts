@@ -23,7 +23,7 @@ import { findTuplets, type WedgeOpen, type WedgeRows } from "../staffomr/notatio
 import type { SPage, Staff, Sym, Tag } from "../staffomr/model";
 import { buildRasterPage, makeSymObj, type RasterSym } from "./adapt";
 import { binSig, blobImage, extendVSegs, findBlobs, findBraces, findPrimitives, groupByLeftInk, findPartBrackets, ledgerGrid, joinVSegs, removeStaffLines, repairLineCuts, verticalStrokes, type BeamQuad, type LineSeg, type RasterPrims } from "./prims";
-import { archCavity, stemWalledCavity, findRasterHeads, hollowHeadsByPitch, headsOnBareStems, headsBetweenStemPairs, probeBareStems, hollowHeadsFromCavities, hollowHeadsAlongStems, hollowHeadsFromHoles, hollowHeadsOnStemSeeds, reseatHollowHeads, stemOf, hollowHeadsOnLedgers, hollowSlit, inkColumn, judgeHeadBox, mergeHoles } from "./notehead";
+import { archCavity, stemWalledCavity, findRasterHeads, hollowHeadsByPitch, headsOnBareStems, headsBetweenStemPairs, probeBareStems, hollowHeadsFromCavities, hollowHeadsAlongStems, hollowHeadsFromHoles, hollowHeadsOnStemSeeds, reseatHollowHeads, stemOf, hollowHeadsOnLedgers, hollowSlit, inkColumn, judgeHeadBox, mergeHoles, markShapeWholes } from "./notehead";
 import { bootstrapClefs, matchTemplate, RasterGlyphLookup, type BootStaff } from "./rasterglyphs";
 import { sigDistance } from "../omrkit/glyphdict";
 import { completeStaffBars, cutJianpuStrip, eraseInBand, findJianpuBands, type JianpuStrip } from "./jianpuband";
@@ -225,6 +225,8 @@ const CLF_H = [0.4, 1.6] as const;
  *  干净档音符 84.89 / 84.94 / **84.94** / 84.94 / 84.94%——0.8 是扫描档见顶
  *  且干净档一分不动的那一点（0.6 扫描相当但干净档掉 0.05）。 */
 const CLF_P = 0.8;
+/** 分类器补头时，与已认的几个头重叠比例**加起来**过这么多也算已占（`headTaken`）。是爱 p5 m70 那块两份各 0.25、0.27。 */
+const HEAD_TAKEN_SUM = 0.45;
 /** 第二遍拆块的尺寸上限（线距的倍数）。取的正是 `findBlobs` 自己的上限
  *  （宽 6 格、高 9 格）——**等于不再设限**，拆出来的头全交给判别器把关。
  *  写成 9×5.5 / 12×7 / 16×9 实测结果完全相同，因为再大的块 `findBlobs` 根本不出。 */
@@ -926,7 +928,12 @@ export async function recognizeRasterPage(
     // 只收挪到下声部的位置（第四、五线）：第二、三线上的归块图那一路；这里放开的话，
     // 宁静的伯利恒吊在第二、三线下的一批扁块也进来，合唱谱干净档音符 −0.3
     const low = grp.lines.slice(3);
-    const hang = low.some((l) => Math.abs(b.y - l.y) <= tol);
+    // 例外是**吊在第二线下**——全休止的标准位置：扫描件里它与第二线粘成一片，原语那一步同样当一截杠拿走
+    //（是爱 p4 男声行 m59–62 四个全休止全漏）。宁静那批假块是十六分的上层杠（两头的干短、没抽成竖段，
+    // `besideStem` 拦不住），正下方一格内贴着平行的第二层杠——全休止上下没有别的杠。
+    const stacked = () =>
+      prims.beams.some((o) => o !== q && Math.min(o.box.x + o.box.w, b.x + b.w) - Math.max(o.box.x, b.x) > b.w * 0.5 && Math.abs(o.box.y - b.y) < unit.space * 1.2);
+    const hang = low.some((l) => Math.abs(b.y - l.y) <= tol) || (Math.abs(b.y - grp.lines[1].y) <= tol && !stacked());
     const sit = low.some((l) => Math.abs(b.y + b.h - l.y) <= tol);
     if (!hang && !sit) continue;
     let fill = 0;
@@ -3103,8 +3110,13 @@ export async function recognizeRasterPage(
   const clfNeg: Rect[] = syms.filter((s0) => !/notehead/i.test(s0.code)).map((s0) => s0.box);
   const clf = masks.length ? trainHeadClassifier(raster.bin, masks, unit, onLineY, clfPos, clfNeg) : null;
   const clfHeads: RasterSym[] = [];
-  /** 已有符头压着的位置不再出（「头 + 干」那一路只记账、不标块，这一遍会在同一块里再拆一次）。 */
-  const headTaken = (hb: Rect) => [...syms, ...clfHeads].some((s0) => /^notehead/.test(s0.code) && overlapFrac(hb, s0.box) > 0.3);
+  /** 已有符头压着的位置不再出（「头 + 干」那一路只记账、不标块，这一遍会在同一块里再拆一次）。
+   *  **两个头合起来压着的也算**：密排和弦里夹在上下两个已认头之间、各压两成多的一块是它们的边角，
+   *  不是第三个头（是爱 p5 m70 F4/A4 之间切出个 G4；分类器的反例里多了几个全休止，这块就翻过了 `CLF_P`）。 */
+  const headTaken = (hb: Rect) => {
+    const prev = [...syms, ...clfHeads].filter((s0) => /^notehead/.test(s0.code)).map((s0) => overlapFrac(hb, s0.box));
+    return prev.some((f) => f > 0.3) || prev.reduce((a, f) => a + f, 0) > HEAD_TAKEN_SUM;
+  };
   /** 头盒 `b` 旁边（左沿往下、右沿往上）有没有一根干：那一列从头心起 `SPOT_STEM` 格里墨占 `SPOT_STEM_INK` 以上。 */
   const stemBeside = (b: Rect, between = false): boolean => {
     const cy = Math.round(b.y + b.h / 2);
@@ -4088,6 +4100,7 @@ export async function recognizeRasterPage(
     }
   }
 
+  markShapeWholes(syms, nl, prims.vSegs, unit);
   opts.trace?.("syms", syms);
   const pg = buildRasterPage({
     index,

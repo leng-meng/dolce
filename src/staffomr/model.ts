@@ -250,6 +250,8 @@ export class Sym {
   compositeBase?: number;
   /** 复合音符字形的符干朝向（`true` = 朝上、符头在下）。见 `page.ts::adoptCompositeNotes`。 */
   compositeStemUp?: boolean;
+  /** 位图路：这个全音符头的**形状**已按本页样本确认是全音符（不是干没挂上的二分），见 `rasteromr/notehead.ts::markShapeWholes`。 */
+  shapeWhole?: boolean;
   /** 基线原点的 x（musicpp 的 `Symbol::pos.x`）。 */
   readonly px: number;
   /**
