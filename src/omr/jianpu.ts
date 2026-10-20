@@ -1175,7 +1175,12 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
       // 26×37），宽度门挡不住它。放宽只给**连谱号括着的声部行**里、**矮、悬在右邻数字上半截**（底比数字底
       // 高 ≥0.2 字高）且形状判据认定是 ♯ 的：光凭形状，密排行里正常高度的数字也会被认成 ♯（92、1727 等
       // 八首各丢几个音），谱后正文里汉字的碎块也有矮而悬高、形似 ♯ 的（1811《心愿》）。
-      if (k.bbox.h > medH * 1.25) continue;
+      // 高悬的大 ♯（青年诗歌 20 `5· ♯4̲`：♯ 28×56 对数字 29×42，顶高出 0.7、底高出 0.4 字高，离数字 0.9 字号）：比数字还高，
+      // 过不了下面的高度门，当音符读成了 0。单声部行上整个悬在右邻数字上方的（顶高出 0.5、底高出 0.3 字高）按形状再认
+      const tallHung = !voicedPage && k.bbox.h > medH * 1.25 && k.bbox.h <= medH * 1.45 && k.bbox.w <= medW * 1.2 &&
+        nx.bbox.h >= medH * 0.85 && nx.bbox.y - k.bbox.y >= medH * 0.5 && rbottom(nx.bbox) - rbottom(k.bbox) >= medH * 0.3 &&
+        nx.bbox.x - rright(k.bbox) >= 0 && nx.bbox.x - rright(k.bbox) <= numH * 1.0;
+      if (k.bbox.h > medH * 1.25 && !tallHung) continue;
       // 「矮」不能只看块高：同书的 ♯ 也有印得和数字差不多高的（97《受难歌》28×32、26×30 对数字 37；101《我有主耶稣歌》`6 ♯5`
       // 的 ♯ 19×21 ~ 18×26 对数字 17×25），高度门一卡就当音符送去 OCR、读成休止 0。门放到 0.9 字高；再高的要整个悬高——
       // **顶比右邻数字高出 0.25、底高出 0.3 字高以上**（101 是 0.28~0.44；同行的数字顶是齐的，歪页上相邻两个数字也会差出 0.2：319 末行 `5 5`）。
@@ -1197,6 +1202,13 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
       // 单声部行上只收**顶底都悬高**的（顶高出 0.25、底高出 0.3 字高）：青年诗歌 14《雲彩》`7 6 ♯5` 的 ♯ 粗印糊成一团 23×40，
       // 本行数字中位宽 26，差 1px 过不了宽度门，当音符读成了 1
       const hungBoth = k.bbox.h <= medH * 1.1 && nx.bbox.y - k.bbox.y >= medH * 0.25 && rbottom(nx.bbox) - rbottom(k.bbox) >= medH * 0.3;
+      if (tallHung) {
+        if (accidentalOf(bin, k.bbox) !== "sharp" || underlined(k.bbox)) continue;
+        probe("accidental.tallHung");
+        accidentals.set(nx, "sharp");
+        accCores.add(k);
+        continue;
+      }
       const wideSharp = (sysOf.has(m) ? raised : voicedPage ? k.bbox.h < medH * 0.8 : hungBoth) && hungLow && k.bbox.w <= medW * 1.5 &&
         accidentalOf(bin, k.bbox) === "sharp" && !underlined(k.bbox);
       if (k.bbox.w > medW * 0.85 && !wideSharp) continue;
@@ -1819,7 +1831,9 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
   // 随时可能被 buildJpNums 收成高八度点——认出来后要从 dots 里摘掉。
   // 与真八度点靠**形状**分：三角是上宽下尖，逐行墨宽单调收到一个尖；圆点上下一样宽。
   // 再加填充率（三角 ≈0.5、圆点 ≈0.8）兜一道，免得淡印的圆点因边缘缺墨被当成三角。
-  const staccatoOf = new Map<DigitCore, boolean>();
+  const staccatoOf = new Map<DigitCore, Rect>();
+  // 收成顿音的音符 → 三角的框：和弦认完后与和弦框互斥（见歌词那段之后）
+  const staccatoBoxes = new Map<JpNum, Rect>();
   const staccatoComps = new Set<Component>();
   for (const m of staff) {
     const medH = median(m.rd.map((k) => k.bbox.h)) || numH;
@@ -1848,7 +1862,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
       if (rowW[rowW.length - 1] > b.w * 0.4) continue;                     // 底行没收成尖
       if (rowW.some((v, i) => i > 0 && v > rowW[i - 1] + 1)) continue;     // 中途变宽 → 不是三角
       probe("staccato");
-      staccatoOf.set(owner, true);
+      staccatoOf.set(owner, b);
       staccatoComps.add(k);
     }
   }
@@ -1925,7 +1939,8 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
       const a = accidentals.get(k); if (a && nums[j]) nums[j].accidental = a;
       if (fermataOf.get(k) && nums[j]) nums[j].fermata = true;
       const orn = ornamentOf.get(k); if (orn && nums[j]) nums[j].ornament = orn;
-      if (staccatoOf.get(k) && nums[j]) nums[j].articulation = "staccato";
+      const stb = staccatoOf.get(k);
+      if (stb && nums[j]) { nums[j].articulation = "staccato"; staccatoBoxes.set(nums[j], stb); }
       if (accentOf.get(k) && nums[j]) nums[j].articulation = "accent";
       const g = graceOf.get(k); if (g && nums[j]) nums[j].grace = g;
     });
@@ -2302,6 +2317,7 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
   let lyricRegions: RecognizedScore["lyricRegions"];
   let chordRegions: RecognizedScore["chordRegions"];
   let stanzaRegions: RecognizedScore["stanzaRegions"];
+  let footnotes: RecognizedScore["footnotes"];
   let lyricCheck: RecognizedScore["lyricCheck"];
   if (ocr.recognizeTexts) {
     // 连谱号（多声部谱左侧那道 `[`）竖穿歌词带，它的竖笔与钩会被当成行首的字（《圣哉三一歌》第 1、2 系统
@@ -2326,6 +2342,13 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
     const lr = await recognizeLyrics(bin, lyricComps, useRows, numH, ocr, headerRegions);
     lyricRegions = lr.lyrics.length ? lr.lyrics : undefined;
     chordRegions = lr.chords.length ? lr.chords : undefined;
+    // 一块墨只归一样东西：和弦认领了的（`E7` 的下标小 7 顶横宽、下收一笔，逐行墨宽像倒三角，青年诗歌 21 正落在 `4·` 头上）不是顿音
+    for (const [n, b] of staccatoBoxes) {
+      if (n.articulation !== "staccato") continue;
+      if (lr.chords.some((r) => rcx(b) >= r.bbox.x && rcx(b) <= rright(r.bbox) && rcy(b) >= r.bbox.y && rcy(b) <= rbottom(r.bbox))) {
+        probe("staccato.chordOwned"); n.articulation = undefined;
+      }
+    }
     // 标题、副标题里读成繁体的字：歌词整页是简体才按候选改回（署名不动，见 `simplifyHeaderLine`）
     if (lr.simplifiedPage) {
       for (const field of ["title", "subtitle"] as const) {
@@ -2356,7 +2379,8 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
       }
     }
     const st = await recognizeTrailingStanzas(bin, useRows, numH, ocr, lyricRegions);
-    if (st.length) stanzaRegions = st;
+    if (st.regions.length) stanzaRegions = st.regions;
+    if (st.footnotes.length) footnotes = st.footnotes;
     // 参照歌词互证：各段歌词都落位之后、弧裁决与「有词的 0」复原之前——补上的字要喂给那几步。
     // 演唱顺序要从反复/房号/跳转推，那些此时都已认完；页眉字段也已定（拍号决定小节时值）。
     if (opts.refLyrics) {
@@ -2446,6 +2470,6 @@ export async function recognizeJianpu(bin: Binary, ocr: OcrBackend,
 
   const dotDiam = dotSizes.length ? median(dotSizes) : undefined;
 
-  return { key: "C", fifths, minor, beats, beatType, meters, meterNote, rows: useRows, number, numberSide, title, subtitle, credits, tempo, tempoBeat, headerRegions, lyricRegions, chordRegions, stanzaRegions, dotDiam, lyricCheck };
+  return { key: "C", fifths, minor, beats, beatType, meters, meterNote, rows: useRows, number, numberSide, title, subtitle, credits, tempo, tempoBeat, headerRegions, lyricRegions, chordRegions, stanzaRegions, footnotes, dotDiam, lyricCheck };
 }
 

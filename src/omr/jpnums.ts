@@ -332,7 +332,10 @@ export function buildJpNums(
       //（84《主为救人》Q2 `5̣ − 5̣ 5̣` 整行丢点，点底 528、字顶 532）。
       // 声部行上点常直接压在字顶上（新编赞美诗·四声部 11 第 2 声部：点底 540~543、字顶线 539）。点顶在字顶线之上、点底不过字顶线 4px 的
       // 只在**成片**时收：前后相邻的音符下面也有疑似低音点（一排低音声部）；前后都没有、只这一个的照旧从严——字顶的点画单个出现
+      // 单个的也收**点顶高出字顶线 0.15 字号以上**、紧贴数字的：字顶笔画的顶与字顶线平齐，高出一截的只能是另印的点。
+      // 青年诗歌 18 首音 `5̣`：点 625~638、字顶线 635，点下 1px 就是「耶」，下方有墨被剔
       const aboveLyrics = (dot: Rect): boolean => rbottom(dot) <= lyricTop - 2 ||
+        (looseLow(dot) && dot.y <= lyricTop - numH * 0.15 && dot.y - rbottom(d) < numH * 0.45) ||
         (voiceMates.length > 0 && looseLow(dot) && (lowSuspect[i - 1] || lowSuspect[i + 1]));
       // 点与**歌词字同高**：左右 2.5 字号内有整字高的汉字块、点心落在它的上下沿之间——是歌词的标点（逗号、顿号），
       // 归歌词行，不是八度点。1218 61 上一行歌词「苦，」的逗号正落在 `6̣` 正上方，收成高音点，与真低音点一加一减抵消成 `6`。
@@ -532,6 +535,11 @@ export function buildJpNums(
         // 层距 0.18 字高、1.3 倍线厚，而误判进来的歌词横笔是 0.45~0.55 字高、5 倍线厚）。
         const gap = kb.y - prev.y;
         if (gap > numH * 0.40 || gap > Math.max(prev.h, kb.h) * 4.5) break;
+        // 下一道要与上一道**对齐**：减时线按音位画，下一道只罩这一组的一部分，落在上一道的两端**以内**
+        //（组内后半才加的那道 `3̲ 4̳5̳`，实测冒出至多 1px）。歌词字的顶横两头都比上一道宽出去
+        //（青年诗歌 18 `3̲` 下「丽」的顶横：层距 0.26 字高、单看层距分不开，左冒 4px、右冒 6px，字号 43）
+        const tol = Math.max(2, numH * 0.06);
+        if (prev.x - kb.x > tol || rright(kb) - rright(prev) > tol) { probe("underline.misaligned"); break; }
       }
       div++;
       prev = kb;

@@ -9,7 +9,7 @@ import type { Binary, Component, JpNum, Rect, StaffRow, TextRegion } from "../om
 import { rright, rbottom, rcx, rcy } from "../omrkit/types";
 import type { OcrBackend } from "../omrkit/ocr";
 import type { ChordCand } from "./chordline";
-import { chordCandidates, placeChords } from "./chordline";
+import { chordCandidates, dropAltChords, placeChords } from "./chordline";
 import { isAnnotationLine } from "../omrkit/chordgrammar";
 import { clusterByY, findLineByY, median } from "../omrkit/geom";
 import { blit, createSurface, surfaceFromBinary, type Surface } from "../omrkit/surface";
@@ -1153,7 +1153,11 @@ export async function recognizeLyrics(
   const chordRegions: TextRegion[] = [];
   for (const [rowIdx, cands] of chordCands) {
     const row = staff[rowIdx + 1];
-    if (row) placeChords(row, cands, chordRegions);
+    if (row) {
+      const kept = dropAltChords(cands);
+      if (kept.length < cands.length) probe("chord.altSplit");
+      placeChords(row, kept, chordRegions);
+    }
   }
   // 全局合理性：真配了和弦的谱子基本上每小节至少一个（14 首实测最稀的一首也有 0.56 个/小节）。
   // 稀稀拉拉几个多半是页眉/调号/注记被误当和弦——放宽第 0 行上方带以后尤其容易撞上。整批作废

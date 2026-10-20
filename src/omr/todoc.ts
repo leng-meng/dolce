@@ -241,6 +241,10 @@ export function recognizedToDoc(score: RecognizedScore, numOf?: Map<ElementId, J
   if (score.number && score.numberSide === "right") {
     song.pageText = { indexRight: score.number, topLeft: [], topRight: [], bottomLeft: [], bottomCenter: [], bottomRight: [] };
   }
+  // 谱后的注（「注：…」）记页脚左（文本谱 `BL:`）
+  if (score.footnotes?.length) {
+    (song.pageText ??= { topLeft: [], topRight: [], bottomLeft: [], bottomCenter: [], bottomRight: [] }).bottomLeft.push(...score.footnotes);
+  }
   // 页眉并排印着的其余拍号（混合拍）与拍号后面那段说明文字（「混合拍」）
   if (score.meters && score.meters.length > 1) {
     song.extraTimes = score.meters.slice(1).map((mt) => ({ beats: mt.beats, beatType: mt.beatType }));

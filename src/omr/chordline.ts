@@ -12,7 +12,7 @@ import { rright } from "../omrkit/types";
 import { probe } from "./probe";
 
 /** 一个待落位的和弦记号：归一后的文本 + 源图起始 x + 源图框。 */
-export type ChordCand = { tok: string; x: number; bbox: Rect };
+export type ChordCand = { tok: string; x: number; bbox: Rect; /** 块首括号里的（`(C)3`）：可能是与前一块主和弦拆开的备选，见 dropAltChords */ paren?: boolean };
 
 /** 从一行和弦文本里切出记号并换算源图坐标。
  *  `srcX(charIndex)` 把原串字符下标映到源图 x（下标可越界，返回该行右缘）；
@@ -24,7 +24,8 @@ export function chordCandidates(
   return splitChordTokens(blankNonChord(blankAltChords(splitFarJump(rawText, srcX, mkBbox(0, 1).h))), srcX)
     .map(({ tok, index }) => {
       const x0 = srcX(index), x1 = srcX(index + tok.length);
-      return { tok: normalizeChord(tok), x: x0, bbox: mkBbox(x0, Math.max(x1, x0 + 1)) };
+      const paren = /^\s*[(（]\s*$/.test(rawText.slice(0, index));
+      return { tok: normalizeChord(tok), x: x0, bbox: mkBbox(x0, Math.max(x1, x0 + 1)), ...(paren ? { paren } : {}) };
     })
     // 归一后仍须是合法根音开头（可带前置升降号，`chordTextSegs`/`harmonyXml` 的最低要求），否则下游只能整段原样排字。
     .filter((c) => /^[#b]?[A-G]/.test(c.tok));
@@ -34,6 +35,14 @@ export function chordCandidates(
  *  另一套）：不抹的话切成两个和弦，备选那个挂到下一个音上。只留主编配（与页眉取 `C/A` 的 C 同一口径），抹成等长空格保住下标。 */
 const blankAltChords = (s: string): string =>
   s.replace(/(?<=[A-Za-z0-9#♯♭])[(（]\s*[#♯b♭]?[A-G][^()（）]*[)）]/g, (m) => " ".repeat(m.length));
+
+/** 备选和弦与主和弦**互斥**：检测把 `A(C)` 拆成了两块（青年诗歌 21 `A` | `(C)`），括号那块单看分不出是备选还是独立的括号和弦
+ *  （爱是不保留 `(G7)C` 就是后者）。同一行里紧挨在它左边（缝 < 半个字高）已有一个和弦的，这个位置归主和弦，括号的让出。 */
+export function dropAltChords(cands: ChordCand[]): ChordCand[] {
+  return cands.filter((c) => !c.paren || !cands.some((o) => o !== c && !o.paren &&
+    rright(o.bbox) <= c.bbox.x + 2 && c.bbox.x - rright(o.bbox) < c.bbox.h * 1.2 &&
+    Math.min(o.bbox.y + o.bbox.h, c.bbox.y + c.bbox.h) > Math.max(o.bbox.y, c.bbox.y)));
+}
 
 /** 读成 `D·S·` 的两个字母在源图上隔得远（三个字高以上）：不是跳转记号，是和弦 D 与远处的 segno `·S·`
  *  被 rec 压成了一条（青年诗歌 4《陪我生活》第 2 谱行 `A7 A7 D … ·S·`）。整串当 D.S. 抹掉就丢了 D——

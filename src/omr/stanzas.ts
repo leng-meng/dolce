@@ -25,6 +25,8 @@ const CN_LABEL_ALT = `二十|十[${CN_NUM.slice(0, 9)}]|[${CN_NUM}]`;
 const LABEL_ONLY_RE = new RegExp(`^[(（]?(${CN_LABEL_ALT}|\\d{1,2})[)）]?[.、．。:：]?$`);
 // 段号领着正文：「2.夕阳…」「二、夕阳…」——必须带分隔符，裸「一面运行」的「一」是正文
 const LABEL_PREFIX_RE = new RegExp(`^[(（]?(${CN_LABEL_ALT}|\\d{1,2})[)）]?[.、．](?=.)`);
+/** 谱后的注：行首「注：」「注:」（OCR 偶把冒号读成「；」或丢掉，只要「注」后跟标点） */
+const FOOTNOTE_RE = /^[(（]?注\s*[:：;；]/;
 /** 音节数与第 1 段音位数至多差几个还照填（OCR 多读/漏读一两个字） */
 const COUNT_TOL = 2;
 
@@ -56,10 +58,12 @@ interface Stanza { label?: string; lines: { text: string; bbox: TextRegion["bbox
  *  切成几段，每段在它与下一段之间找附段、按本段第 1 段的音位骨架填。 */
 export async function recognizeTrailingStanzas(
   bin: Binary, staff: StaffRow[], numH: number, ocr: OcrBackend, lyricRegions: TextRegion[] | undefined,
-): Promise<TextRegion[]> {
-  if (!ocr.recognizeRegion) return [];
+): Promise<{ regions: TextRegion[]; footnotes: string[] }> {
+  const out: TextRegion[] = [];
+  const footnotes: string[] = [];
+  if (!ocr.recognizeRegion) return { regions: out, footnotes };
   const rows = staff.filter((r) => r.nums.length);
-  if (!rows.length) return [];
+  if (!rows.length) return { regions: out, footnotes };
   const tops = rows.map((r) => r.topY);
   const pitch = tops.length >= 2 ? median(tops.slice(1).map((t, j) => t - tops[j]!)) : 0;
   const segs: StaffRow[][] = [[]];
@@ -69,17 +73,18 @@ export async function recognizeTrailingStanzas(
     segs[segs.length - 1]!.push(r);
   });
   if (segs.length > 1) probe("stanza.segments");
-  const out: TextRegion[] = [];
   for (let k = 0; k < segs.length; k++) {
     const next = segs[k + 1]?.[0];
     const y1 = next ? Math.round(next.topY - numH * 0.5) : bin.h;
-    out.push(...await stanzasOfSegment(bin, segs[k]!, numH, ocr, lyricRegions, y1));
+    out.push(...await stanzasOfSegment(bin, segs[k]!, numH, ocr, lyricRegions, y1, footnotes));
   }
-  return out;
+  return { regions: out, footnotes };
 }
 
 async function stanzasOfSegment(
   bin: Binary, rows: StaffRow[], numH: number, ocr: OcrBackend, lyricRegions: TextRegion[] | undefined, yEnd: number,
+  /** 收「注：…」的（见 noteAt） */
+  footnotes: string[],
 ): Promise<TextRegion[]> {
   const last = rows[rows.length - 1];
   if (!last || !ocr.recognizeRegion) return [];
@@ -145,10 +150,24 @@ async function stanzasOfSegment(
     const t = lineText(l);
     // 整行括号括着的说明（25「(“我”可换唱“你”)」）同理——后面还有段号行的不算：那是段里一句括着的诗
     //（186 第六段「(亲爱旅伴！世人对你，是否算为已经亡？)」）
-    return /^[(（](?:\d{1,4}[)）]|唱|注)/.test(t) || (/^[(（].*[)）]$/.test(t) && !vlines.slice(i + 1).some(labelLine)) ||
+    return /^[(（](?:\d{1,4}[)）]|唱|注)/.test(t) || FOOTNOTE_RE.test(t) || (/^[(（].*[)）]$/.test(t) && !vlines.slice(i + 1).some(labelLine)) ||
       /[(（]第.{1,3}调[)）]|调\s*\d{1,2}\s*[/／]\s*\d{1,2}/.test(t);
   });
-  if (noteAt >= 0) { probe("stanza.footnoteCut"); vlines.length = noteAt; }
+  if (noteAt >= 0) {
+    probe("stanza.footnoteCut");
+    // 「注：…」整段收作页脚注：从这一行起，行距不过 1.5 倍行高的接续行并成一条（注文折行）；隔开的下一个「注」另起一条
+    const lh = median(dets.map((d) => d.bbox.h)) || numH;
+    let prevBot = -Infinity;
+    for (const l of vlines.slice(noteAt)) {
+      const t = lineText(l).trim(), top = Math.min(...l.map((d) => d.bbox.y));
+      if (FOOTNOTE_RE.test(t)) footnotes.push(t);
+      else if (footnotes.length && top - prevBot <= lh * 1.5 && prevBot > -Infinity) footnotes[footnotes.length - 1] += t;
+      else { prevBot = -Infinity; continue; }
+      prevBot = Math.max(...l.map((d) => rbottom(d.bbox)));
+    }
+    if (footnotes.length) probe("stanza.footnote");
+    vlines.length = noteAt;
+  }
   const ordered = vlines.flatMap((l, vi) => l.sort((a, b) => a.bbox.x - b.bbox.x).map((d, i) => ({ ...d, lineStart: i === 0, lineLen: l.length, vi })));
 
   // 切段：段号开新段；没段号时按空行（行距明显大于常规行距）断开。
