@@ -3303,7 +3303,9 @@ export async function recognizeRasterPage(
         merged.add(mates[0]!.id);
         ledger.claim(wb, "halves:noteheadWhole");
       }
-      const free = blobs.filter((c) => isFree(c) && inFar(c.bbox.y + c.bbox.h / 2));
+      // 已认出的符号盖住大半的碎块不算空闲：「stack」那一路认出的头只记账、不标块，留在这里会被并进旁边的块
+      //（爱是从神而来 p5 m63 E♭5 全音符的左右两半隔 7px 并进下面 G4/B♭4 叠成「8」字的那块，盒高 3.6 格过不了尺寸闸，两个头都丢了）
+      const free = blobs.filter((c) => isFree(c) && inFar(c.bbox.y + c.bbox.h / 2) && !syms.some((s0) => overlapFrac(c.bbox, s0.box) > 0.5));
       /** 本页已认二分头的中位尺寸（开口内腔那一档用）。 */
       const halves = syms.filter((s0) => s0.code === "noteheadHalf");
       const halfSize = halves.length ? { w: median(halves.map((s0) => s0.box.w)), h: median(halves.map((s0) => s0.box.h)) } : null;

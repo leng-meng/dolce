@@ -497,6 +497,9 @@ export function buildStems(pg: SPage, sp: number): StemInfo[] {
   for (const seg of pg.segsWithTag("Stem")) {
     const notes: Sym[] = [];
     for (const nt of heads) {
+      // 形状已确认是全音符的头不挂干（`Sym.shapeWhole`）：贴着别的声部带干的头时，会被当成同一根干上的和弦音、读成二分
+      //（爱是从神而来 p5 m63 钢琴右手 F4 二分朝上的干，下面贴着 B♭3/D4 全音符）
+      if (nt.shapeWhole) continue;
       // 纵向差一像素也算相交，与 `findStems` 同口径
       if (seg.bottom < nt.box.top - 1 || nt.box.bottom < seg.top - 1) continue;
       let dx0 = Math.abs(nt.box.left - seg.cx);

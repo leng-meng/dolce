@@ -18,7 +18,7 @@ import { binSig, type LineSeg } from "./prims";
 import { sigDistance } from "../omrkit/glyphdict";
 import type { RasterUnit } from "./staffline";
 import { scoreAt, scoreAtMasked, type HeadMask } from "./headmask";
-import { median } from "../omrkit/geom";
+import { median, quantile } from "../omrkit/geom";
 
 /** 认出来的符头。 */
 export interface RasterHead {
@@ -2085,6 +2085,8 @@ export function stemWalledCavity(bin: Binary, box: Rect, sp: number): boolean {
 
 /** `markShapeWholes`：本页挂着干的二分头至少这么多个才判（太少的页不判，照旧按宽度与有没有干）。 */
 const SHAPE_HALF_MIN = 3;
+/** `markShapeWholes`：二分样本之间差异的尺度取这个分位。 */
+const SHAPE_HALF_PCT = 0.9;
 
 /**
  * **按本页的二分头确认全音符**（就地给 `syms` 里的全音符打 `shapeWhole`）。
@@ -2092,8 +2094,8 @@ const SHAPE_HALF_MIN = 3;
  * 位图路的全音符是「宽、又找不到干」猜出来的，所以建和弦时还会把它往旁边带干的和弦里并（当成干没挂上的二分）。
  * 另一声部真的全音符这么一并就成了二分（爱是从神而来 p2 m23 钢琴右手 D4 全音符并成 A4/D4 二分）。
  * 挂不挂干拿不准时不看距离，看**形状**：挂着干的空心头必然是同一种二分符头，本页头缘挂着长竖段的二分都当样本；
- * 被认成全音符的头（`binSig` 签名，去线图上取）离最近的二分样本，比任何一个二分样本离它最近的同类都远，就不是二分。
- * 门槛随本页样本的离散度走：爱是从神而来二分之间最远 204、全音符离二分 225 起；是爱扫描件二分之间到 272，只认得出几个。
+ * 被认成全音符的头（`binSig` 签名，去线图上取）离最近的二分样本，比二分样本彼此之间（各自最近距离的 90% 分位）还远，就不是二分。
+ * 门槛随本页样本的离散度走：爱是从神而来 p2 二分之间 145、全音符离二分 225 起。
  * 全局模板（`look.templates`）在扫描件上连尺寸闸都过不去，所以样本取本页的。
  */
 export function markShapeWholes(syms: { box: Rect; code: SmuflName; shapeWhole?: boolean }[], nl: Binary, vSegs: LineSeg[], unit: RasterUnit): void {
@@ -2113,6 +2115,7 @@ export function markShapeWholes(syms: { box: Rect; code: SmuflName; shapeWhole?:
   if ((globalThis as any).process?.env?.SHOFF || !wholes.length || halves.length < SHAPE_HALF_MIN) return;
   const sig = new Map([...wholes, ...halves].map((s0) => [s0, binSig(nl, s0.box)]));
   const nearest = (s0: (typeof syms)[number]) => Math.min(...halves.filter((o) => o !== s0).map((o) => sigDistance(sig.get(s0)!, sig.get(o)!)));
-  const spread = Math.max(...halves.map(nearest));
+  // 二分之间差异的尺度取各样本最近距离的 90% 分位：取最大值会被个别离群的样本抬上去（爱是从神而来 p5 一个 326，全音符都在 250~289）
+  const spread = quantile(halves.map(nearest), SHAPE_HALF_PCT);
   for (const s0 of wholes) if (nearest(s0) > spread) s0.shapeWhole = true;
 }
