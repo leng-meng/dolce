@@ -448,16 +448,23 @@ function flagLoop(bin: Binary, b: Rect, onLine: (y: number) => boolean, sp: numb
   return rows >= 3 && inked >= rows * 0.8;
 }
 
-/** 盒（左右各外扩 0.3 格）里放得下一个 0.9×0.6 格、墨占九成以上的窗：贴着一个实心头。 */
-function solidInside(bin: Binary, b: Rect, sp: number): boolean {
+/** 盒（左右各外扩 0.3 格）里放得下一个 0.9×0.6 格、墨占九成以上的窗：贴着一个实心头。
+ *  给了 `holes`（原始孔）时，左右两侧 0.3 格内都贴着孔的窗不算：那是两个空心头的圈相接处（是爱 p2 m21 手写粗圈，
+ *  B♭4 与错开在右边的 C5 两圈之间连成 0.9 格宽的实墨）；实心头至少一侧是空白或别的笔画。 */
+function solidInside(bin: Binary, b: Rect, sp: number, holes?: Rect[]): boolean {
   const ww = Math.round(sp * 0.9), wh = Math.round(sp * 0.6);
   const x0 = Math.round(b.x - sp * 0.3), x1 = Math.round(b.x + b.w + sp * 0.3) - ww;
+  const reach = sp * 0.3;
+  const flanked = (x: number, y: number) =>
+    !!holes &&
+    holes.some((h) => h.y < y + wh && h.y + h.h > y && h.x + h.w >= x - reach && h.x + h.w <= x + ww / 2) &&
+    holes.some((h) => h.y < y + wh && h.y + h.h > y && h.x <= x + ww + reach && h.x >= x + ww / 2);
   for (let y = Math.round(b.y); y <= b.y + b.h - wh; y++)
     for (let x = x0; x <= x1; x++) {
       if (x < 0 || y < 0 || x + ww > bin.w || y + wh > bin.h) continue;
       let k = 0;
       for (let yy = y; yy < y + wh; yy++) for (let xx = x; xx < x + ww; xx++) k += bin.data[yy * bin.w + xx];
-      if (k >= ww * wh * 0.9) return true;
+      if (k >= ww * wh * 0.9 && !flanked(x, y)) return true;
     }
   return false;
 }
@@ -956,6 +963,29 @@ export async function recognizeRasterPage(
     restIds.add(c.id);
     restSyms.push({ box: full.box, code: "rest8th" });
   }
+  // **球也跟着斜笔一起被抽走的八分休止**：手写体的斜笔陡、球又贴着斜笔上端，整枚被当成一根竖段提走（最宽那行把 `maxLw` 撑到 0.8 格），
+  // 块图里一点不剩，上面那一路没有球可回填（是爱 p1 m16 低音谱表）。从斜得不像干的短竖段上端在去线图上回填整个连通域，按八分休止的形状判
+  for (const v of prims.vSegs) {
+    const len = Math.abs(v.y1 - v.y0);
+    if (len < unit.space * SLANT_REST_LEN[0] || len > unit.space * SLANT_REST_LEN[1]) continue;
+    if (Math.abs(v.x1 - v.x0) / len < SLANT_REST_SLANT) continue;
+    const top = v.y0 < v.y1 ? { x: v.x0, y: v.y0 } : { x: v.x1, y: v.y1 };
+    if (!inBand(top.y + len / 2)) continue;
+    const full = fillAround(nl, { x: Math.round(top.x) - 1, y: Math.round(top.y), w: 3, h: 3 }, unit);
+    if (!full || !isEighthRest(nl, full.box, full.area, unit, EIGHTH_REST_H_PIECES)) continue;
+    // 和弦记号里的「7」也是上头一团、下面一道斜笔（是爱 p5 m63「C7」，和弦带 OCR 没读出来、认领不到）：
+    // 它的顶是一道横笔，顶上几行就有将近一格宽；休止的球顶是圆的，顶上 0.15 格内不过 0.6 格
+    let topW = 0;
+    for (let y = full.box.y; y < full.box.y + Math.max(2, Math.round(unit.space * 0.15)); y++) {
+      let x0 = -1, x1 = -1;
+      for (let x = full.box.x; x < full.box.x + full.box.w; x++) if (nl.data[y * nl.w + x]) (x0 < 0 && (x0 = x)), (x1 = x);
+      if (x0 >= 0) topW = Math.max(topW, x1 - x0 + 1);
+    }
+    if (topW > unit.space * 0.6) continue;
+    if (restSyms.some((r) => overlapFrac(r.box, full.box) > 0.3)) continue;
+    restSyms.push({ box: full.box, code: "rest8th" });
+    for (const b of blobs) if (overlapFrac(b.bbox, full.box) > 0.5) restIds.add(b.id);
+  }
   // **被谱线切成两截的八分休止**：球在线上、斜笔在线下（破碎扫描版 p8 女低 m?），去线后是两块，
   // 上面那一路回填不过谱线。先在**修补图**上取：碎块全无主、修补后连成一块的，整块按八分休止的形状判（墨也在修补图上数）
   {
@@ -976,7 +1006,7 @@ export async function recognizeRasterPage(
   for (const c of cmap.contours) {
     if (ledger.claimsOf(c.id).length) continue;
     const b = c.bbox;
-    if (b.w < unit.space * 0.5 || b.w > unit.space * 1.2 || b.h < unit.space * 0.3 || b.h > unit.space * 1.0) continue;
+    if (b.w < unit.space * 0.5 || b.w > unit.space * 1.2 || b.h < unit.space * 0.3 || b.h > unit.space * 1.4) continue;
     if (!inBand(b.y + b.h / 2)) continue;
     const gapMax = unit.lineThick + 3;
     const d = cmap.contours.find((o) => o !== c && !ledger.claimsOf(o.id).length && o.bbox.y >= b.y + b.h * 0.5 && o.bbox.y - (b.y + b.h) <= gapMax &&
@@ -1058,7 +1088,8 @@ export async function recognizeRasterPage(
   // 几何闸那一路同样要剔杠头：善牧恩慈歌放大后，符杠左端提剩的一截 0.86×0.6 格，
   // 刚好卡过实心头的尺寸下限，出了个 F5。只剔**矮**的（不到 0.65 格）：贴着符杠、又被去线
   // 削扁的真头中心也会落在杠的中线上（宁静的伯利恒三个 1.1×0.72 格的，门槛 0.75 时被剔掉）。
-  const rawHeads = findRasterHeads(nl, blobs.filter((c) => !restIds.has(c.id) && !harmonyIds.has(c.id) && !titleIds.has(c.id)), prims.vSegs, unit, onGrid, inBand, matchHollow, offStaff);
+  const notHollow = new Map<number, Rect>();
+  const rawHeads = findRasterHeads(nl, blobs.filter((c) => !restIds.has(c.id) && !harmonyIds.has(c.id) && !titleIds.has(c.id)), prims.vSegs, unit, onGrid, inBand, matchHollow, offStaff, notHollow);
   const heads = rawHeads.filter((hd) => {
     if (hd.code !== "noteheadBlack") return true;
     if (beamStump(hd.box, rawHeads.map((o) => o.box))) return false;
@@ -1145,7 +1176,8 @@ export async function recognizeRasterPage(
   const holes = mergeHoles(rawHoles.filter((b) => !stackedCell(b) && !cellSet.includes(b) && !besideCell(b)), unit, onLineOrGrid);
   // 和弦字母的**内腔**也是洞（`D`/`G`/`B`/`A` 都有），不挡住就从这一路漏回来
   // ——检测框一并算「已被占」。
-  const takenBoxes = [...heads.map((h) => h.box), ...harmonyMasks];
+  // 判头那一路因「没有被围住的白」剔掉的块也算占着：剔它之前它就挡着按内腔找头的几路（是爱 p5 m67 符杠斜端与谱线夹出的尖白）
+  const takenBoxes = [...heads.map((h) => h.box), ...harmonyMasks, ...notHollow.values()];
   // 带宽照 `HOLLOW_BAND`（±3 格）。扫过 ±1.5 / ±2 / ±3 格，三档一样
   // ——这一路的过检不在带边上。
   const barSegs = prims.vSegs.filter((q) =>
@@ -1157,6 +1189,13 @@ export async function recognizeRasterPage(
   const lineYs = lines.map((l) => l.y);
   const hollowSamples = [...heads.map((h) => ({ box: h.box, code: h.code })), ...stacked].filter((s0) => !(s0 as { weak?: boolean }).weak);
   const hollowMasks = buildHollowMasks(raster.bin, hollowSamples, unit, lineYs);
+  // 本页空心头内腔的宽（格，下四分位）：手写体扫描件的二分头内腔窄到 0.7 格，叠头判据的宽度与内腔椭圆照它缩（`hollowHeadsByPitch`）
+  const cavWs = holes
+    .filter((h) => h.h <= unit.space && hollowSamples.some((s0) => s0.code !== "noteheadBlack" && h.x + h.w / 2 > s0.box.x && h.x + h.w / 2 < s0.box.x + s0.box.w && h.y + h.h / 2 > s0.box.y && h.y + h.h / 2 < s0.box.y + s0.box.h))
+    .map((h) => h.w / unit.space)
+    .sort((a, b) => a - b);
+  // 只认明显窄的（是爱 0.63~0.75）：干净页的下四分位也有 0.93 上下的，开了这几条反伤（破碎干净版 p3、p8）
+  const cavW = cavWs.length >= 8 && cavWs[cavWs.length >> 2] < CAV_NARROW ? cavWs[cavWs.length >> 2] : undefined;
   // 紧贴着一个实心头（盒正上方或正下方 0.7 格高的一条墨占六成以上）：同一根干上头型不会实空混用，
   // 挨着实心头的「空心头」才可能是符尾围出来的（那个实心头这时未必已认出）。叠成「8」字的三度空心和弦上下都是空心，不碍（晨曦破晓 m5 D4/F4）
   const besideSolid = (b: Rect) => {
@@ -1174,14 +1213,15 @@ export async function recognizeRasterPage(
     const hh = unit.space * 0.7;
     return Math.max(fillOf(b.y - hh, b.y), fillOf(b.y + b.h, b.y + b.h + hh)) >= 0.6;
   };
-  stacked.push(...hollowHeadsByPitch(raster.bin, nl, rawHoles, holes, hollowMasks, unit, makePitchSteps(groups), prims.vSegs, inBand, takenBoxes).filter((h) => !(flagLoop(raster.bin, h.box, onLineOrGrid, unit.space) && besideSolid(h.box))));
+  stacked.push(...hollowHeadsByPitch(raster.bin, nl, rawHoles, holes, hollowMasks, unit, makePitchSteps(groups), prims.vSegs, inBand, takenBoxes, cavW).filter((h) => !(flagLoop(raster.bin, h.box, onLineOrGrid, unit.space) && besideSolid(h.box))));
   // 谱表外骑加线的斜缝空心头：沿加线逐位置配同一组模板（`notehead.ts::hollowHeadsOnLedgers`）
   // 竖段表里没有、靠墨柱判出来的干：只进 `SPage`（与 `stemSegs` 同理），`buildNotes` 定时值要它
   const inkStems: LineSeg[] = [];
   stacked.push(...hollowHeadsOnLedgers(raster.bin, nl, rawHoles, hollowMasks, unit, ledgerCandidates(raster.bin, groups), makePitchSteps(groups), prims.vSegs, takenBoxes, inkStems));
   // **压着实心头的「空心头」不要**：一个位置上头只有一种，盒里有一块实心头大小、几乎满墨的地方，那是真头，
   // 这块「内腔」是它与旁边的升号、谱线围出来的白（破碎 p8 m84 钢琴右手 C♯5，升号右竖与头之间读成二分 C5，把真头挤掉）
-  for (let i = stacked.length - 1; i >= 0; i--) if (solidInside(raster.bin, stacked[i].box, unit.space)) stacked.splice(i, 1);
+  // 内腔窄的手写粗圈页（`cavW`）上，两圈相接处也是一块实墨，夹在两个孔之间的不算（`solidInside` 的 `holes`）
+  for (let i = stacked.length - 1; i >= 0; i--) if (solidInside(raster.bin, stacked[i].box, unit.space, cavW ? rawHoles : undefined)) stacked.splice(i, 1);
 
   // ── 几个实心符头并成一块：按**谱内自举的 mask** 拆开 ─────────────────────
   //
@@ -1266,7 +1306,8 @@ export async function recognizeRasterPage(
       if (sp && !prims.vSegs.includes(sp.stem)) prims.vSegs.push(sp.stem);
     }
     // 两根光杆干夹着一个头（两声部同音共用符头、干一上一下，头压线被切碎）
-    const known = [...headBoxes, ...stacked.map((q) => q.box)];
+    // 判头那一路因「没有被围住的白」剔掉的块也算占着：剔它之前它挡着这一路，剔了就在符杠斜端与干之间配出假头（是爱 p5 m67）
+    const known = [...headBoxes, ...stacked.map((q) => q.box), ...notHollow.values()];
     for (const hd of headsBetweenStemPairs(prims.vSegs, known, unit, pitchGrid, size, raster.bin, (y) => gridYs.some((ly) => Math.abs(ly - y) <= unit.lineThick), isBar)) stacked.push(hd);
   }
   // 弧与谱线围出的空当当成了空心头的内腔（`notehead.ts::archCavity`），剔掉，墨留给弧那一步；
@@ -3651,7 +3692,7 @@ export async function recognizeRasterPage(
   // 模板按**此刻**认出的空心头重建（含弱头、两个就够）：早先那份样本不够时一张都没有（恩友歌第一页），
   // 一张也凑不出就只按墨占比与内腔佐证判。
   {
-    const alongMasks = buildHollowMasks(raster.bin, syms, unit, lineYs, 2, 3);
+    const alongMasks = buildHollowMasks(raster.bin, syms.filter((s0) => !(s0 as { noSample?: boolean }).noSample), unit, lineYs, 2, 3);
     // 挂在干端、被读偏一级的空心头先挪回去（`notehead.ts::reseatHollowHeads`），下面沿干找头才有对的参照
     reseatHollowHeads(raster.bin, nl, rawHoles, alongMasks, unit, makePitchSteps(groups), [...prims.vSegs, ...stemSegs, ...inkStems], syms);
     const added: RasterSym[] = [];
@@ -4526,5 +4567,10 @@ const KEY_TAIL = 2;
 /** 两截拼起来判的那两路（被谱线上下切开、球与斜笔左右断开）的高度下限：新编赞美诗那套小号字体的八分休止只有 1.55 格
  *（033、038 系统末那一排）。全局放到 1.4 时合唱谱是爱2 多出二十来个假八分休止（73.7 → 70.6）、独唱谱 −0.03，只给这两路 */
 const EIGHTH_REST_H_PIECES = 1.4;
+/** 斜笔连球一起被抽成竖段的八分休止：竖段长度（格）与斜率（横移 / 竖长）下限。是爱这类竖段斜 0.12~0.22。 */
+const SLANT_REST_LEN = [1.3, 2.6] as const;
+const SLANT_REST_SLANT = 0.1;
+/** 本页空心头内腔宽（格，下四分位）低于这个才算「内腔窄」的手写粗圈页，叠头那几条按它缩放（`notehead.ts::hollowHeadsByPitch`）。 */
+const CAV_NARROW = 0.85;
 /** 被谱线切成两截、按不去线的墨接回来的八分休止：墨占比下限（望十架 p5 细笔扫描件 0.28）。 */
 const EIGHTH_REST_FILL_PIECES = 0.25;
