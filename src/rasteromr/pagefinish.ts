@@ -1097,7 +1097,7 @@ export async function finishRasterPage(s: PageFinishInput): Promise<RasterPageRe
   mergeArcPieces(slurs, unit.space);
   extendArcEnds(slurs, nl, (y) => gridYs.some((ly) => Math.abs(ly - y) <= unit.lineThick), unit.space);
   traceSteepArcEnds(slurs, raster.bin, (y) => gridYs.some((ly) => Math.abs(ly - y) <= unit.lineThick / 2 + 0.5), unit.lineThick, unit.space);
-  traceLongArcTails(slurs, raster.bin, (y) => gridYs.some((ly) => Math.abs(ly - y) <= unit.lineThick / 2 + 0.5), notes.filter((n) => !n.rest).map((n) => n.sym.box), unit.space);
+  traceLongArcTails(slurs, raster.bin, (y) => gridYs.some((ly) => Math.abs(ly - y) <= unit.lineThick / 2 + 0.5), notes.filter((n) => !n.rest).map((n) => n.sym.box), pg.staves.map((st) => st.box), unit.space);
   // 续过谱线之后再并一次：跨谱表的大弧下截续过右手第一线才够到上截（宁静 p1 m9–12 钢琴 F2→F4 那几条）
   mergeArcPieces(slurs, unit.space);
   bridgeArcPieces(slurs, unit.space, (x, y) => x >= 0 && y >= 0 && x < raster.bin.w && y < raster.bin.h && !!raster.bin.data[y * raster.bin.w + x], (y) => gridYs.some((ly) => Math.abs(ly - y) <= unit.lineThick / 2 + 0.5));

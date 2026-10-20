@@ -728,23 +728,21 @@ const TAIL_GAP = 0.8;
 /** 最多追多远、至少追出多远（格）。 */
 const TAIL_MAX = 4;
 const TAIL_MIN = 0.4;
+/** 长延伸最多追多远、落点离另一行谱音头的上限（格）。 */
+const TAIL_MAX_CROSS = 15;
+const TAIL_CROSS_HEAD = 1.5;
 /** 端头离音头多近就不追、追到离音头多近就停（格）。 */
 const TAIL_AT_HEAD = 0.4;
-const TAIL_STOP_HEAD = 0.25;
+const TAIL_STOP_HEAD = 0.5;
 /** 判像不像延音线时，弧端找最近音头的范围（格）。 */
 const TAIL_TIE_NEAR = 1.5;
 
-export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: number) => boolean, heads: readonly { left: number; right: number; top: number; bottom: number }[], sp: number): void {
+export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: number) => boolean, heads: readonly { left: number; right: number; top: number; bottom: number }[], staves: readonly { top: number; bottom: number }[], sp: number): void {
   const headDist = (x: number, y: number) => Math.min(Infinity, ...heads.map((h) => Math.hypot(Math.max(0, h.left - x, x - h.right), Math.max(0, h.top - y, y - h.bottom))));
   const raw = (x: number, y: number) => x >= 0 && y >= 0 && x < bin.w && y < bin.h && bin.data[y * bin.w + x] === 1;
-  const vRun = (x: number, y: number) => {
-    let a = y, b = y;
-    while (raw(x, a - 1) && y - a < sp) a--;
-    while (raw(x, b + 1) && b - y < sp) b++;
-    return b - a + 1;
-  };
   // 谱线行上的墨一概不用：尾巴斜着过线，线加弧那几列竖向一长条，会把走向拽成竖直往下；过线当断口照切线走过去
   const ink = (x: number, y: number) => raw(x, y) && !onLine(y);
+  const staffAt = (y: number) => staves.findIndex((b) => y >= b.top - sp * 2 && y <= b.bottom + sp * 2);
   const W = Math.max(2, Math.round(sp * TAIL_PERP));
   const nearestHead = (x: number, y: number) => {
     let best: (typeof heads)[number] | undefined, bd = sp * TAIL_TIE_NEAR;
@@ -754,8 +752,8 @@ export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: numb
     }
     return best;
   };
-  for (const sl of arcs) {
-    if (sl.dashed || sl.rx - sl.lx < sp * TAIL_LONG) continue;
+  for (const sl of [...arcs]) {
+    if (!arcs.includes(sl) || sl.dashed || sl.rx - sl.lx < sp * TAIL_LONG) continue;
     // 像延音线的不追：两端各自最近的音头同高（延音线两头同音高，是爱 p3 m37、p4 m47 长延音线追过了头）
     const hl = nearestHead(sl.lx, sl.ly), hr = nearestHead(sl.rx, sl.ry);
     if (hl && hr && hl !== hr && Math.abs((hl.top + hl.bottom) / 2 - (hr.top + hr.bottom) / 2) <= sp * 0.3) continue;
@@ -771,18 +769,34 @@ export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: numb
       let ang = Math.atan2(y - yIn, dir * k), turn = 0;
       let miss = 0, walked = 0;
       let last: { x: number; y: number; at: number } | null = null;
+      /** 追满 `TAIL_MAX` 格时的落点：往后的长延伸只有落到另一行谱的音头跟前才采用，否则退回这里 */
+      let check: { x: number; y: number; at: number } | null | undefined;
+      let checkPts = 0;
+      const home = staffAt(y);
+      // 不越过本行谱第一个音头左边、最后一个音头右边半格（行首行尾往外追会进谱号调号、行尾小节线；跨行的半截另有配对）
+      const hb = home >= 0 ? heads.filter((h) => staffAt((h.top + h.bottom) / 2) === home) : [];
+      const xLo = hb.length ? Math.min(...hb.map((h) => h.left)) - sp * 0.5 : -Infinity;
+      const xHi = hb.length ? Math.max(...hb.map((h) => h.right)) + sp * 0.5 : Infinity;
       const pts: { x: number; y: number; ang: number }[] = [];
-      while (walked < sp * TAIL_MAX) {
+      while (walked < sp * TAIL_MAX_CROSS) {
+        if (check === undefined && walked >= sp * TAIL_MAX) (check = last), (checkPts = pts.length);
         if (miss) ang += turn;
         const vx = Math.cos(ang), vy = Math.sin(ang);
         const px = x + vx, py = y + vy;
         walked++;
+        // 粗细沿走向的垂线量（近竖的线按竖向游程量是一长条），线行的墨不算（垂线近水平时，斜穿谱线会顺着线量成一长条）
+        const pRun = (d0: number) => {
+          let a = d0, b = d0;
+          while (b - a < sp && ink(Math.round(px - vy * (a - 1)), Math.round(py + vx * (a - 1)))) a--;
+          while (b - a < sp && ink(Math.round(px - vy * (b + 1)), Math.round(py + vx * (b + 1)))) b++;
+          return b - a + 1;
+        };
         let best: number | null = null, thick = false;
         for (let d = 0; d <= W && best === null; d++)
           for (const sg of d ? [-1, 1] : [1]) {
             const qx = Math.round(px - vy * d * sg), qy = Math.round(py + vx * d * sg);
             if (!ink(qx, qy)) continue;
-            if (vRun(qx, qy) > sp * TAIL_THICK) thick = true;
+            if (pRun(d * sg) > sp * TAIL_THICK) thick = true;
             else best = d * sg;
             break;
           }
@@ -795,6 +809,7 @@ export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: numb
         }
         miss = 0;
         const hx = px - vy * best, hy = py + vx * best;
+        if (staffAt(hy) === home && (hx < xLo || hx > xHi)) break;
         // 追到了音头跟前：尾巴到了它的音，停
         if (headDist(hx, hy) <= sp * TAIL_STOP_HEAD) break;
         const na = Math.atan2(hy - y, hx - x);
@@ -803,9 +818,21 @@ export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: numb
         pts.push({ x: hx, y: hy, ang: a2 });
         if (pts.length > 4) turn = (a2 - pts[pts.length - 5].ang) / 4;
         ang = a2;
+        // 不许回头：横向掉过头来就是沿着弧自己往回爬了（宁静 p2 m22 下截左端追到 C3 又绕回右手谱表）
+        if (Math.cos(ang) * dir < -0.2) break;
         x = hx;
         y = hy;
         last = { x: hx, y: hy, at: walked };
+      }
+      // 长延伸（跨谱表大弧近竖的下半截一路下到低音谱表）要落到另一行谱的音头跟前（`TAIL_CROSS_HEAD` 格内）才算，
+      // 否则多半是追进了谱号调号、符杠，退回 `TAIL_MAX` 格时的落点
+      if (check !== undefined && last && last.at > sp * TAIL_MAX) {
+        const other = staffAt(last.y);
+        const ok = other >= 0 && other !== home && headDist(last.x, last.y) <= sp * TAIL_CROSS_HEAD;
+        if (!ok) {
+          last = check;
+          pts.length = checkPts;
+        }
       }
       if (!last || last.at < sp * TAIL_MIN) continue;
       const bb = sl.obj.box as { left: number; right: number; top: number; bottom: number };
@@ -816,6 +843,24 @@ export function traceLongArcTails(arcs: SlurArc[], bin: Binary, onLine: (y: numb
         bb.right = Math.max(bb.right, p.x);
         bb.top = Math.min(bb.top, p.y);
         bb.bottom = Math.max(bb.bottom, p.y);
+      }
+      // 追过的路上碰到另一截同向弧的近端（半格内）：同一条弧被切成的几截，并进来（宁静 p2 m22 钢琴跨谱表大弧：下截右端追上去越过了上截的左端，
+      // 原先靠 `bridgeArcPieces` 并的就并不上了）
+      const onPath = (qx: number, qy: number) => pts.some((p) => Math.hypot(p.x - qx, p.y - qy) <= sp * 0.5);
+      for (let i = arcs.length - 1; i >= 0; i--) {
+        const o = arcs[i];
+        if (o === sl || o.above !== sl.above || o.dashed) continue;
+        if (dir > 0 && onPath(o.lx, o.ly) && o.rx > sl.rx) {
+          (sl.rx = o.rx), (sl.ry = o.ry);
+        } else if (dir < 0 && onPath(o.rx, o.ry) && o.lx < sl.lx) {
+          (sl.lx = o.lx), (sl.ly = o.ly);
+        } else if (!(onPath(o.lx, o.ly) && onPath(o.rx, o.ry))) continue;
+        const ob = o.obj.box;
+        bb.left = Math.min(bb.left, ob.left);
+        bb.right = Math.max(bb.right, ob.right);
+        bb.top = Math.min(bb.top, ob.top);
+        bb.bottom = Math.max(bb.bottom, ob.bottom);
+        arcs.splice(i, 1);
       }
     }
   }
