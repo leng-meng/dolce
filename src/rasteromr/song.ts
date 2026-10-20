@@ -6,7 +6,7 @@
 
 import type { RasterGlyphLookup } from "./rasterglyphs";
 import type { RasterPage } from "./rasterpage";
-import { recognizeRasterPage, type CarryKey, type PageCarry, type RasterLiveOcr, type RasterPageResult } from "./recognize";
+import { recognizeRasterPage, type RasterStage, type CarryKey, type PageCarry, type RasterLiveOcr, type RasterPageResult } from "./recognize";
 import { pageImageOf, type PageImage } from "./rasterpage";
 import { composeHeaderStrip } from "./pagecompose";
 import type { PagePool } from "./pagepool";
@@ -61,6 +61,8 @@ export async function recognizeRasterSong(
     pool?: PagePool;
     /** 给每个 `<note>` 写 `id="omr<k>"` 并记下源图框（编辑器的识别对照用；回归脚本不开，产物逐字节不变） */
     noteIds?: boolean;
+    /** 逐页各阶段的中间产物（`recognize.ts::RasterStage`，回归测试的阶段快照）。只在串行时有：Worker 传不过函数 */
+    trace?: (pageSeq: number, stage: RasterStage, data: unknown) => void;
   } = {},
 ): Promise<RasterSongResult> {
   const entries: Parameters<typeof buildScore>[0] = [];
@@ -143,7 +145,7 @@ export async function recognizeRasterSong(
       const page = await pdf.getPage(pn);
       try {
         const wantHeader = header === null;
-        const r = await recognizeRasterPage(page, OPS, look, pn, { carryTime, carryKey, openWedges, ...caches, live: opts.live, raster: opts.rastered?.(si, pn), wantHeader, pageSeq: k });
+        const r = await recognizeRasterPage(page, OPS, look, pn, { carryTime, carryKey, openWedges, ...caches, live: opts.live, raster: opts.rastered?.(si, pn), wantHeader, pageSeq: k, trace: opts.trace && ((st, d) => opts.trace!(k, st, d)) });
         consume(r, si, pn, wantHeader);
       } finally {
         page.cleanup?.();
