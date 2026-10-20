@@ -25,7 +25,8 @@ export interface StaffXmlOptions {
   noteId?: (n: StaffNote) => string | undefined;
   /** 页眉各条（位图路 OCR 读出的标题、词曲作者），写成曲首页的 `<credit>`；`size` 是字号（pt），
    *  `box` 是它在首个系统那一页上的位置（页面单位），写源谱版面时折成 `default-x` / `default-y` */
-  credits?: { text: string; type?: string; justify?: string; size?: number; box?: { x: number; y: number; w: number; h: number } }[];
+  /** `page`：第几页（缺省 1，页脚每页一份） */
+  credits?: { text: string; type?: string; justify?: string; size?: number; box?: { x: number; y: number; w: number; h: number }; page?: number }[];
   /** 写源谱版面（`<defaults>` 的纸与谱表大小、各系统首小节的 `<print>`），缺省写。见 `sourceLayout` */
   layout?: boolean;
   /** 跨页的弧按「同音高、紧挨着」判延音线（配对优先配它；只找到一半的，相邻系统同声部紧挨着的音同音高也补成延音线）。
@@ -506,15 +507,20 @@ function noteXmlRaw(n: StaffNote, dur: number, staffNo = 0, withVoice = false, v
   // 连音组只在头尾两个音上写起止（和弦写在打头那个音上）；读入端按起止配对，只有 start 的会一路顶掉、整组丢
   if (n.tuplet?.start && !n.chordExtra) nots.push(`<tuplet type="start"/>`);
   if (n.tuplet?.stop && !n.chordExtra) nots.push(`<tuplet type="stop"/>`);
-  // `<notations>` 里子元素有固定次序：tied / slur / tuplet / ornaments / articulations / fermata / arpeggiate
+  // `<notations>` 里子元素有固定次序：tied / slur / tuplet / ornaments / technical / articulations / fermata / arpeggiate
   const arts: string[] = [];
   const orns: string[] = [];
   let fermata = "";
   let arpeggiate = false;
+  const tech: string[] = [];
   for (const m of n.marks ?? []) {
     const a = ARTICULATION[m];
     if (a) {
       arts.push(a);
+      continue;
+    }
+    if (m === "stringsUpBow" || m === "stringsDownBow") {
+      tech.push(m === "stringsUpBow" ? "<up-bow/>" : "<down-bow/>");
       continue;
     }
     if (m === "arpeggiato") arpeggiate = true;
@@ -522,6 +528,7 @@ function noteXmlRaw(n: StaffNote, dur: number, staffNo = 0, withVoice = false, v
     else if (m.startsWith("ornamentTrill") || m.startsWith("wiggleTrill")) orns.push(`<trill-mark/>`);
   }
   if (orns.length) nots.push(`<ornaments>${orns.join("")}</ornaments>`);
+  if (tech.length) nots.push(`<technical>${tech.join("")}</technical>`);
   if (arts.length) nots.push(`<articulations>${arts.join("")}</articulations>`);
   if (fermata) nots.push(fermata);
   if (arpeggiate) nots.push(`<arpeggiate/>`);
@@ -1214,14 +1221,14 @@ function fontDefaults(score: StaffScore, notesOf: (staff: Staff) => StaffNote[])
   return (word.length ? `<word-font font-size="${median(word)}"/>` : "") + (lyric.length ? `<lyric-font font-size="${median(lyric)}"/>` : "");
 }
 
-/** 页眉 → `<credit page="1">`，一条一个。 */
+/** 页眉页脚 → `<credit page>`，一条一个（页眉在第 1 页，页脚每页一份）。 */
 function creditsXml(credits: StaffXmlOptions["credits"], layout?: SourceLayout | null): string {
   return (credits ?? [])
     .map((c) => {
       // 写源谱版面时照原图的位置（框底对齐：OCR 的框底比字的基线更稳）
       const pos = layout && c.box ? layout.creditPos(c.box, c.justify) : null;
       const at = pos ? ` default-x="${pos.x}" default-y="${pos.y}" valign="bottom"` : "";
-      return `<credit page="1">${c.type ? `<credit-type>${escapeXml(c.type)}</credit-type>` : ""}<credit-words${at}${c.justify ? ` justify="${c.justify}"` : ""}${fontAttr(c.size ? roundPt(c.size) : undefined)}>${escapeXml(c.text)}</credit-words></credit>`;
+      return `<credit page="${c.page ?? 1}">${c.type ? `<credit-type>${escapeXml(c.type)}</credit-type>` : ""}<credit-words${at}${c.justify ? ` justify="${c.justify}"` : ""}${fontAttr(c.size ? roundPt(c.size) : undefined)}>${escapeXml(c.text)}</credit-words></credit>`;
     })
     .join("");
 }

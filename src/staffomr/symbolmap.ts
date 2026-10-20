@@ -114,6 +114,9 @@ const MAESTRO: Record<number, SmuflName> = {
   0x2039: "accidentalDoubleSharp", // '‹'
   0x4e: "accidentalNaturalParens", // 'N'
   0x2019: "noteheadSlashHorizontalEnds", // '’'
+  // 弓法：Finale 直出的子集里没有 ToUnicode，只有码位（牵我的手小提琴：130 窄高的 V 是上弓、131 宽的 ⊓ 是下弓）
+  0x82: "stringsUpBow",
+  0x83: "stringsDownBow",
 };
 
 /** MaestroWide（`qomr.cpp` 的 `maestroWide`）。 */

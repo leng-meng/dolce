@@ -4,7 +4,7 @@ import type { OpsEnum } from "../omrkit/vector";
 import { extractTextPage } from "../omrkit/vectext";
 import { StaffGlyphLookup, type StaffGlyphDict } from "./staffglyphs";
 import { buildPage, findBarlines, findNoteheads, findStaves, findStems, findSymbols, findTails, makeBars, makeSystems, removeWhite, unknownObjs } from "./page";
-import type { SPage, Staff } from "./model";
+import type { PObj, SPage, Staff } from "./model";
 import { buildNotes, checkBars, findBeams, findClefKeyTime, lastTimeSignature, staffOmrOptions, type BarCheck, type BeamShape, type StaffContext, type StaffNote, type StemInfo } from "./notedata";
 import { analyzeText, attachDirectionTexts, attachHarmonies, attachLyrics, buildLyricLines, type LyricLine, type TextAnalysis } from "./textanalyze";
 import type { TextGlyphLookup } from "./textglyphs";
@@ -126,13 +126,25 @@ export function makeLookup(dict: StaffGlyphDict): StaffGlyphLookup {
  * 同一条基线上相邻的几段（「Arranged by 」+「Ricardo Chan」）拼成一行，交给位图路那份分类
  * （标题、副标题、词曲作者、书眉同一套判据）。页脚不出——同位图路，计分也只看页眉。
  */
-export function vectorPageCredits(pg: SPage): HeaderCredit[] {
+/**
+ * 页脚 → `<credit>`：最后一行谱以下、文本层认作文本框的字（`TextFrame`：版权声明几行、页码），同一行拼起来；
+ * 纯数字的一行是页码（`page number`），其余是版权（`rights`），都居中。与 GT 的写法一致，读入端不把这两类当页眉角色。
+ */
+export function vectorPageFooters(pg: SPage, page: number): { text: string; type: "rights" | "page number"; justify: "center"; size: number; box: { x: number; y: number; w: number; h: number }; page: number }[] {
   if (!pg.staves.length) return [];
-  const sp = pg.normalStaffSpace || pg.space;
-  const top = Math.min(...pg.staves.map((st) => st.box.top));
-  const SKIP = ["Lyric", "Tempo", "Instrument", "Expression", "MeasureNumber"] as const;
-  const objs = pg.objs.filter((o) => o.run && !o.symbols.length && !SKIP.some((t) => o.hasTag(t)) && o.box.bottom <= top - sp);
-  // 拼行：纵向中线相差不到半个字高、横向间隙不到一个字高
+  const bottom = Math.max(...pg.staves.map((st) => st.box.bottom));
+  const objs = pg.objs.filter((o) => o.run && o.hasTag("TextFrame") && o.box.top >= bottom);
+  return pageTextLines(objs).sort((a, b) => a.box.top - b.box.top).map((l) => {
+    const t = foldRadicals(l.t).replace(/\s+/g, " ").trim();
+    return { text: t, type: /^\d+$/.test(t) ? ("page number" as const) : ("rights" as const), justify: "center" as const, size: l.size, box: { x: l.box.left, y: l.box.top, w: l.box.right - l.box.left, h: l.box.bottom - l.box.top }, page };
+  }).filter((c) => c.text);
+}
+
+/** ToUnicode 常把汉字映到**康熙部首 / 部首补充**区（「第448⾸」「⽼师」「使⽤」，U+2E80–U+2FDF），只把这一段折回正常汉字（NFKC），全角括号之类别的字符不动 */
+const foldRadicals = (t: string) => t.replace(/[\u2e80-\u2fdf]/g, (c) => c.normalize("NFKC"));
+
+/** 文字层拼行：纵向中线相差不到半个字高、横向间隙不到一个字高的几段并成一行（「Arranged by 」+「Ricardo Chan」） */
+function pageTextLines(objs: PObj[]): { t: string; box: { left: number; right: number; top: number; bottom: number }; size: number }[] {
   const lines: { t: string; box: { left: number; right: number; top: number; bottom: number }; size: number }[] = [];
   for (const o of [...objs].sort((a, b) => a.box.left - b.box.left)) {
     const s = o.run!.glyphs.map((g) => g.unicode).join("");
@@ -146,10 +158,17 @@ export function vectorPageCredits(pg: SPage): HeaderCredit[] {
       l.box = { left: l.box.left, right: Math.max(l.box.right, o.box.right), top: Math.min(l.box.top, o.box.top), bottom: Math.max(l.box.bottom, o.box.bottom) };
     } else lines.push({ t: s, box: { ...o.box }, size: o.run!.sizeDev });
   }
-  // ToUnicode 常把汉字映到**康熙部首 / 部首补充**区（「第448⾸」「⽼师」「使⽤」，U+2E80–U+2FDF），只把这一段折回正常汉字（NFKC），
-  // 全角括号之类别的字符不动
-  const fold = (t: string) => t.replace(/[\u2e80-\u2fdf]/g, (c) => c.normalize("NFKC"));
-  const toLine = (l: (typeof lines)[number], x0: number, y0: number): WordLine => ({ t: fold(l.t).replace(/\s+/g, " ").trim(), x: l.box.left - x0, y: l.box.top - y0, w: l.box.right - l.box.left, h: l.box.bottom - l.box.top, size: l.size });
+  return lines;
+}
+
+export function vectorPageCredits(pg: SPage): HeaderCredit[] {
+  if (!pg.staves.length) return [];
+  const sp = pg.normalStaffSpace || pg.space;
+  const top = Math.min(...pg.staves.map((st) => st.box.top));
+  const SKIP = ["Lyric", "Tempo", "Instrument", "Expression", "MeasureNumber"] as const;
+  const objs = pg.objs.filter((o) => o.run && !o.symbols.length && !SKIP.some((t) => o.hasTag(t)) && o.box.bottom <= top - sp);
+  const lines = pageTextLines(objs);
+  const toLine = (l: (typeof lines)[number], x0: number, y0: number): WordLine => ({ t: foldRadicals(l.t).replace(/\s+/g, " ").trim(), x: l.box.left - x0, y: l.box.top - y0, w: l.box.right - l.box.left, h: l.box.bottom - l.box.top, size: l.size });
   const head = lines.filter((l) => l.box.bottom <= top);
   const strip = { w: pg.width, h: top, data: new Uint8Array(0), box: { x: 0, y: 0, w: pg.width, h: top } };
   const out = headerCredits(head.map((l) => toLine(l, 0, 0)), strip);

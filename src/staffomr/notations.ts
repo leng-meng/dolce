@@ -18,6 +18,7 @@ const NOTATION_CODES = new Set([
   "articTenutoStaccatoAbove", "articTenutoStaccatoBelow",
   "fermataAbove", "fermataBelow",
   "ornamentTrill", "wiggleTrill", "wiggleTrillSlow",
+  "stringsUpBow", "stringsDownBow",
   "breathMarkComma", "caesura",
   "graceNoteSlashStemUp", "graceNoteSlashStemDown",
 ]);
@@ -100,7 +101,8 @@ export function attachNotations(pg: SPage, notes: StaffNote[], marks: Sym[]): vo
     let bd = Infinity;
     for (const n of notes) {
       const st = n.staff;
-      if (m.py < st.box.top - sp * 3 || m.py > st.box.bottom + sp * 3) continue;
+      // 纵向范围按谱表与这个符头合起来量：加线上的高音头顶印着的记号离谱表三格开外（牵我的手 m67 小提琴 C6 上的下弓）
+      if (m.py < Math.min(st.box.top, n.sym.box.top) - sp * 3 || m.py > Math.max(st.box.bottom, n.sym.box.bottom) + sp * 3) continue;
       const d = Math.abs(n.sym.px - m.px);
       if (d < bd) {
         bd = d;

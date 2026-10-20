@@ -563,6 +563,8 @@ function nameParts(systems: StaffScore["systems"], parts: Part[]): void {
       if (!part.name) {
         part.name = best.text;
         part.nameSize = { page, size: best.size };
+        // 首系统里没印（这个声部的谱表在首系统隐藏了：牵我的手 W / M 两行人声）、到后面才露面的，印的就是缩写，两处都写
+        if (si > 0) part.abbr = best.text;
       } else if (!part.abbr && best.text !== part.name) part.abbr = best.text;
     }
   }

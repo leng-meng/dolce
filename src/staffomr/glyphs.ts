@@ -42,6 +42,8 @@ export const SMUFL_NAMES = [
   "articMarcatoAbove", "articMarcatoBelow",
   "articAccentStaccatoAbove", "articAccentStaccatoBelow",
   "articTenutoStaccatoAbove", "articTenutoStaccatoBelow",
+  // 弓法
+  "stringsUpBow", "stringsDownBow",
   // 装饰音与记号
   "ornamentTrill", "wiggleTrill", "wiggleTrillSlow", "tremolo1", "tremolo2", "tremolo3",
   "graceNoteSlashStemUp", "graceNoteSlashStemDown",
