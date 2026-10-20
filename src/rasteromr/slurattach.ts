@@ -444,6 +444,9 @@ const STEM_ORDER = 0.25;
 /** 按干挂不上时纵向再放宽的格数。 */
 const STEM_REACH_MORE = 2;
 
+/** 放宽那遍不要求另一端先挂上的弧宽下限（格）：长弧不像碎墨（破碎 p7 m73 钢琴右手两端都差一点够不着）。 */
+const STEM_REACH_LONG = 5;
+
 /**
  * 弧端挂不上符头时，把音连同它的符干一起当盒再挂一次：钢琴低音的八分一组干朝下、杠在下面，圆滑线画在杠下、
  * 弧端贴着干端，离符头三格开外（破碎 p2 低音 m2–m6 一整排）。挂上的是这根干上离弧端最近的那个头；
@@ -453,16 +456,16 @@ export function attachSlursByStem(slurs: SlurArc[], notes: StaffNote[], sp: numb
   const withStem = notes.filter((n) => !n.rest && n.group?.stem);
   for (const sl of slurs) {
     if (sl.from && sl.to) continue;
-    // 两端先各按三格挂一遍，再给缺的那端放宽（另一端挂上了才放）
+    // 两端先各按三格挂一遍，再给缺的那端放宽（另一端挂上了才放；长弧不要求）
     for (const [isEnd, loose] of [[false, false], [true, false], [false, true], [true, true]] as const) {
       if (isEnd ? sl.to : sl.from) continue;
-      if (loose && (!(isEnd ? sl.from : sl.to) || inText?.(sl))) continue;
+      if (loose && ((!(isEnd ? sl.from : sl.to) && sl.rx - sl.lx < sp * STEM_REACH_LONG) || inText?.(sl))) continue;
       const px = isEnd ? sl.rx : sl.lx, py = isEnd ? sl.ry : sl.ly;
       let best: StaffNote | undefined;
       let bd = Infinity;
       // 挂不上的再放宽纵向：弧端往音符那侧挪 `STEM_REACH_MORE` 格再量（破碎 p4 m32 钢琴右手：起点在带旗十六分 D4 右边、
       // 下一组 E4 的干左 10 像素，D4 的干端低 3.5 格，`validateSlurNote` 三格够不着；GT 起在 D4）
-      // 放宽那遍只给另一端已挂上的弧（两端都挂不上的多是扫描件上的碎墨，爱是 p1 m11），碰着整页文字框的也不放（`inText`：
+      // 放宽那遍只给另一端已挂上的弧（两端都挂不上的多是扫描件上的碎墨，爱是 p1 m11；长弧例外），碰着整页文字框的也不放（`inText`：
       // 你的信实广大 m20 歌词「广」的一撇挂成 D4→C4）
       const more = loose ? STEM_REACH_MORE : 0;
       for (const n of withStem) {

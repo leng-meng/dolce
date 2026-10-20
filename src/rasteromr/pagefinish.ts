@@ -1120,7 +1120,9 @@ export async function finishRasterPage(s: PageFinishInput): Promise<RasterPageRe
     const ab = sl.obj.box;
     const nearStaff = pg.staves.some((st) => ab.bottom > st.box.top - unit.space * TEXT_ARC_STAFF && ab.top < st.box.bottom + unit.space * TEXT_ARC_STAFF);
     if (textBoxes && nearStaff && !touchesText({ x: ab.left, y: ab.top, w: ab.right - ab.left, h: ab.bottom - ab.top }, textBoxes, unit.space * TEXT_ARC_PAD)) continue;
-    const far = (n: StaffNote | undefined, y: number) => !!n && (sl.above ? n.sym.box.top - y : y - n.sym.box.bottom) > unit.space * LYRIC_ARC_REACH;
+    // 干朝弧那侧的按干端量：一组十六分上方的弧贴着符杠，离音头五六格（破碎 p7 m73 钢琴右手，墨挨着上一行歌词格记在歌词账上）
+    const edge = (n: StaffNote) => (n.stemTip !== undefined && n.stemUp === sl.above ? n.stemTip : sl.above ? n.sym.box.top : n.sym.box.bottom);
+    const far = (n: StaffNote | undefined, y: number) => !!n && (sl.above ? edge(n) - y : y - edge(n)) > unit.space * LYRIC_ARC_REACH;
     if (far(sl.from, sl.ly) || far(sl.to, sl.ry)) (sl.from = undefined), (sl.to = undefined), (sl.tie = false);
   }
   // 延音线只连相邻两个音：两端同音高、中间却夹着同一行谱上别的音的，是跨几个音的圆滑线（宁静的伯利恒 p2 m25 钢琴右手 C5…C5）
