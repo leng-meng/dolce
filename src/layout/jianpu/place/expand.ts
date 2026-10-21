@@ -21,6 +21,8 @@ import { assignLyrics, layoutVoiceLine } from "./voice";
 /** 展开出来的行 → 各符号所在那一遍的遍号（与 `elements` 平行）。绘制端给音符身份标 `pass`（同旧简谱引擎 `fromChord` 的 `lrc`：
  *  是 `PlayItem.pass` 即段号，不是第几遍），播放高亮按它找同一个音在哪一遍那一格 */
 export const passesOfRow = new WeakMap<ScoreLine, readonly number[]>();
+/** 展开档专用的会众段数提示：只挂在该段开头的第一条谱行上；独立绘制，不参与横向排版。 */
+export const verseCueOfRow = new WeakMap<ScoreLine, string>();
 
 /** 行视图里的一个符号：第几行（展开声部的行序）、行内下标 */
 interface Slot {
@@ -690,10 +692,10 @@ export function expandSong(
       const end = lines[n + 1]?.start ?? pass.slots.length;
       if (cueAt.has(l.start)) pendingCue = cueAt.get(l.start)!;
       const voice = rowOf(pass, l.start, end, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners, bars(pass));
-      // Existing annotation layout reserves a left gutter, aligns with the first lyric,
-      // and is used by both SVG preview and vector PPTX export.
+      // 会众段数提示独立挂在行上，由绘制层放到左侧边栏；不要写进 lyric.annotation，
+      // 否则 systemMetrics 会给它预留宽度，正文就会整体向右偏。
       if (pendingCue && voice.lyrics.length > 0) {
-        voice.lyrics[0]!.annotation = pendingCue;
+        verseCueOfRow.set(voice, pendingCue);
         pendingCue = "";
       }
       groups.push({
