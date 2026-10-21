@@ -39,5 +39,5 @@ export function verseProgressLabels(
     return segments.map((_, i) => (labels[i] ?? "").trim().slice(0, 32));
   }
   if (!simple || segments.length < 2 || !segments.every((s, i) => s.verse === i + 1)) return [];
-  return segments.map((s) => `${s.verse}/${segments.length}节`);
+  return segments.map((s) => `${s.verse}/${segments.length}`);
 }

@@ -9,7 +9,7 @@ export const en: Record<MsgKey, string> = {
   "settings.verseProgress.off": "Off",
   "settings.verseProgress.manual": "Manual labels",
   "settings.verseProgress.manualLabels": "In singing order",
-  "settings.verseProgress.placeholder": "1/4 verse|Refrain|2/4 verse|Refrain",
+  "settings.verseProgress.placeholder": "1/4|Refrain|2/4|Refrain",
   "settings.verseProgress.hint": "Automatic mode shows a small cue only on the first slide of each simple stanza; continuation slides stay unlabelled. In manual mode enter one label per segment, separated by |, and leave an entry blank to hide it. Complex repeats are not auto-labelled. These cues differ from slide page numbers and are saved locally in this browser, not in the score source.",
   "header.home": "Home",
   "header.brandAria": "Dolce",
