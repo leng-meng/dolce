@@ -25,6 +25,8 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
+      - name: Configure GitHub Pages
+        uses: actions/configure-pages@v5
       - name: Build web app
         run: npm run build
         env:
