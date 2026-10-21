@@ -3,6 +3,13 @@
 export const zh = {
   // 应用与页头
   "app.windowTitle": "悦谱",
+  "settings.verseProgress": "歌词段数提示",
+  "settings.verseProgress.auto": "自动（只用于普通分节圣诗）",
+  "settings.verseProgress.off": "关闭",
+  "settings.verseProgress.manual": "手动指定",
+  "settings.verseProgress.manualLabels": "依演唱顺序填写",
+  "settings.verseProgress.placeholder": "1/4|副歌|2/4|副歌",
+  "settings.verseProgress.hint": "一段填一项，用 | 分隔；留空可跳过。复杂反复歌曲不会自动标记。段数与底部 PPT 页码不同。设置仅保存在当前浏览器中，不写入乐谱源码。",
   "header.home": "返回开始",
   "header.brandAria": "悦谱 Dolce",
   "header.subtitle": "乐谱工作台",

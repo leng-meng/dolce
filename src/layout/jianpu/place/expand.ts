@@ -5,6 +5,7 @@
 // 逐遍怎么走（首尾裁切、遍末与往回跳换页）复用 `jianpu/expand.ts::walkPlay`；小节的切法同 `pu/phrasesong.ts::buildMeasures`
 // （演唱顺序的 `mid` 就是按它数的），只排一个声部：带歌词的那个（同 `songMeasures` 的 `forExpanded`）。
 import { walkPlay } from "../../../jianpu/expand";
+import { verseSegments, verseProgressLabels, type VerseProgressOptions } from "../../../jianpu/verseprogress";
 import { Fraction } from "../../../common/fraction";
 import type { PlayItem } from "../../../score/playorder";
 import { distinctVerses } from "../../../pu/phrasesong";
@@ -537,6 +538,8 @@ export function expandSong(
   exactBreaks = false,
   /** 源里一行就是谱面一行（文本谱的 `Q:` 行）：行在小节中间收尾也是写明的换行，原位断 */
   rowIsLine = false,
+  verseProgress?: VerseProgressOptions,
+  simple = false,
 ): SongView {
   // 只排一个声部：带歌词的那个（同 `playsong.ts::songMeasures` 的 forExpanded），没有就第一个
   const voices = voiceNumbers(song);
@@ -626,6 +629,16 @@ export function expandSong(
   const pages: PageView[] = [];
   let system = 0;
   const passes = layout ? passesByDur(slices, rows, plan, layout.desc, layout.simple) : passesOf(slices, rows, plan, breaks);
+  const segments = verseSegments(passes);
+  const labels = verseProgressLabels(segments, simple, verseProgress);
+  const cuesByPass = new Map<number, Map<number, string>>();
+  segments.forEach((seg, i) => {
+    const label = labels[i];
+    if (!label) return;
+    const at = cuesByPass.get(seg.passIndex) ?? new Map<number, string>();
+    at.set(seg.start, label);
+    cuesByPass.set(seg.passIndex, at);
+  });
   // 整首最后一条小节线（末遍末个符号是小节线时）：画终止线
   const lastPass = passes[passes.length - 1];
   const bars = (pass: Pass): { plain: boolean; finalAt: number } => {
@@ -633,7 +646,11 @@ export function expandSong(
     const tail = pass === lastPass ? pass.slots[end] : undefined;
     return { plain: exactBreaks, finalAt: tail && rows[tail.row]!.elements[tail.idx]!.kind === "barline" ? end : -1 };
   };
-  for (const pass of passes) {
+  for (const [passIndex, pass] of passes.entries()) {
+    const cueAt = cuesByPass.get(passIndex) ?? new Map<number, string>();
+    // A combined JP-Word .Layout pass can cross verse boundaries mid-line.
+    // Give a new cue its own line without changing the source .jpwabc text.
+    for (const start of cueAt.keys()) if (start > 0) (pass.hard ??= new Set()).add(start);
     const posOf = new Map<string, number[]>();
     pass.slots.forEach((s, i) => {
       const k = `${s.row}:${s.idx}`;
@@ -664,17 +681,26 @@ export function expandSong(
     }
     // 一遍一页起头；遍内源里的换页另起一页
     let groups: SystemView[] = [];
+    let pendingCue = "";
     lines.forEach((l, n) => {
       if (l.page && groups.length > 0) {
         pages.push({ index: pages.length, groups });
         groups = [];
       }
       const end = lines[n + 1]?.start ?? pass.slots.length;
+      if (cueAt.has(l.start)) pendingCue = cueAt.get(l.start)!;
+      const voice = rowOf(pass, l.start, end, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners, bars(pass));
+      // Existing annotation layout reserves a left gutter, aligns with the first lyric,
+      // and is used by both SVG preview and vector PPTX export.
+      if (pendingCue && voice.lyrics.length > 0) {
+        voice.lyrics[0]!.annotation = pendingCue;
+        pendingCue = "";
+      }
       groups.push({
         index: groups.length,
         texts: [],
         system: system++,
-        voices: [rowOf(pass, l.start, end, rows, lyricsOf, cursorOf, marks, posOf, unrolled, idOf, owners, bars(pass))],
+        voices: [voice],
       });
     });
     if (groups.length > 0) pages.push({ index: pages.length, groups });
@@ -687,6 +713,7 @@ export function expandView(
   view: DocView, plans: readonly ({ measures: readonly PlayItem[]; isSimpple: boolean } | null)[], m: JianpuGrid, ink: InkMeasurer,
   /** `.jpwabc` 的 `.Layout` 分页描述（只管第一首） */
   breakDesc: string | null = null,
+  verseProgress?: VerseProgressOptions,
 ): DocView {
   const idOf = view.idOf as Map<MusicElement, unknown>;
   const owners = view.syllableOwner as Map<LyricSyllable, unknown>;
@@ -694,7 +721,7 @@ export function expandView(
     const pd = plans[i];
     if (!pd) return song;
     const layout = breakDesc && i === 0 ? { desc: breakDesc, simple: pd.isSimpple } : null;
-    return expandSong(song, pd.measures, m, ink, idOf, owners, layout, view.doc.sourceFormat === "jpwabc", view.doc.sourceFormat === "pu");
+    return expandSong(song, pd.measures, m, ink, idOf, owners, layout, view.doc.sourceFormat === "jpwabc", view.doc.sourceFormat === "pu", verseProgress, pd.isSimpple);
   });
   return { ...view, songs };
 }

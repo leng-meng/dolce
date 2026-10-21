@@ -6,6 +6,7 @@
 // 点选 / 高亮部分移植自 mp/layout/draw.kt。
 
 import type { PlayItem } from "../score/playorder";
+import type { VerseProgressOptions } from "../jianpu/verseprogress";
 import { Group, PageItem, TextFrame } from "./pageitem";
 import type { ElementId, ScoreDoc } from "../model/doc";
 import { headerPartsOf, mixedVisitor, renderPageSvg, type HeaderPart } from "./render";
@@ -58,6 +59,7 @@ export interface JianpuPaintRequest {
   readonly noReflow?: boolean;
   /** 展开档：`.jpwabc` 的 `.Layout` 分页描述（其他格式没有） */
   readonly breakDesc?: string | null;
+  readonly verseProgress?: VerseProgressOptions;
   /** 原样档的纸（pt），不给按样式表的纸。`snippet` 时只取宽、高随内容 */
   readonly page?: { w: number; h: number };
   /** 只排谱行、不放页眉页脚（帮助页的谱例片段） */
@@ -256,6 +258,7 @@ export class ScorePainter {
       noReflow: req.noReflow,
       expanded: req.view === "expanded",
       breakDesc: req.breakDesc ?? null,
+      verseProgress: req.verseProgress,
       ...(req.snippet ? { snippet: true } : {}),
       ...(req.ink !== undefined ? { ink: req.ink } : {}),
     });

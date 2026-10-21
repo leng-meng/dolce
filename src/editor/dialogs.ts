@@ -527,6 +527,29 @@ export function showOptionsDialog(app: App): void {
     pLayout.append(labeled(t("settings.ratio"), ratio));
   }
   if (hasLayoutSection) pLayout.append(linesRow);
+  // Projection stanza cues are NOT slide page numbers. Manual entries are per-song,
+  // separated by |; blank entries deliberately leave a segment unmarked.
+  const progress = app.verseProgress;
+  const progressMode = document.createElement("select");
+  for (const mode of ["auto", "off", "manual"] as const) {
+    const opt = document.createElement("option");
+    opt.value = mode;
+    opt.textContent = t(`settings.verseProgress.${mode}`);
+    opt.selected = mode === progress.mode;
+    progressMode.append(opt);
+  }
+  const progressLabels = document.createElement("input");
+  progressLabels.type = "text";
+  progressLabels.value = progress.labels;
+  progressLabels.placeholder = t("settings.verseProgress.placeholder");
+  const manualBox = labeled(t("settings.verseProgress.manualLabels"), progressLabels);
+  const updateManual = () => { manualBox.hidden = progressMode.value !== "manual"; };
+  progressMode.onchange = updateManual;
+  updateManual();
+  if (isPpt) {
+    pLayout.append(labeled(t("settings.verseProgress"), progressMode), manualBox);
+    pLayout.append(note(t("settings.verseProgress.hint")));
+  }
   if (isJp) {
     pLayout.append(labeled(t("settings.fontSize"), fs));
     // 原样档只调基础字号：那一档的标题与词曲字号是按比例派生的（`style/jianpu.ts::jianpuSizes`），
@@ -662,6 +685,9 @@ export function showOptionsDialog(app: App): void {
     if (hasLayoutSection) {
       const linesVal = lines.value.trim();
       if (linesVal !== app.getLinesPerPage()) app.setLinesPerPage(linesVal);
+    }
+    if (isPpt && (progressMode.value !== progress.mode || progressLabels.value !== progress.labels)) {
+      app.setVerseProgress(progressMode.value as "auto" | "off" | "manual", progressLabels.value);
     }
     app.applyRenderSettings({
       pageW: w, pageH: h, fontSize,
