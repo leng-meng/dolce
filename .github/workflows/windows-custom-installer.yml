@@ -40,6 +40,19 @@ jobs:
       - name: Prepare Windows runtime
         run: node scripts/win-crt.mjs
 
+      - name: Bundle DirectML runtime
+        shell: pwsh
+        run: |
+          $version = '1.15.4'
+          Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/$version" -OutFile directml.zip
+          Expand-Archive -Path directml.zip -DestinationPath directml -Force
+          New-Item -ItemType Directory -Force -Path src-tauri/runtime | Out-Null
+          Copy-Item -Force directml/bin/x64-win/DirectML.dll src-tauri/runtime/DirectML.dll
+          if (-not (Test-Path src-tauri/runtime/DirectML.dll)) {
+            throw "DirectML.dll was not staged"
+          }
+          Get-Item src-tauri/runtime/DirectML.dll | Format-List Name,Length,FullName
+
       - name: Build Windows NSIS installer
         run: npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
 
