@@ -56,6 +56,37 @@ jobs:
       - name: Build Windows NSIS installer
         run: npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
 
+      - name: Inspect native dependencies
+        shell: pwsh
+        run: |
+          node -e "import('./scripts/vcredist.mjs').then(async m => { const fs = await import('node:fs/promises'); const p = 'src-tauri/target/x86_64-pc-windows-msvc/release/dolce.exe'; console.log(m.peImports(await fs.readFile(p)).join('\\n')); })"
+
+      - name: Smoke test installed app
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe | Select-Object -First 1
+          $installDir = Join-Path $env:RUNNER_TEMP 'DolceSmoke'
+          if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "NSIS install failed with exit code $($install.ExitCode)" }
+
+          Write-Host "Installed files:"
+          Get-ChildItem -Recurse $installDir | Select-Object FullName, Length | Format-Table -AutoSize
+
+          $required = @('dolce.exe', 'DirectML.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+          foreach ($name in $required) {
+            $p = Join-Path $installDir $name
+            if (-not (Test-Path $p)) { throw "Installed app is missing $name" }
+          }
+
+          $exe = Join-Path $installDir 'dolce.exe'
+          $app = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($app.HasExited) {
+            throw "dolce.exe exited during startup smoke test with code $($app.ExitCode)"
+          }
+          Stop-Process -Id $app.Id -Force
+
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4
         with:
