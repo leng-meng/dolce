@@ -18,7 +18,7 @@ import { writtenOctaveOf } from "./jianpu";
 import { Fraction } from "../common/fraction";
 import {
   JumpSpec, PlayData, PlaySpecKind, RepeatSpecItem, TimePosition,
-  playOrderByVerses, playOrderFromSpec, playOrderOf,
+  playOrderByVerses, playOrderFromSpec, playOrderOf, lastVerseTail,
 } from "../score/playorder";
 import { linesOfVoice, voiceNumbers, type MusicElement, type PuSong } from "../pu/ast";
 import { Key, MusicCommon } from "../score/jppitch";
@@ -296,6 +296,11 @@ function playDataOf(doc: ScoreDoc, songIdx: number, built: SongMeasures): PlayDa
   // 有 `|: :|` 的照反复记号推（用户定，2026-10-14：020《向主歌唱》的 `.Layout` 时值总长对得上「走反复」）
   if (doc.sourceFormat === "jpwabc" && !main.some((m) => m.repeatBackward)) {
     pd.measures = playOrderByVerses(main.length, passes);
+    // JPWABC 没有反复符号时仍然逐节展开，但末尾可能有只属于最后一节的短尾声
+    // （如第三节之后才唱的「阿们」）。旧代码在这里提前 return，漏掉了通用
+    // playOrderOf 里的 lastVerseTail 判定，前两节因此把尾声也唱了一遍。
+    // 严格要求：尾声小节只标末节歌词，且前有终止线 |]，避免普通歌词被误裁。
+    if (passes > 1) lastVerseTail([{ measures: main }], pd.measures);
     pd.isSimpple = true;
     return pd;
   }
