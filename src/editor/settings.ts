@@ -13,6 +13,8 @@ const KEY = "dolce-render-settings";
 export interface PersistedSettings {
   /** 样式用户层（`App._userLayers`：每个主题一组 `StyleRule`）。交 `sanitizeLayer` 校验。 */
   styleLayers?: unknown;
+  /** Per-song projection verse markers, keyed by source format + title. */
+  verseProgressBySong?: unknown;
   zoom?: number;
   mixedHideBarNumber?: boolean;
   mixedShowJianpuLayer?: boolean;

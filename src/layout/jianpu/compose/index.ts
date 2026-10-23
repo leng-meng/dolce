@@ -36,6 +36,7 @@ import { placeHeader, placeSlideFooter, placeTitlePage } from "../place/header";
 import { expandView } from "../place/expand";
 import { playDataOfSong } from "../../../model/playsong";
 import type { PlayItem } from "../../../score/playorder";
+import type { VerseProgressOptions } from "../../../jianpu/verseprogress";
 
 /** 原样文档排版的外部配置：尺子（`style/jianpu.ts::jianpuStyleOf`，与旧简谱引擎同一份）、纸、页脚模板。 */
 export interface JianpuLayoutConfig {
@@ -54,6 +55,8 @@ export interface JianpuLayoutConfig {
   readonly expanded?: boolean;
   /** 展开档：`.jpwabc` 的 `.Layout` 分页描述 */
   readonly breakDesc?: string | null;
+  /** Optional labels at the beginning of sung stanzas; never saved into notation source. */
+  readonly verseProgress?: VerseProgressOptions;
   /** 成书（`pdflayout/browser.ts::layoutBookDoc`）：原样档的内容，成行与纵向同展开档——照源断点成行、单行放不下才折（`foldLineStarts`），
    *  谱行占位盒紧挨着码、放不满摊开，数字共基线、增时线「-」字；不放页眉、页脚、标题页（书级装饰由整本那一层加） */
   readonly book?: boolean;
@@ -179,7 +182,7 @@ export function layoutJianpu(source: ScoreDoc, cfg: JianpuLayoutConfig): JianpuL
   // **源里的行放不下就整首重新断行**（用户定：原样档按排得下的位置断、中间不要短行）：断点写进文档克隆的换行位、
   // 整份重排一遍。元素 id 不变，编辑器的点选、高亮照旧对得上。多声部文本谱（各声部小节对不齐）`applyBreaks` 不重断
   // 展开档：按演唱顺序逐遍切出、逐行装满（已按版心宽断好，不再走窄纸重断）
-  const doc = plays ? expandView(input, plays, m, ink, cfg.breakDesc ?? null) : input;
+  const doc = plays ? expandView(input, plays, m, ink, cfg.breakDesc ?? null, cfg.verseProgress) : input;
   c.doc = doc;
   // 成书：只折放不下的那几行，折点原位记（小节中间折的是一行里一条小节线都没有的长行）
   if (!cfg.noReflow && !cfg.measure && !plans) {

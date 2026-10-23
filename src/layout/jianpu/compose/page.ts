@@ -16,7 +16,7 @@ import { paintBand, paintNote } from "./note";
 import { bandOf } from "../place/band";
 import { paintBarline } from "./barline";
 import { paintJoinBrace, paintLyricAnnotations, paintSyllables } from "./lyric";
-import { passesOfRow } from "../place/expand";
+import { passesOfRow, verseCueOfRow } from "../place/expand";
 
 /**
  * 把一组声部切成若干「小节线贯穿块」：歌词行会把竖线截断，所以带歌词的声部就是
@@ -212,6 +212,22 @@ export function paintPage(c: OriginalCtx, page: PlacedPage, pageIndex: number): 
   return root;
 }
 
+/** 展开档的会众段数提示：独立放在正文左侧，不占版心宽度，因此不会破坏简谱/歌词的原有居中。 */
+function paintVerseCue(c: OriginalCtx, root: Group, voice: PlacedVoice): void {
+  const cue = verseCueOfRow.get(voice.voice);
+  if (!cue || voice.lyricY.length === 0) return;
+  const m = c.metrics;
+  // 辅助信息刻意小于歌词；28pt 歌词时约 18pt。
+  const size = Math.max(10, Math.round(m.style.size.lyric * 0.65 * 2) / 2);
+  const font = new Font(m.style.font.text.family, size);
+  const w = font.measureText(cue);
+  const gap = m.style.size.lyric * 0.42;
+  const right = m.page.margin.left - gap;
+  // 正常落在左页边距；极窄边距时至少别跑出纸外。正文坐标完全不动。
+  const x = Math.max(m.style.size.lyric * 0.2, right - w);
+  root.add(text(cue, x, voice.lyricY[0]!, font, c.lyricInk));
+}
+
 export function paintVoice(c: OriginalCtx,
   root: Group,
   voice: PlacedVoice,
@@ -221,6 +237,7 @@ export function paintVoice(c: OriginalCtx,
   const m = c.metrics;
   const left = m.page.margin.left;
   const baseline = voice.y;
+  paintVerseCue(c, root, voice);
   c.band = bandOf(voice.band);
   c.bandOrigin = { x: left, y: baseline };
   /** 各段歌词墨迹的最右缘，联合括号据此定位 */

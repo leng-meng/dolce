@@ -14,7 +14,8 @@
       "crt/msvcp140_atomic_wait.dll": "msvcp140_atomic_wait.dll",
       "crt/msvcp140_codecvt_ids.dll": "msvcp140_codecvt_ids.dll",
       "crt/vcruntime140.dll": "vcruntime140.dll",
-      "crt/vcruntime140_1.dll": "vcruntime140_1.dll"
+      "crt/vcruntime140_1.dll": "vcruntime140_1.dll",
+      "runtime/DirectML.dll": "DirectML.dll"
     }
   }
 }

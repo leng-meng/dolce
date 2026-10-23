@@ -194,7 +194,7 @@ const CODA_MAX = 2;
 
 /** 曲尾只有末段写了词的那几小节（文本谱《圣哉三一歌》末段后的「(阿们)」）只在最后一遍唱：前几遍唱到它前面为止；
  *  最后一遍里它接在前面那行末尾（`glueFrom`）。 */
-function lastVerseTail(parts: readonly PlayPart[], items: PlayItem[]): void {
+export function lastVerseTail(parts: readonly PlayPart[], items: PlayItem[]): void {
   const n = parts[0]!.measures.length;
   const numsOf = (i: number): Set<number> => {
     const s = new Set<number>();
