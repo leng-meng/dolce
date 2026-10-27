@@ -229,7 +229,7 @@ function paintVerseCue(c: OriginalCtx, root: Group, voice: PlacedVoice): void {
   // 按歌词首字（如「切」）与提示本身的实际墨迹框中心来对齐，不硬编码像素偏移；
   // 只改提示的 y，简谱与歌词的位置保持不变，SVG 与 PPTX 共用这一坐标。
   const firstSyllable = voice.items.map((it) => it.syllables[0]).find((syl) => syl?.text.trim());
-  const firstGlyph = firstSyllable?.text.match(/[\\p{L}\\p{N}]/u)?.[0] ?? "中";
+  const firstGlyph = firstSyllable?.text.match(/[\p{L}\p{N}]/u)?.[0] ?? "中";
   const lyricFont = new Font(m.style.font.lyric.family, m.style.size.lyric);
   const lyricInk = lyricFont.charBound(firstGlyph);
   const cueInk = font.charBound(cue);
