@@ -4,6 +4,13 @@ import type { MsgKey } from "./zh";
 export const en: Record<MsgKey, string> = {
   // 应用与页头
   "app.windowTitle": "Dolce",
+  "settings.verseProgress": "Stanza cues",
+  "settings.verseProgress.auto": "Automatic (first slide of each simple stanza)",
+  "settings.verseProgress.off": "Off",
+  "settings.verseProgress.manual": "Manual labels",
+  "settings.verseProgress.manualLabels": "In singing order",
+  "settings.verseProgress.placeholder": "1/4|Refrain|2/4|Refrain",
+  "settings.verseProgress.hint": "Automatic mode shows a small cue only on the first slide of each simple stanza; continuation slides stay unlabelled. In manual mode enter one label per segment, separated by |, and leave an entry blank to hide it. Complex repeats are not auto-labelled. These cues differ from slide page numbers and are saved locally in this browser, not in the score source.",
   "header.home": "Home",
   "header.brandAria": "Dolce",
   "header.subtitle": "Score Workbench",

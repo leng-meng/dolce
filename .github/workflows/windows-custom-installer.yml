@@ -1,0 +1,90 @@
+name: Build Windows custom installer
+
+on:
+  push:
+    branches:
+      - feat/verse-progress
+  workflow_dispatch:
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Setup Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type check
+        run: npx tsc --noEmit
+
+      - name: Prepare Windows runtime
+        run: node scripts/win-crt.mjs
+
+      - name: Bundle DirectML runtime
+        shell: pwsh
+        run: |
+          $version = '1.15.4'
+          Invoke-WebRequest -Uri "https://www.nuget.org/api/v2/package/Microsoft.AI.DirectML/$version" -OutFile directml.zip
+          Expand-Archive -Path directml.zip -DestinationPath directml -Force
+          New-Item -ItemType Directory -Force -Path src-tauri/runtime | Out-Null
+          Copy-Item -Force directml/bin/x64-win/DirectML.dll src-tauri/runtime/DirectML.dll
+          if (-not (Test-Path src-tauri/runtime/DirectML.dll)) {
+            throw "DirectML.dll was not staged"
+          }
+          Get-Item src-tauri/runtime/DirectML.dll | Format-List Name,Length,FullName
+
+      - name: Build Windows NSIS installer
+        run: npx tauri build --target x86_64-pc-windows-msvc --bundles nsis
+
+      - name: Inspect native dependencies
+        shell: pwsh
+        run: |
+          node -e "import('./scripts/vcredist.mjs').then(async m => { const fs = await import('node:fs/promises'); const p = 'src-tauri/target/x86_64-pc-windows-msvc/release/dolce.exe'; console.log(m.peImports(await fs.readFile(p)).join('\\n')); })"
+
+      - name: Smoke test installed app
+        shell: pwsh
+        run: |
+          $installer = Get-ChildItem src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe | Select-Object -First 1
+          $installDir = Join-Path $env:RUNNER_TEMP 'DolceSmoke'
+          if (Test-Path $installDir) { Remove-Item -Recurse -Force $installDir }
+          $install = Start-Process -FilePath $installer.FullName -ArgumentList '/S', "/D=$installDir" -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "NSIS install failed with exit code $($install.ExitCode)" }
+
+          Write-Host "Installed files:"
+          Get-ChildItem -Recurse $installDir | Select-Object FullName, Length | Format-Table -AutoSize
+
+          $required = @('dolce.exe', 'DirectML.dll', 'msvcp140.dll', 'msvcp140_1.dll', 'vcruntime140.dll', 'vcruntime140_1.dll')
+          foreach ($name in $required) {
+            $p = Join-Path $installDir $name
+            if (-not (Test-Path $p)) { throw "Installed app is missing $name" }
+          }
+
+          $exe = Join-Path $installDir 'dolce.exe'
+          $app = Start-Process -FilePath $exe -PassThru
+          Start-Sleep -Seconds 8
+          if ($app.HasExited) {
+            throw "dolce.exe exited during startup smoke test with code $($app.ExitCode)"
+          }
+          Stop-Process -Id $app.Id -Force
+
+      - name: Upload Windows installer
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dolce-Windows-custom
+          path: src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis/*.exe
+          if-no-files-found: error

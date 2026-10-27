@@ -47,6 +47,7 @@ import { CONVERT_TARGETS, isConvertTarget, targetSpec, type ConvertTarget } from
 import { showChoiceDialog } from "./dialogs";
 import { t } from "../i18n";
 import { diagText, targetLabel, type DiagLike } from "../i18n/labels";
+import type { VerseProgressMode, VerseProgressOptions } from "../jianpu/verseprogress";
 import { buildMusicXml, sourceMusicXmlBare } from "./export";
 import { scoreDocToMusicXml } from "../model/toxml";
 import { jpwToScoreDoc } from "../model/fromjpw";
@@ -158,6 +159,25 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   /** 用户层：每个主题一层规则，**两档各记一套**（用户口径：「区分 展开/原样的字号设置」）。
    *  同一档里各格式共用一套（字号、纸、配色），规则不带限定。 */
   private _userLayers: Record<"projection" | "print" | "staff" | "header", StyleRule[]> = { projection: [], print: [], staff: [], header: [] };
+  /** Per-song projection cues, keyed by source format and song title (not a global label list). */
+  private _verseProgressBySong: Record<string, VerseProgressOptions> = {};
+
+  private verseProgressKey(): string {
+    const doc = this.docFormat === "jpwabc" ? this._jpwDoc : this.currentScoreDoc();
+    const title = doc?.songs[0]?.work.title?.trim() || this.filePath || "untitled";
+    return `${this.docFormat}:${title}`;
+  }
+
+  get verseProgress(): VerseProgressOptions {
+    return this._verseProgressBySong[this.verseProgressKey()] ?? { mode: "auto", labels: "" };
+  }
+
+  setVerseProgress(mode: VerseProgressMode, labels: string): void {
+    this._verseProgressBySong[this.verseProgressKey()] = { mode, labels };
+    this.saveSettings();
+    this.reload(this.getText());
+  }
+
   // `header`：页眉四项（标题/副标题/经文/词曲作者）的字体字号，**各档共用一份**，叠在各档用户层之上（`style/header.ts`）
 
   /** 某一档、某把尺子看到的 computed 样式表（内置主题 → 曲内层 → 用户层）。
@@ -620,6 +640,14 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     this.visual.loadSettings(s);
     if (s.mixedHideBarNumber !== undefined) this.mixedHideBarNumber = s.mixedHideBarNumber;
     if (s.mixedShowJianpuLayer !== undefined) this.mixedShowJianpuLayer = s.mixedShowJianpuLayer;
+    if (s.verseProgressBySong && typeof s.verseProgressBySong === "object" && !Array.isArray(s.verseProgressBySong)) {
+      const entries = Object.entries(s.verseProgressBySong as Record<string, unknown>).filter(([key, value]) => {
+        if (key.length > 300 || !value || typeof value !== "object") return false;
+        const v = value as Record<string, unknown>;
+        return (v.mode === "auto" || v.mode === "off" || v.mode === "manual") && typeof v.labels === "string";
+      }).map(([key, value]) => [key, { mode: (value as VerseProgressOptions).mode, labels: (value as VerseProgressOptions).labels.slice(0, 4000) }] as const);
+      this._verseProgressBySong = Object.fromEntries(entries);
+    }
     if (s.bookSheets && typeof s.bookSheets === "object") {
       this.bookSheets = Object.fromEntries(
         Object.entries(s.bookSheets as Record<string, unknown>).filter((e): e is [string, string] => typeof e[1] === "string"),
@@ -649,6 +677,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
   saveSettings(): void {
     savePersistedSettings({
       styleLayers: this._userLayers,
+      verseProgressBySong: this._verseProgressBySong,
       zoom: this.zoom,
       mixedHideBarNumber: this.mixedHideBarNumber,
       mixedShowJianpuLayer: this.mixedShowJianpuLayer,
@@ -885,7 +914,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     const breakDesc = f.getSection(LayoutSection)?.desc ?? null;
     this._breakDesc = breakDesc; // 导出 PPTX 时另排一遍要用同一份分页描述
     try {
-      this.painter.loadSync({ view: this.layoutMode, doc, style: this.styleOf(this.layoutMode), breakDesc });
+      this.painter.loadSync({ view: this.layoutMode, doc, style: this.styleOf(this.layoutMode), breakDesc, verseProgress: this.layoutMode === "expanded" ? this.verseProgress : undefined });
     } catch (e) {
       console.error("layout failed", e);
       return false;
@@ -936,8 +965,8 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
     const style = this.styleOf("expanded");
     const src = this.docFormat === "jpwabc" ? this._jpwDoc : this.currentScoreDoc();
     if (!src || !hasLines(src)) return null;
-    if (this.docFormat === "jpwabc") return { view: "expanded", doc: src, style, breakDesc: this._breakDesc };
-    return { view: "expanded", doc: this._expandedDoc(src), style };
+    if (this.docFormat === "jpwabc") return { view: "expanded", doc: src, style, breakDesc: this._breakDesc, verseProgress: this.verseProgress };
+    return { view: "expanded", doc: this._expandedDoc(src), style, verseProgress: this.verseProgress };
   }
 
   /** 原样档的排版请求（导出 PNG/PDF 在别的档——识别模式、混排——另排一份用，`export.ts::originalPainter`）。没有文档时返回 null。 */
@@ -968,7 +997,7 @@ export class App implements OmrHost, PlaybackHost, FormatHost, FormatSwitchHost,
           this.setStatus(t("status.noLines", { what }));
           return false;
         }
-        this.painter.loadSync({ view: "expanded", doc: this._expandedDoc(doc), style: this.styleOf("expanded") });
+        this.painter.loadSync({ view: "expanded", doc: this._expandedDoc(doc), style: this.styleOf("expanded"), verseProgress: this.verseProgress });
       } else {
         this.painter.loadSync({ view: "original", doc, style: this.styleOf("original") });
       }

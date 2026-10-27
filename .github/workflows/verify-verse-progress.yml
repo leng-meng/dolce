@@ -1,0 +1,25 @@
+name: Verify stanza cues
+
+on:
+  push:
+    branches:
+      - feat/verse-progress
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Typecheck and web build
+        run: npm run build
+        env:
+          BASE_PATH: /dolce/
